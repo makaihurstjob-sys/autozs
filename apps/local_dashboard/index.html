@@ -144,7 +144,8 @@
         color: var(--ink);
         font-size: 12px;
       }
-      .header-stat.worker-online strong { color: var(--success); }
+      .header-stat.worker-online strong { color: #2f80ed; }
+      body[data-theme="dark"] .header-stat.worker-online strong { color: #79b7ff; }
       .header-stat.worker-stale strong { color: var(--warning); }
       .header-stat.worker-offline strong { color: var(--danger); }
       .system-runtime-grid {
@@ -2826,7 +2827,7 @@
           ["Orders", state.orders.length],
         ].map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
         const workerClass = worker ? `worker-${worker.status || "offline"}` : "worker-offline";
-        container.innerHTML = `${stats}<span class="header-stat ${workerClass}" title="${escAttr(workerStatusTitle(worker))}">Worker <strong>${esc(workerLabel)}</strong></span>`;
+        container.innerHTML = `${stats}<span class="header-stat ${workerClass}" title="${escAttr(workerStatusTitle(worker))}"><strong>${esc(workerLabel)}</strong></span>`;
       }
 
       function primaryWorker() {
@@ -2835,7 +2836,7 @@
 
       function workerStatusLabel(worker) {
         if (!worker) return "offline";
-        const label = /windows/i.test(`${worker.label} ${worker.platform}`) ? "Windows worker" : worker.label || worker.worker_id || "Worker";
+        const label = worker.label || worker.worker_id || "Worker";
         if (worker.status === "online") return `${label} online`;
         if (worker.status === "stale") return `${label} stale`;
         return `${label} offline`;
