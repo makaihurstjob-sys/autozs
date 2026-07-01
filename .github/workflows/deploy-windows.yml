@@ -1,0 +1,82 @@
+name: Deploy Windows AutoZS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: autozs-windows-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy and verify Windows worker
+    runs-on: [self-hosted, Windows, X64, autozs-production]
+    timeout-minutes: 10
+
+    steps:
+      - name: Pull main safely
+        id: update
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $repo = "C:\AutoZS\repo"
+          Set-Location $repo
+
+          $dirty = git status --porcelain
+          if ($dirty) {
+            throw "Refusing deployment because C:\AutoZS\repo has uncommitted changes.`n$dirty"
+          }
+
+          $before = git rev-parse HEAD
+          git fetch origin main
+          git merge --ff-only origin/main
+          $after = git rev-parse HEAD
+          $extensionChanged = [bool](git diff --name-only $before $after -- tools/chrome-extension)
+
+          "before=$before" >> $env:GITHUB_OUTPUT
+          "after=$after" >> $env:GITHUB_OUTPUT
+          "extension_changed=$($extensionChanged.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Restart AutoZS
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "C:\AutoZS\Stop-AutoZS.ps1"
+          & "C:\AutoZS\Start-AutoZS.ps1"
+
+      - name: Verify API, worker, and products
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $base = "http://127.0.0.1:8000"
+          $healthy = $false
+          for ($attempt = 1; $attempt -le 20; $attempt++) {
+            try {
+              $health = Invoke-RestMethod "$base/health" -TimeoutSec 3
+              if ($health.status -eq "ok") { $healthy = $true; break }
+            } catch {
+              Start-Sleep -Seconds 2
+            }
+          }
+          if (-not $healthy) { throw "AutoZS API did not become healthy." }
+
+          $worker = Invoke-RestMethod "$base/workers/current" -TimeoutSec 10
+          $products = (Invoke-WebRequest "$base/products" -UseBasicParsing -TimeoutSec 30).Content | ConvertFrom-Json
+          if ($worker.worker_id -ne "windows-main" -or $worker.status -ne "online") {
+            throw "Unexpected worker state: $($worker.worker_id) / $($worker.status)"
+          }
+
+          "### Windows deployment" >> $env:GITHUB_STEP_SUMMARY
+          "- Commit: `${{ steps.update.outputs.after }}`" >> $env:GITHUB_STEP_SUMMARY
+          "- Health: ok" >> $env:GITHUB_STEP_SUMMARY
+          "- Worker: windows-main (online)" >> $env:GITHUB_STEP_SUMMARY
+          "- Products returned: $($products.Count)" >> $env:GITHUB_STEP_SUMMARY
+          "- Chrome extension changed: ${{ steps.update.outputs.extension_changed }}" >> $env:GITHUB_STEP_SUMMARY
+          if ("${{ steps.update.outputs.extension_changed }}" -eq "true") {
+            "- Action required: reload the unpacked AutoZS extension in Chrome." >> $env:GITHUB_STEP_SUMMARY
+          }
