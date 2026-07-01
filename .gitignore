@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.local
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.browser-profile/
+dev.db
+downloads/
+test-recordings/
+exports/
+node_modules/
+.next/
+postgres_data/

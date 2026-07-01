@@ -1,0 +1,178 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --bg: #ffffff;
+        --ink: #17201b;
+        --muted: #56625a;
+        --line: #d8ded9;
+        --accent: #166b5f;
+        --secondary: #263631;
+        --field: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #171d1a;
+          --ink: #edf4ef;
+          --muted: #9aa89f;
+          --line: #2b352f;
+          --accent: #4bb7a6;
+          --secondary: #2b3732;
+          --field: #101412;
+        }
+      }
+      body[data-theme="light"] {
+        --bg: #ffffff;
+        --ink: #17201b;
+        --muted: #56625a;
+        --line: #d8ded9;
+        --accent: #166b5f;
+        --secondary: #263631;
+        --field: #ffffff;
+      }
+      body[data-theme="dark"] {
+        --bg: #171d1a;
+        --ink: #edf4ef;
+        --muted: #9aa89f;
+        --line: #2b352f;
+        --accent: #4bb7a6;
+        --secondary: #2b3732;
+        --field: #101412;
+      }
+      body {
+        background: var(--bg);
+        color-scheme: light;
+        color: var(--ink);
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        min-width: 320px;
+        padding: 14px;
+      }
+      body[data-theme="dark"] { color-scheme: dark; }
+      @media (prefers-color-scheme: dark) {
+        body[data-theme="system"] { color-scheme: dark; }
+      }
+      .popup-header {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+      }
+      .popup-brand {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        min-width: 0;
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0;
+      }
+      .logo {
+        background: #000;
+        border-radius: 5px;
+        height: 34px;
+        object-fit: contain;
+        padding: 3px;
+        width: 34px;
+      }
+      label {
+        color: var(--muted);
+        display: block;
+        font-size: 12px;
+        margin: 10px 0 4px;
+      }
+      input, button {
+        border-radius: 6px;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 9px;
+        width: 100%;
+      }
+      input {
+        background: var(--field);
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }
+      button {
+        background: var(--accent);
+        border: 0;
+        color: white;
+        cursor: pointer;
+        font-weight: 700;
+        margin-top: 12px;
+      }
+      button.secondary {
+        background: var(--secondary);
+      }
+      #open-dashboard {
+        flex: 0 0 auto;
+        font-size: 11px;
+        margin: 0;
+        padding: 7px 9px;
+        width: auto;
+      }
+      .connection-status {
+        align-items: center;
+        color: var(--muted);
+        display: flex;
+        font-size: 12px;
+        gap: 7px;
+        margin: 8px 0 2px 44px;
+      }
+      .connection-dot {
+        background: #8a958e;
+        border-radius: 50%;
+        height: 8px;
+        width: 8px;
+      }
+      .connection-status[data-state="live"] .connection-dot {
+        background: #2dbb67;
+      }
+      .connection-status[data-state="offline"] .connection-dot {
+        background: #d85b48;
+      }
+      .draft-id-row {
+        align-items: center;
+        display: flex;
+        font-size: 12px;
+        justify-content: space-between;
+        margin-top: 12px;
+      }
+      .draft-id-label {
+        color: var(--muted);
+      }
+      .draft-id-display {
+        color: var(--ink);
+        font-weight: 700;
+      }
+      #status {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 10px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="popup-header">
+      <div class="popup-brand"><img class="logo" src="assets/autozs-logo.png" alt="AutoZS" /><h1>AutoZS Capture</h1></div>
+      <button class="secondary" id="open-dashboard">Open Dashboard</button>
+    </div>
+    <div class="connection-status" id="connection-status" data-state="checking">
+      <span class="connection-dot" aria-hidden="true"></span>
+      <span id="connection-label">Syncing</span>
+    </div>
+    <button id="capture">Capture Into App</button>
+    <div class="draft-id-row">
+      <span class="draft-id-label">eBay Draft ID</span>
+      <output id="ebay-product-id" class="draft-id-display" aria-live="polite">—</output>
+    </div>
+    <button class="secondary" id="show-ebay-assistant">Show eBay Assistant</button>
+    <div id="status"></div>
+    <script src="capture.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
