@@ -47,6 +47,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           & "C:\AutoZS\Stop-AutoZS.ps1"
+          # Prevent the self-hosted runner from treating the long-running API
+          # and dashboard as per-step child processes to clean up.
+          $env:RUNNER_TRACKING_ID = ""
           & "C:\AutoZS\Start-AutoZS.ps1"
 
       - name: Verify API, worker, and products
