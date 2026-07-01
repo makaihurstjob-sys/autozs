@@ -4546,11 +4546,13 @@
 
       function sourceThumbHtml(product) {
         const src = productPreviewImageSrc(product);
+        const firstImage = (product?.images || []).find((image) => image.local_path) || (product?.images || [])[0];
+        const remoteFallback = firstImage?.local_path ? firstImage.image_url : "";
         const fallback = supplierLogoHtml(product) || sourceLogoSvg();
         return `<figure class="product-preview">
           <button class="source-thumb" onclick="openSource(${product.id})" title="Open source product" aria-label="Open source product preview">
           <span class="thumb-fallback">${fallback}</span>
-          ${src ? `<img src="${esc(src)}" alt="" onerror="this.classList.add('is-missing')" />` : ""}
+          ${src ? `<img src="${esc(src)}" alt="" ${remoteFallback ? `data-fallback-src="${esc(remoteFallback)}"` : ""} onerror="const fallback=this.dataset.fallbackSrc;if(fallback){delete this.dataset.fallbackSrc;this.src=fallback}else{this.classList.add('is-missing')}" />` : ""}
           </button>
           <figcaption class="preview-label">Preview</figcaption>
         </figure>`;
