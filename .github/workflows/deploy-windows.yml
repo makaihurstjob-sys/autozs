@@ -72,7 +72,7 @@ jobs:
           }
 
           "### Windows deployment" >> $env:GITHUB_STEP_SUMMARY
-          "- Commit: `${{ steps.update.outputs.after }}`" >> $env:GITHUB_STEP_SUMMARY
+          "- Commit: ${{ steps.update.outputs.after }}" >> $env:GITHUB_STEP_SUMMARY
           "- Health: ok" >> $env:GITHUB_STEP_SUMMARY
           "- Worker: windows-main (online)" >> $env:GITHUB_STEP_SUMMARY
           "- Products returned: $($products.Count)" >> $env:GITHUB_STEP_SUMMARY
