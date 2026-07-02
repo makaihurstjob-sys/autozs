@@ -810,7 +810,10 @@
         gap: 10px;
         margin-bottom: 10px;
         position: relative;
-        z-index: 40;
+        z-index: 1;
+      }
+      .filter-shell.filter-shell-open {
+        z-index: 80;
       }
       .filter-trigger {
         align-items: center;
@@ -4065,7 +4068,7 @@
       }
 
       function productsFilterMenuHtml(workflowCounts, shippingCounts, visibleProductCount) {
-        return `<div class="filter-shell">
+        return `<div class="filter-shell ${productFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleProductFilterMenu()" aria-expanded="${productFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
           <span class="filter-summary">${esc(productsFilterSummary())}</span>
           <div class="filter-menu ${productFilterMenuOpen ? "open" : ""}">
@@ -4719,7 +4722,7 @@
       }
 
       function listingsFilterMenuHtml(counts) {
-        return `<div class="filter-shell">
+        return `<div class="filter-shell ${listingFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleListingFilterMenu()" aria-expanded="${listingFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
           <span class="filter-summary">${esc(listingsFilterSummary())}</span>
           <div class="filter-menu ${listingFilterMenuOpen ? "open" : ""}">
@@ -7354,7 +7357,7 @@
           completed: "Completed",
           blocked: "Needs review",
         }[orderStatusFilter] || "All orders";
-        return `<div class="filter-shell">
+        return `<div class="filter-shell ${orderFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleOrderFilterMenu()" aria-expanded="${orderFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
           <span class="filter-summary">${esc(summary)}</span>
           <div class="filter-menu ${orderFilterMenuOpen ? "open" : ""}">
