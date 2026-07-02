@@ -1578,6 +1578,40 @@ def test_source_refresh_batch_can_queue_without_claiming_first_job(client) -> No
     assert batch["jobs"][0]["status"] == "queued"
 
 
+def test_source_refresh_batch_can_force_selected_products(client) -> None:
+    selected = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Selected-Refresh-Product/888",
+            "title": "Selected Refresh Product",
+            "source_price": 18.0,
+            "source_shipping": 0.0,
+            "description": "Selected refresh product",
+            "image_urls": "https://images.thdstatic.com/productImages/selected-refresh-product.jpg",
+        },
+    ).json()
+    other = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Other-Refresh-Product/889",
+            "title": "Other Refresh Product",
+            "source_price": 22.0,
+            "source_shipping": 0.0,
+            "description": "Other refresh product",
+            "image_urls": "https://images.thdstatic.com/productImages/other-refresh-product.jpg",
+        },
+    ).json()
+
+    batch = client.post(
+        "/source-refresh/batches",
+        json={"product_ids": [selected["id"]], "limit": 5, "interval_hours": 6, "force": True, "auto_claim": False},
+    ).json()
+
+    assert batch["queued"] == 1
+    assert batch["jobs"][0]["product_id"] == selected["id"]
+    assert batch["jobs"][0]["product_id"] != other["id"]
+
+
 def test_home_depot_capture_filters_noisy_description_and_images(client) -> None:
     product = client.post(
         "/products/import-captured",

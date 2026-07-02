@@ -487,6 +487,7 @@ def create_refresh_batch(payload: SourceRefreshBatchCreate, db: Session = Depend
         limit=payload.limit,
         interval_hours=payload.interval_hours,
         force=payload.force,
+        product_ids=set(payload.product_ids) if payload.product_ids is not None else None,
     )
     first = claim_next_source_refresh_job(db, batch_key) if payload.auto_claim and jobs else None
     serialized = [SourceRefreshJobRead(**serialize_source_refresh_job(db, job)) for job in jobs]

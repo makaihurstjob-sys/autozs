@@ -5272,7 +5272,7 @@
           <label class="select-visible-control" title="Select every visible eBay listing"><input type="checkbox" aria-label="Select all visible eBay listings" ${allVisibleSelected ? "checked" : ""} onchange="toggleVisibleListingSelection(this.checked)" /></label>
           <span class="selection-count">${selectedVisible} item${selectedVisible === 1 ? "" : "s"} selected</span>
           <div class="selection-toolbar-actions">
-            ${toolbarIconButton("syncVisibleEbayDrafts()", "Sync eBay drafts", "sync", true)}
+            ${toolbarIconButton("refreshSelectedListingSources()", selectedVisible ? "Refresh selected source prices" : "Refresh due source prices", "sync", true)}
             ${toolbarIconButton("runNextEbayRevision()", "Run next eBay price update", "import", queuedEbayRevisionCount() > 0 || Boolean(runningEbayRevisionJob()))}
             ${toolbarIconButton("repriceSelectedListings()", "Reprice selected", "calculator", selectedVisible)}
             ${toolbarIconButton("bulkEditSelectedListings()", "Bulk edit", "edit", selectedVisible)}
@@ -5292,6 +5292,33 @@
           else selectedProductIds.delete(item.product_id);
         });
         render();
+      }
+
+      async function refreshSelectedListingSources() {
+        const selectedItems = selectedVisibleListingItems().filter((item) => item.source_url);
+        const productIds = [...new Set(selectedItems.map((item) => Number(item.product_id)).filter(Boolean))];
+        const intervalHours = Number(state.settings.source_refresh_interval_hours || state.refreshQueue?.stale_after_hours || 6);
+        if (!productIds.length) {
+          const batch = await request("/source-refresh/auto-queue", { method: "POST" });
+          await refreshAll({ silent: true });
+          return message(batch.queued
+            ? `Queued ${batch.queued} due source price refresh job(s). Windows Chrome will run them.`
+            : batch.message || `No scheduled or live supplier prices are due inside the ${intervalHours}-hour window.`);
+        }
+        const batch = await request("/source-refresh/batches", {
+          method: "POST",
+          body: JSON.stringify({
+            product_ids: productIds,
+            limit: productIds.length,
+            interval_hours: intervalHours,
+            force: true,
+            auto_claim: false
+          })
+        });
+        await refreshAll({ silent: true });
+        message(batch.queued
+          ? `Queued ${batch.queued} selected source price refresh job(s). Windows Chrome will run them.`
+          : "Selected source prices already have queued or running refresh jobs.");
       }
 
       async function repriceSelectedListings() {

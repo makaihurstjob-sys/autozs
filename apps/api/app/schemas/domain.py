@@ -651,6 +651,7 @@ class SourceRefreshBatchCreate(BaseModel):
     interval_hours: float = Field(default=6.0, ge=0.25, le=168)
     force: bool = False
     auto_claim: bool = True
+    product_ids: list[int] | None = None
 
 
 class SourceRefreshJobRead(BaseModel):
