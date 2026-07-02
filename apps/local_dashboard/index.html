@@ -1249,6 +1249,18 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .listing-product-row {
+        grid-template-columns: 58px minmax(280px, 1fr) minmax(430px, 1.25fr) minmax(130px, 170px) max-content;
+      }
+      .listing-product-row .compact-facts {
+        grid-template-columns: repeat(3, minmax(92px, 1fr));
+      }
+      .listing-product-row .compact-fact strong {
+        min-height: 0;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
+      }
       .supplier-logo {
         align-items: center;
         border-radius: 2px;
@@ -4871,7 +4883,7 @@
         const summary = listingCardSummary(item);
         const updated = job?.updated_at ? new Date(job.updated_at).toLocaleDateString() : "-";
         return `<div class="product-card shipping-${shipping.key}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
-          <div class="product-row">
+          <div class="product-row listing-product-row">
             ${listingLeadingControlsHtml(item, summary)}
             <div class="product-main">
               ${product ? sourceThumbHtml(product) : listingSourceThumbHtml(item)}
@@ -5602,10 +5614,10 @@
       function listingStartCompactHtml(item) {
         const job = item.listing_job;
         if (job?.status === "tombstoned") return `<span class="status stage-source">Missing</span>`;
-        if (listingIsLive(item)) return `<span class="status stage-ready">Live</span><div class="draft">${esc(formatSchedule(listingStartDate(item) || item.updated_at || new Date()))}</div>`;
+        if (listingIsLive(item)) return `<span class="status stage-ready">Live</span><div class="draft">${esc(formatDateTime(listingStartDate(item) || item.updated_at || new Date()))}</div>`;
         if (listingIsScheduled(item)) {
           const schedule = job?.listing_schedule_at || item.listing_schedule_at;
-          return `<span class="status stage-images">Scheduled</span>${schedule ? `<div class="draft">${esc(formatSchedule(schedule))}</div>` : ""}`;
+          return `<span class="status stage-images">Scheduled</span>${schedule ? `<div class="draft">${esc(formatDateTime(schedule))}</div>` : ""}`;
         }
         return "Now";
       }
