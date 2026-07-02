@@ -93,6 +93,45 @@ def test_ebay_connection_reports_missing_credentials(client) -> None:
     assert "sell.inventory.readonly" in " ".join(connection["scopes"])
 
 
+def test_home_depot_error_page_capture_is_rejected(client) -> None:
+    response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/DEWALT-Test/315994093",
+            "title": "Error Page",
+            "source_price": 99.0,
+            "source_shipping": 0.0,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "error page" in response.json()["detail"].lower()
+
+
+def test_home_depot_error_page_capture_update_is_rejected(client) -> None:
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/DEWALT-Test/315994093",
+            "title": "DEWALT Test Product",
+            "source_price": 99.0,
+            "source_shipping": 0.0,
+        },
+    ).json()
+
+    response = client.patch(
+        f"/products/{product['id']}/capture",
+        json={
+            "title": "Error Page",
+            "source_price": 99.0,
+            "source_shipping": 0.0,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "error page" in response.json()["detail"].lower()
+
+
 def test_ebay_account_profiles_store_multiple_accounts_without_echoing_secret(client) -> None:
     first = client.post(
         "/ebay/accounts",

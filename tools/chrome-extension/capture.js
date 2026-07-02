@@ -346,6 +346,12 @@ function captureSourceProductFromPage() {
     }
   };
   const visibleText = document.body.innerText || "";
+  if (
+    location.hostname.includes("homedepot.com") &&
+    /oops!!?\s+something\s+went\s+wrong|please\s+refresh\s+page|need\s+help\?\s+visit\s+our\s+customer\s+service\s+center/i.test(visibleText)
+  ) {
+    throw new Error("Home Depot showed an error page; refresh this source page and try again.");
+  }
   const jsonProducts = [];
   const pathParts = location.pathname.split("/").filter(Boolean);
   const productSlug = pathParts[1] || "";
@@ -425,7 +431,7 @@ function captureSourceProductFromPage() {
   const detectHomeDepotSalePrice = () => {
     if (!location.hostname.includes("homedepot.com")) return null;
     const lines = visibleText.split("\n").map(clean).filter(Boolean);
-    const salePattern = /special\s*buy|special\s*price|sale\s*price|new\s*lower\s*price|limited[-\s]*time\s*(?:deal|price)|clearance/i;
+    const salePattern = /special\s*buy|special\s*price|sale\s*price|\b(?:sale|savings)\b|new\s*lower\s*price|limited[-\s]*time\s*(?:deal|price)|clearance/i;
     const excludedPattern = /credit\s*card|open(?:ing)?\s+(?:a|new)\s+card|financing|protection\s*plan|delivery|shipping|pickup/i;
     const stripNonActivePrices = (text) =>
       clean(text)

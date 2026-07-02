@@ -487,6 +487,7 @@ def import_source_products(payload: ProductImportRequest, db: Session = Depends(
 
 @router.post("/products/import-captured", response_model=ProductRead)
 def import_captured_source_product(payload: CapturedProductImport, db: Session = Depends(get_db)) -> Product:
+    reject_home_depot_error_capture(payload.source_url, payload.title)
     product = import_captured_product(
         db,
         source_url=payload.source_url,
@@ -630,6 +631,10 @@ def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRea
 
 @router.patch("/products/{product_id}/capture", response_model=ProductRead)
 def update_product_capture(product_id: int, payload: CapturedProductUpdate, db: Session = Depends(get_db)) -> Product:
+    product_before_update = db.get(Product, product_id)
+    if product_before_update is not None and product_before_update.supplier_products:
+        source_url = product_before_update.supplier_products[0].source_url
+        reject_home_depot_error_capture(source_url, payload.title)
     product = update_product_from_capture(
         db,
         product_id=product_id,
@@ -644,6 +649,13 @@ def update_product_capture(product_id: int, payload: CapturedProductUpdate, db: 
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
+
+
+def reject_home_depot_error_capture(source_url: str | None, title: str | None) -> None:
+    if not source_url or not title:
+        return
+    if "homedepot.com" in source_url.lower() and title.strip().lower() == "error page":
+        raise HTTPException(status_code=422, detail="Home Depot returned an error page; refresh the source page and try again")
 
 
 @router.patch("/products/{product_id}/listing-schedule", response_model=ProductRead)

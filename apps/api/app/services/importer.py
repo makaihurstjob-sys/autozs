@@ -551,6 +551,7 @@ def import_captured_product(
     if subscription_discount_percent is not None:
         supplier.subscription_discount_percent = subscription_discount_percent
     supplier.in_stock = True
+    supplier.updated_at = datetime.utcnow()
     effective_source_price = source_price if source_price is not None else supplier.last_price
     _log_supplier_snapshot(
         db,
@@ -627,6 +628,8 @@ def update_product_from_capture(
         supplier.last_shipping = source_shipping
     if supplier and subscription_discount_percent is not None:
         supplier.subscription_discount_percent = subscription_discount_percent
+    if supplier:
+        supplier.updated_at = datetime.utcnow()
     effective_source_price = source_price if source_price is not None else (supplier.last_price if supplier else None)
     effective_source_shipping = source_shipping if source_shipping is not None else (supplier.last_shipping if supplier else -1.0)
     if supplier:

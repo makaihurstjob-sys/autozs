@@ -221,9 +221,9 @@
       delete payload.detected_shipping;
       if (refreshContext) payload.refresh_job_id = refreshContext.jobId;
       const product = await importCapturedProduct(payload);
-      setStatus("Import saved. Downloading product images...");
+      setStatus(refreshContext ? "Price refresh saved." : "Import saved. Downloading product images...");
       let imageStatus = "no image URLs found";
-      if (product.images && product.images.length) {
+      if (!refreshContext && product.images && product.images.length) {
         try {
           const imageResult = await downloadProductImages(product.id);
           imageStatus = readImageDownloadStatus(imageResult);
@@ -240,13 +240,16 @@
       );
       button.textContent = "Imported";
       if (refreshContext) {
-        setStatus(`Refreshed ${product.sku}. Loading the next product...`);
-        const nextJob = await claimNextSourceRefreshJob(refreshContext.batchKey);
-        if (nextJob?.runner_url) {
-          setTimeout(() => location.replace(nextJob.runner_url), 900);
-        } else {
-          setStatus(`Refresh batch complete. Last product: ${product.sku}.`);
-        }
+        setStatus(`Refreshed ${product.sku}. Cooling down before the next product...`);
+        setTimeout(async () => {
+          try {
+            const nextJob = await claimNextSourceRefreshJob(refreshContext.batchKey);
+            if (nextJob?.runner_url) location.replace(nextJob.runner_url);
+            else setStatus(`Refresh batch complete. Last product: ${product.sku}.`);
+          } catch (nextError) {
+            setStatus(`Refreshed ${product.sku}. Next product will resume on the worker poll.`);
+          }
+        }, 45 * 1000);
       }
     } catch (error) {
       setStatus(`Import failed: ${error.message}`);
@@ -254,8 +257,7 @@
       if (refreshContext) {
         try {
           await failSourceRefreshJob(refreshContext.jobId, error.message || String(error));
-          const nextJob = await claimNextSourceRefreshJob(refreshContext.batchKey);
-          if (nextJob?.runner_url) setTimeout(() => location.replace(nextJob.runner_url), 1400);
+          setStatus(`Refresh paused after an error. The worker will retry the queue after its cooldown.`);
         } catch {}
       }
     } finally {

@@ -237,7 +237,78 @@ async function runDelayedCaptureTest() {
   }
 }
 
-Promise.all([runContentTest(), runAutoImportTest(), runDelayedCaptureTest()])
+async function runSourceRefreshPacingTest() {
+  const body = new FakeElement("body");
+  const delays = [];
+  let imageDownloads = 0;
+  let nextClaims = 0;
+
+  body.prepend = (element) => {
+    element.parentNode = body;
+    body.hosted = element;
+  };
+
+  const context = {
+    console,
+    URLSearchParams,
+    setInterval: () => 1,
+    clearInterval: () => {},
+    setTimeout: (callback, delay = 0) => {
+      delays.push(delay);
+      if (delay < 45 * 1000) callback();
+      return 1;
+    },
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+    },
+    window: {
+      __ebayAutomationImportButton: false,
+      __ebayAutomationAutoImportStarted: false,
+      addEventListener: () => {},
+    },
+    location: { search: "?ea_auto_import=1&autozs_refresh_job=7&autozs_refresh_batch=batch-1", replace: () => {} },
+    document: {
+      body,
+      hidden: false,
+      createElement: (tagName) => new FakeElement(tagName),
+      addEventListener: () => {},
+      getElementById: (id) => (body.hosted && body.hosted.id === id ? body.hosted : null),
+      querySelector: () => null,
+    },
+    readAppTheme: async () => "light",
+    checkLocalApi: async () => ({ status: "ok" }),
+    sourceRefreshContextFromLocation: () => ({ jobId: 7, batchKey: "batch-1" }),
+    captureSourceProductFromPage: () => ({
+      source_url: "https://www.homedepot.com/p/Test/123",
+      title: "Refresh Product",
+      source_price: 19.99,
+      detected_shipping: 0,
+      image_urls: "https://images.thdstatic.com/productImages/refresh-front.jpg",
+    }),
+    importCapturedProduct: async () => ({ sku: "REFRESH", images: [{ id: 1 }] }),
+    downloadProductImages: async () => {
+      imageDownloads += 1;
+      return { downloaded: 1, attempted: 1 };
+    },
+    claimNextSourceRefreshJob: async () => {
+      nextClaims += 1;
+      return null;
+    },
+    failSourceRefreshJob: async () => ({}),
+  };
+
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  if (imageDownloads !== 0) throw new Error(`Expected price refresh to skip image downloads, got ${imageDownloads}`);
+  if (!delays.includes(45 * 1000)) throw new Error(`Expected a 45 second cooldown, got ${JSON.stringify(delays)}`);
+  if (nextClaims !== 0) throw new Error("Expected the next refresh job to wait for the cooldown.");
+}
+
+Promise.all([runContentTest(), runAutoImportTest(), runDelayedCaptureTest(), runSourceRefreshPacingTest()])
   .then(() => console.log("purchase-panel placement, auto-import, and delayed capture tests ok"))
   .catch((error) => {
     console.error(error);

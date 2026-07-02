@@ -68,6 +68,22 @@ if (!freeShippingWithSubscription.source_url.includes("MERCH=REC")) {
   throw new Error(`Expected normal Home Depot params to remain, got ${freeShippingWithSubscription.source_url}`);
 }
 
+let rejectedHomeDepotErrorPage = false;
+try {
+  runCapture(`
+#1 Home Improvement Retailer
+Oops!! Something went wrong. Please refresh page
+Refresh
+How doers get more done
+Need Help? Visit our Customer Service Center
+`);
+} catch (error) {
+  rejectedHomeDepotErrorPage = /Home Depot showed an error page/i.test(error.message);
+}
+if (!rejectedHomeDepotErrorPage) {
+  throw new Error("Expected Home Depot error pages to be rejected before import.");
+}
+
 const paidShipping = runCapture(`
 Project panel
 $49.33
@@ -109,6 +125,20 @@ Free Delivery
 
 if (splitSpecialBuy.source_price !== 99) {
   throw new Error(`Expected split Home Depot Special Buy price 99, got ${splitSpecialBuy.source_price}`);
+}
+
+const saleBannerWithoutSpecialBuyText = runCapture(`
+DEWALT Atomic 20V Max Lithium-Ion Brushless Cordless Compact 1/4 in. Impact Driver Kit
+4th of July Sale
+Shop DEWALT
+$99 00 Was $179.00
+Save $80.00 (45%)
+Pay $74 after $25 OFF your total qualifying purchase upon opening a new card.
+Free Delivery
+`);
+
+if (saleBannerWithoutSpecialBuyText.source_price !== 99) {
+  throw new Error(`Expected Home Depot sale banner price 99, got ${saleBannerWithoutSpecialBuyText.source_price}`);
 }
 
 const emailSignupDiscount = runCapture(

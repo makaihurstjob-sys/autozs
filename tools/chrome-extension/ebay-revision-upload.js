@@ -87,15 +87,25 @@
   }
 
   function uploadRows() {
-    return Array.from(document.querySelectorAll('[role="row"]')).map((row) => {
-      const cells = Array.from(row.querySelectorAll('[role="gridcell"]')).map((cell) => clean(cell.innerText || cell.textContent));
+    return Array.from(document.querySelectorAll('[role="row"], tr')).map((row) => {
+      const cells = Array.from(row.querySelectorAll('[role="gridcell"], td, th')).map((cell) => clean(cell.innerText || cell.textContent));
       return { row, cells, text: clean(row.innerText || row.textContent) };
     }).filter((item) => item.cells.length >= 3);
   }
 
-  function matchingUploadRow(filename) {
+  function filenameMatchTerms(filename) {
     const normalized = clean(filename).toLowerCase();
-    return uploadRows().find((item) => item.text.toLowerCase().includes(normalized));
+    const stem = normalized.replace(/\.(csv|tsv|txt|zip)$/i, "");
+    return Array.from(new Set([normalized, stem].filter((term) => term.length >= 12)));
+  }
+
+  function rowMatchesUploadFilename(rowText, filename) {
+    const text = clean(rowText).toLowerCase();
+    return filenameMatchTerms(filename).some((term) => text.includes(term));
+  }
+
+  function matchingUploadRow(filename) {
+    return uploadRows().find((item) => rowMatchesUploadFilename(item.text, filename));
   }
 
   function attachBatchFile(batch) {
