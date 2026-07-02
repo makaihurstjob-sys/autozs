@@ -17,7 +17,7 @@ from app.models.domain import (
     ProductStatus,
 )
 from app.services.ebay_browser_account import assert_ebay_browser_account_can_list
-from app.services.ebay_revisions import enqueue_ebay_price_revisions
+from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing, enqueue_ebay_price_revisions
 
 
 ACTIVE_REPORT_STATUSES = {"active", "live", "listed"}
@@ -298,6 +298,12 @@ def _tombstone_missing_listings(db: Session, account_key: str, seen_listing_ids:
         draft = db.scalar(select(ListingDraft).where(ListingDraft.product_id == listing.product_id, ListingDraft.marketplace == "ebay"))
         if draft is not None:
             draft.status = "tombstoned"
+        cancel_revision_jobs_for_ebay_listing(
+            db,
+            listing,
+            reason="Cancelled because Seller Hub no longer reports this listing as active.",
+            commit=False,
+        )
         _tombstone_stale_scheduled_jobs(db, listing)
         tombstoned += 1
     return tombstoned

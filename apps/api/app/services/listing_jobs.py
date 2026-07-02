@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain import EbayListing, ListingJob, ListingJobStatus, Product, ProductStatus
 from app.services.ebay_browser_account import assert_ebay_browser_account_can_list
+from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing
 from app.services.importer import build_ebay_listing_package, build_listing_readiness
 from app.services.settings import read_pricing_settings
 
@@ -346,6 +347,12 @@ def _tombstone_missing_draft_records(db: Session, job: ListingJob) -> None:
     ).all()
     for listing in listings:
         listing.status = "tombstoned"
+        cancel_revision_jobs_for_ebay_listing(
+            db,
+            listing,
+            reason="Cancelled because the linked eBay draft/scheduled listing was tombstoned.",
+            commit=False,
+        )
     if product is None:
         return
     for listing_draft in product.listing_drafts:

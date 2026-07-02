@@ -25,6 +25,7 @@ ACTIVE_STATUSES = {
     EbayRevisionJobStatus.paused.value,
 }
 REVISION_LISTING_STATUSES = {"scheduled", "listed", "live", "active"}
+TERMINAL_REVISION_LISTING_STATUSES = {"tombstoned", "deleted", "ended", "cancelled", "inactive"}
 REVISION_LEASE_MINUTES = 15
 MAX_REVISION_ATTEMPTS = 3
 
@@ -96,6 +97,7 @@ def enqueue_ebay_price_revisions(
     db: Session,
     product_ids: list[int] | None = None,
 ) -> tuple[int, int]:
+    cancel_orphaned_ebay_revision_jobs(db, commit=False)
     stmt = (
         select(EbayListing, ListingDraft)
         .join(Product, Product.id == EbayListing.product_id)
@@ -161,11 +163,67 @@ def list_ebay_revision_jobs(
     status: str | None = None,
     limit: int = 100,
 ) -> list[EbayRevisionJob]:
+    cancel_orphaned_ebay_revision_jobs(db)
     stmt = select(EbayRevisionJob)
     if status:
         stmt = stmt.where(EbayRevisionJob.status == status)
     stmt = stmt.order_by(EbayRevisionJob.created_at.desc(), EbayRevisionJob.id.desc()).limit(limit)
     return list(db.scalars(stmt).all())
+
+
+def cancel_revision_jobs_for_ebay_listing(
+    db: Session,
+    listing: EbayListing,
+    *,
+    reason: str = "Cancelled because the linked eBay listing is no longer active in AutoZS.",
+    commit: bool = True,
+) -> int:
+    cancelled = 0
+    checked_at = _now()
+    jobs = db.scalars(
+        select(EbayRevisionJob)
+        .where(EbayRevisionJob.ebay_listing_id == listing.id)
+        .where(EbayRevisionJob.status.in_(ACTIVE_STATUSES))
+    ).all()
+    for job in jobs:
+        job.status = EbayRevisionJobStatus.cancelled.value
+        job.completed_at = checked_at
+        job.started_at = None
+        job.lease_expires_at = None
+        job.message = reason
+        cancelled += 1
+    if cancelled and commit:
+        db.commit()
+    return cancelled
+
+
+def cancel_orphaned_ebay_revision_jobs(db: Session, *, commit: bool = True) -> int:
+    cancelled = 0
+    checked_at = _now()
+    rows = db.execute(
+        select(EbayRevisionJob, EbayListing)
+        .join(EbayListing, EbayListing.id == EbayRevisionJob.ebay_listing_id, isouter=True)
+        .where(EbayRevisionJob.status.in_(ACTIVE_STATUSES))
+    ).all()
+    for job, listing in rows:
+        listing_status = str(listing.status or "").lower() if listing is not None else ""
+        if listing is not None and listing_status in REVISION_LISTING_STATUSES:
+            continue
+        if listing is None:
+            reason = "Cancelled because the linked eBay listing record is missing from AutoZS."
+        elif listing_status in TERMINAL_REVISION_LISTING_STATUSES or listing_status not in REVISION_LISTING_STATUSES:
+            reason = f"Cancelled because the linked eBay listing is {listing_status or 'not active'} in AutoZS."
+        else:
+            continue
+        job.status = EbayRevisionJobStatus.cancelled.value
+        job.completed_at = checked_at
+        job.started_at = None
+        job.lease_expires_at = None
+        job.message = reason
+        cancelled += 1
+    if cancelled and commit:
+        db.commit()
+    return cancelled
 
 
 def create_ebay_revision_canary(

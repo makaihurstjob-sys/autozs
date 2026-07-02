@@ -14,6 +14,8 @@ from app.services.ebay_revision_batches import (
 from app.services.ebay_revision_csv import build_ebay_price_revision_csv, save_ebay_revision_template
 from app.services.ebay_revisions import (
     MAX_REVISION_ATTEMPTS,
+    cancel_revision_jobs_for_ebay_listing,
+    list_ebay_revision_jobs,
     release_expired_ebay_revision_jobs,
     start_next_ebay_revision_job,
     update_ebay_revision_job,
@@ -52,6 +54,56 @@ def test_expired_revision_lease_returns_approved_job_to_queue() -> None:
     assert job.started_at is None
     assert job.lease_expires_at is None
     assert "returned" in (job.message or "")
+
+
+def test_tombstoned_listing_cancels_open_revision_jobs_on_read() -> None:
+    db = make_session()
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="tombstoned", price=30.53)
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=listing.id,
+        ebay_account_key="main-store",
+        old_price=30.53,
+        target_price=31.53,
+        status=EbayRevisionJobStatus.needs_review.value,
+    )
+    db.add(job)
+    db.commit()
+
+    jobs = list_ebay_revision_jobs(db)
+
+    assert len(jobs) == 1
+    assert jobs[0].status == EbayRevisionJobStatus.cancelled.value
+    assert jobs[0].completed_at is not None
+    assert "tombstoned" in (jobs[0].message or "")
+
+
+def test_tombstone_helper_cancels_linked_revision_jobs() -> None:
+    db = make_session()
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="scheduled", price=30.53)
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=listing.id,
+        ebay_account_key="main-store",
+        old_price=30.53,
+        target_price=31.53,
+        status=EbayRevisionJobStatus.queued.value,
+        lease_expires_at=datetime.utcnow() + timedelta(minutes=5),
+    )
+    db.add(job)
+    db.commit()
+
+    cancelled = cancel_revision_jobs_for_ebay_listing(db, listing, reason="test tombstone")
+
+    assert cancelled == 1
+    db.refresh(job)
+    assert job.status == EbayRevisionJobStatus.cancelled.value
+    assert job.lease_expires_at is None
+    assert job.message == "test tombstone"
 
 
 def test_revision_stops_after_repeated_timeouts() -> None:
