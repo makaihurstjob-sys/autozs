@@ -3222,6 +3222,7 @@
       }
 
       function sourceRefreshJobActivityEntry(job) {
+        const sourceDelta = sourceRefreshPriceDelta(job.baseline_price, job.captured_price);
         return {
           kind: "Price refresh",
           id: job.id,
@@ -3230,8 +3231,8 @@
           title: job.title || `Product ${job.product_id || "-"}`,
           subtitle: `${job.sku || "No SKU"} · ${job.batch_key || "single refresh"}`,
           meta: [
-            `Before ${money(job.baseline_price)}`,
-            `Captured ${money(job.captured_price)}`,
+            sourceDelta,
+            typeof job.price_changed === "boolean" ? (job.price_changed ? "source changed" : "source confirmed") : "",
             job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "",
             `${job.attempts || 0} attempt(s)`,
           ].filter(Boolean),
@@ -3240,6 +3241,15 @@
           productId: job.product_id,
           viewStatus: "all",
         };
+      }
+
+      function sourceRefreshPriceDelta(before, after) {
+        const hasBefore = before !== null && before !== undefined && before !== "";
+        const hasAfter = after !== null && after !== undefined && after !== "";
+        if (hasBefore && hasAfter) return `Source ${money(before)} → ${money(after)}`;
+        if (hasBefore) return `Source ${money(before)} → pending`;
+        if (hasAfter) return `Source captured ${money(after)}`;
+        return "Source price pending";
       }
 
       function ebayRevisionJobActivityEntry(job) {

@@ -419,16 +419,36 @@ function captureSourceProductFromPage() {
     const lines = visibleText.split("\n").map(clean).filter(Boolean);
     const salePattern = /special\s*buy|special\s*price|sale\s*price|new\s*lower\s*price|limited[-\s]*time\s*(?:deal|price)|clearance/i;
     const excludedPattern = /credit\s*card|open(?:ing)?\s+(?:a|new)\s+card|financing|protection\s*plan|delivery|shipping|pickup/i;
+    const stripNonActivePrices = (text) =>
+      clean(text)
+        .replace(/\bwas\s*\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}/gi, " ")
+        .replace(/\bsave\s*\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}(?:\s*\([^)]*\))?/gi, " ")
+        .replace(/\bpay\s*\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}[\s\S]{0,90}?(?:card|credit|opening|off)/gi, " ");
+    const parseSaleContext = (text) => {
+      const context = stripNonActivePrices(text);
+      if (excludedPattern.test(context.slice(0, Math.max(context.indexOf("$") + 1, 0)))) return null;
+      return parsePrice(context);
+    };
+
+    const compactSaleMatch = stripNonActivePrices(visibleText)
+      .replace(/\bspecial\s+buy\b/gi, "SPECIAL BUY")
+      .match(/(?:special\s*buy|special\s*price|sale\s*price|new\s*lower\s*price|limited[-\s]*time\s*(?:deal|price)|clearance)[\s\S]{0,240}?\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}/i);
+    if (compactSaleMatch) {
+      const price = parseSaleContext(compactSaleMatch[0]);
+      if (price !== null) return price;
+    }
+
     for (let index = 0; index < lines.length; index += 1) {
-      if (!salePattern.test(lines[index])) continue;
-      const candidates = lines.slice(index, index + 5);
+      const saleLabel = [lines[index], lines[index + 1]].filter(Boolean).join(" ");
+      if (!salePattern.test(saleLabel)) continue;
+      const candidates = lines.slice(index, index + 10);
       for (const candidate of candidates) {
         if (excludedPattern.test(candidate) || /^\s*(?:was|save)\b/i.test(candidate)) continue;
         const price = parsePrice(candidate);
         if (price !== null) return price;
       }
       const context = candidates.join(" ");
-      const price = parsePrice(context.replace(/\bwas\s*\$[^$]+/gi, ""));
+      const price = parseSaleContext(context);
       if (price !== null && !excludedPattern.test(context.slice(0, Math.max(context.indexOf("$") + 1, 0)))) return price;
     }
     return null;

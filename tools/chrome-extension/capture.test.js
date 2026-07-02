@@ -94,6 +94,23 @@ if (specialBuy.source_price !== 99) {
   throw new Error(`Expected Home Depot Special Buy price 99, got ${specialBuy.source_price}`);
 }
 
+const splitSpecialBuy = runCapture(`
+DEWALT Atomic 20V Max Lithium-Ion Brushless Cordless Compact 1/4 in. Impact Driver Kit
+4th of July Sale
+SPECIAL
+BUY
+$99
+00
+Was $179.00
+Save $80.00 (45%)
+Pay $74 after $25 OFF your total qualifying purchase upon opening a new card.
+Free Delivery
+`);
+
+if (splitSpecialBuy.source_price !== 99) {
+  throw new Error(`Expected split Home Depot Special Buy price 99, got ${splitSpecialBuy.source_price}`);
+}
+
 function runHomeDepotModelImageFilterTest() {
   const actual100 = "https://images.thdstatic.com/productImages/a/svn/milwaukee-power-tool-batteries-48-11-1850-64_100.jpg";
   const actual1000 = "https://images.thdstatic.com/productImages/a/svn/milwaukee-power-tool-batteries-48-11-1850-64_1000.jpg";
