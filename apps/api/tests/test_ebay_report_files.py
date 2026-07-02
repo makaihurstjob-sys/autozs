@@ -4,8 +4,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
-from app.models.domain import EbayListing, EbaySyncRun, ListingDraft, ListingJob, Product
-from app.services.ebay_report_files import import_ebay_report_file, parse_ebay_listing_report
+from app.models.domain import EbayListing, EbayRevisionJob, EbaySyncRun, ListingDraft, ListingJob, Product
+from app.services.ebay_report_files import import_ebay_report_file, parse_ebay_listing_report, scan_ebay_report_inbox
+from app.services.ebay_revision_batches import prepare_next_ebay_revision_batch
+from app.services.ebay_revision_csv import save_ebay_revision_template
 
 
 def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_scheduled(tmp_path) -> None:
@@ -64,3 +66,55 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
         assert listings["STALE-SCHEDULED-1"].status == "tombstoned"
         stale_job = db.scalar(select(ListingJob).where(ListingJob.product_id == products[3].id))
         assert stale_job.status == "tombstoned"
+
+
+def test_revision_result_download_is_imported_and_archived(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'revision-result-test.db'}")
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    with Session() as db:
+        product = Product(sku="REVISION-TARGET", title="Revision target")
+        db.add(product)
+        db.flush()
+        listing = EbayListing(
+            product_id=product.id,
+            listing_id="800123456789",
+            account_id="main-store",
+            status="scheduled",
+            price=20.0,
+        )
+        db.add(listing)
+        db.flush()
+        job = EbayRevisionJob(
+            product_id=product.id,
+            ebay_listing_id=listing.id,
+            ebay_account_key="main-store",
+            old_price=20.0,
+            target_price=25.0,
+            status="queued",
+            guard_passed=True,
+            approval_required=False,
+            approved_at=datetime.utcnow(),
+        )
+        db.add(job)
+        save_ebay_revision_template(
+            db,
+            account_key="main-store",
+            filename="edit-price.csv",
+            template_csv="Action,Item number,Start price\n",
+        )
+        batch = prepare_next_ebay_revision_batch(db, account_key="main-store")
+        assert batch is not None
+        result_path = tmp_path / f"ebay-revision-results-main-store-batch-{batch.id}.csv"
+        result_path.write_text("Action,Item number,Status,Error message\nRevise,800123456789,Success,\n")
+
+        imported = scan_ebay_report_inbox(db, inbox=tmp_path)
+
+        assert imported == [batch.id]
+        db.refresh(job)
+        db.refresh(listing)
+        assert job.status == "completed"
+        assert listing.price == 25.0
+        assert not result_path.exists()
+        assert (tmp_path / "processed" / result_path.name).exists()

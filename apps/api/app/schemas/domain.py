@@ -458,6 +458,35 @@ class EbayRevisionTemplateRead(BaseModel):
     updated_at: datetime
 
 
+class EbayRevisionBatchUpdate(BaseModel):
+    status: str | None = Field(default=None, pattern="^(prepared|uploading|waiting_results|completed|needs_review|failed)$")
+    message: str | None = None
+
+
+class EbayRevisionBatchResultImport(BaseModel):
+    filename: str = ""
+    result_csv: str
+
+
+class EbayRevisionBatchRead(BaseModel):
+    id: int
+    account_key: str
+    status: str
+    job_ids: list[int]
+    filename: str
+    rows_total: int
+    rows_succeeded: int
+    rows_failed: int
+    attempts: int
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    message: str | None = None
+    runner_url: str
+    csv_content: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class EbayRevisionJobUpdate(BaseModel):
     status: str | None = Field(default=None, pattern="^(needs_review|queued|running|completed|failed|paused|cancelled)$")
     message: str | None = None

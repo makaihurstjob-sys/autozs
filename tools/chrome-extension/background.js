@@ -5,6 +5,10 @@ const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
 const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
 const EBAY_REVISION_ALARM = "autozs-ebay-revision-poll";
 const EBAY_REVISION_LAST_OPENED_KEY = "autozsEbayRevisionLastOpened";
+const EBAY_REVISION_BATCH_ALARM = "autozs-ebay-revision-batch-poll";
+const EBAY_REVISION_BATCH_LAST_OPENED_KEY = "autozsEbayRevisionBatchLastOpened";
+const EBAY_REVISION_RESULT_CONTEXT_KEY = "autozsEbayRevisionResultContext";
+const EBAY_REVISION_RESULT_DOWNLOADS_KEY = "autozsEbayRevisionResultDownloads";
 const LOCAL_API = "http://127.0.0.1:8000";
 
 function reportDownloadFilename(context, originalFilename) {
@@ -131,6 +135,67 @@ async function openNextEbayRevisionJob() {
   if (opened) await chrome.storage.local.set({ [EBAY_REVISION_LAST_OPENED_KEY]: Date.now() });
 }
 
+async function matchedEbayAccountKey() {
+  const accounts = await localApiJson("/ebay/accounts");
+  for (const account of accounts || []) {
+    const key = String(account?.key || account?.account_id || "");
+    if (!key) continue;
+    try {
+      const status = await localApiJson(`/ebay/browser-account?account_key=${encodeURIComponent(key)}`);
+      if (status?.can_list) return key;
+    } catch {}
+  }
+  return null;
+}
+
+async function claimNextEbayRevisionBatch() {
+  const accountKey = await matchedEbayAccountKey();
+  if (!accountKey) return null;
+  const response = await fetch(
+    `${LOCAL_API}/ebay/revision-batches/next?account_key=${encodeURIComponent(accountKey)}&limit=25`,
+    { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" } }
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`AutoZS revision batch API returned ${response.status}`);
+  return response.json();
+}
+
+function isEbayRevisionBatchRunnerUrl(url, batchId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const id = parsed.searchParams.get("autozs_revision_batch");
+    return parsed.hostname === "www.ebay.com"
+      && /^\/sh\/reports\/uploads/i.test(parsed.pathname)
+      && Boolean(id)
+      && (batchId === null || id === String(batchId));
+  } catch {
+    return false;
+  }
+}
+
+async function openNextEbayRevisionBatch() {
+  const stored = await chrome.storage.local.get(EBAY_REVISION_BATCH_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[EBAY_REVISION_BATCH_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 60 * 1000) return;
+  const batch = await claimNextEbayRevisionBatch();
+  if (!batch?.runner_url || !["prepared", "uploading", "waiting_results"].includes(batch.status)) return;
+  const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/sh/reports/uploads*" });
+  const exact = tabs.find((tab) => isEbayRevisionBatchRunnerUrl(tab.url, batch.id));
+  if (!exact?.id) {
+    const reusable = tabs.find((tab) => isEbayRevisionBatchRunnerUrl(tab.url));
+    if (reusable?.id) await chrome.tabs.update(reusable.id, { url: batch.runner_url, active: false });
+    else await chrome.tabs.create({ url: batch.runner_url, active: false });
+  }
+  await chrome.storage.local.set({ [EBAY_REVISION_BATCH_LAST_OPENED_KEY]: Date.now() });
+}
+
+function revisionResultFilename(context, originalFilename) {
+  const extensionMatch = String(originalFilename || "").toLowerCase().match(/\.(csv|tsv|txt|zip)$/);
+  const extension = extensionMatch?.[1] || "csv";
+  const accountKey = String(context?.accountKey || "manual").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "manual";
+  return `AutoZS/ebay-revision-results-${accountKey}-batch-${Number(context?.batchId)}.${extension}`;
+}
+
 function isEbayTab(tab) {
   try {
     const url = new URL(tab?.url || "");
@@ -226,6 +291,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.tabs.remove(sender.tab.id, () => sendResponse({ ok: true }));
     return true;
   }
+  if (message?.type === "autozs-ebay-revision-result-context") {
+    (async () => {
+      const context = {
+        batchId: Number(message.batchId),
+        accountKey: String(message.accountKey || "manual"),
+        createdAt: Date.now(),
+      };
+      if (!context.batchId) throw new Error("Missing AutoZS revision batch ID.");
+      await chrome.storage.local.set({ [EBAY_REVISION_RESULT_CONTEXT_KEY]: context });
+      sendResponse({ ok: true, context });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
   if (message?.type !== "autozs-native-ebay-input" || !sender.tab?.id || !isEbayTab(sender.tab)) return undefined;
 
   (async () => {
@@ -250,7 +328,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
   chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
     (async () => {
-      const stored = await chrome.storage.local.get(REPORT_SYNC_CONTEXT_KEY);
+      const stored = await chrome.storage.local.get([REPORT_SYNC_CONTEXT_KEY, EBAY_REVISION_RESULT_CONTEXT_KEY]);
+      const revisionContext = stored?.[EBAY_REVISION_RESULT_CONTEXT_KEY];
+      const freshRevision = revisionContext && Date.now() - Number(revisionContext.createdAt || 0) < 60 * 60 * 1000;
+      if (freshRevision && isEbayReportDownload(item)) {
+        const filename = revisionResultFilename(revisionContext, item.filename);
+        const downloads = (await chrome.storage.local.get(EBAY_REVISION_RESULT_DOWNLOADS_KEY))?.[EBAY_REVISION_RESULT_DOWNLOADS_KEY] || {};
+        downloads[String(item.id)] = { ...revisionContext, filename };
+        await chrome.storage.local.set({ [EBAY_REVISION_RESULT_DOWNLOADS_KEY]: downloads });
+        suggest({ filename, conflictAction: "overwrite" });
+        return;
+      }
       const context = stored?.[REPORT_SYNC_CONTEXT_KEY];
       const fresh = context && Date.now() - Number(context.createdAt || 0) < 60 * 60 * 1000;
       if (!fresh || !isEbayReportDownload(item)) {
@@ -269,7 +357,29 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
   chrome.downloads.onChanged.addListener((delta) => {
     if (delta?.state?.current !== "complete") return;
     (async () => {
-      const stored = await chrome.storage.local.get([REPORT_DOWNLOADS_KEY, REPORT_SYNC_CONTEXT_KEY]);
+      const stored = await chrome.storage.local.get([
+        REPORT_DOWNLOADS_KEY,
+        REPORT_SYNC_CONTEXT_KEY,
+        EBAY_REVISION_RESULT_DOWNLOADS_KEY,
+        EBAY_REVISION_RESULT_CONTEXT_KEY,
+      ]);
+      const revisionDownloads = stored?.[EBAY_REVISION_RESULT_DOWNLOADS_KEY] || {};
+      const revisionContext = revisionDownloads[String(delta.id)];
+      if (revisionContext) {
+        await localApiJson(`/ebay/revision-batches/${revisionContext.batchId}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: "waiting_results",
+            message: "eBay result report downloaded. AutoZS is importing it now.",
+          }),
+        });
+        delete revisionDownloads[String(delta.id)];
+        await chrome.storage.local.set({
+          [EBAY_REVISION_RESULT_DOWNLOADS_KEY]: revisionDownloads,
+          [EBAY_REVISION_RESULT_CONTEXT_KEY]: null,
+        });
+        return;
+      }
       const downloads = stored?.[REPORT_DOWNLOADS_KEY] || {};
       const context = downloads[String(delta.id)];
       if (!context) return;
@@ -288,15 +398,19 @@ if (chrome.alarms) {
   chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
     chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   });
   chrome.runtime.onStartup.addListener(() => {
     chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
     chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm?.name === SOURCE_REFRESH_ALARM) openNextSourceRefreshJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_ALARM) openNextEbayRevisionJob().catch(() => {});
+    if (alarm?.name === EBAY_REVISION_BATCH_ALARM) openNextEbayRevisionBatch().catch(() => {});
   });
   chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+  chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
 }

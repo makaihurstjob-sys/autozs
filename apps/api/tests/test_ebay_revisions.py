@@ -5,8 +5,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.domain import EbayListing, EbayRevisionJob, EbayRevisionJobStatus
-from app.services.ebay_revision_csv import build_ebay_price_revision_csv
+from app.models.domain import EbayListing, EbayRevisionBatchStatus, EbayRevisionJob, EbayRevisionJobStatus
+from app.services.ebay_revision_batches import import_ebay_revision_result, prepare_next_ebay_revision_batch
+from app.services.ebay_revision_csv import build_ebay_price_revision_csv, save_ebay_revision_template
 from app.services.ebay_revisions import (
     MAX_REVISION_ATTEMPTS,
     release_expired_ebay_revision_jobs,
@@ -213,3 +214,96 @@ def test_pausing_revision_clears_browser_lease_without_completing_job() -> None:
 
     assert job.lease_expires_at is None
     assert job.completed_at is None
+
+
+def test_bulk_revision_batch_reconciles_success_and_failure_rows() -> None:
+    db = make_session()
+    save_ebay_revision_template(
+        db,
+        account_key="main-store",
+        filename="edit-price.csv",
+        template_csv="#INFO,Version=1.0.0\nAction,Item number,Start price,Quantity\n",
+    )
+    listings = [
+        EbayListing(product_id=1, listing_id="800123456781", account_id="main-store", status="live", price=20.0),
+        EbayListing(product_id=2, listing_id="800123456782", account_id="main-store", status="scheduled", price=30.0),
+    ]
+    db.add_all(listings)
+    db.flush()
+    jobs = [
+        EbayRevisionJob(
+            product_id=index,
+            ebay_listing_id=listing.id,
+            ebay_account_key="main-store",
+            old_price=listing.price,
+            target_price=listing.price + 5,
+            status=EbayRevisionJobStatus.queued.value,
+            guard_passed=True,
+            approval_required=False,
+            approved_at=datetime.utcnow(),
+        )
+        for index, listing in enumerate(listings, start=1)
+    ]
+    db.add_all(jobs)
+    db.commit()
+
+    batch = prepare_next_ebay_revision_batch(db, account_key="main-store")
+    assert batch is not None
+    assert batch.status == EbayRevisionBatchStatus.prepared.value
+    assert batch.rows_total == 2
+    assert all(job.status == EbayRevisionJobStatus.running.value for job in jobs)
+    assert "Revise,800123456781,25.00" in batch.csv_content
+
+    result = (
+        "#INFO,Version=1.0.0\n"
+        "Action,Item number,Status,Error message\n"
+        "Revise,800123456781,Success,\n"
+        'Revise,800123456782,Failed,"Listing is not eligible for revision"\n'
+    )
+    imported = import_ebay_revision_result(db, batch, result_csv=result, filename="results.csv")
+    assert imported.status == EbayRevisionBatchStatus.needs_review.value
+    assert imported.rows_succeeded == 1
+    assert imported.rows_failed == 1
+    db.refresh(jobs[0])
+    db.refresh(jobs[1])
+    db.refresh(listings[0])
+    assert jobs[0].status == EbayRevisionJobStatus.completed.value
+    assert listings[0].price == 25.0
+    assert jobs[1].status == EbayRevisionJobStatus.paused.value
+    assert "not eligible" in (jobs[1].message or "")
+
+
+def test_bulk_revision_result_pauses_job_missing_from_results() -> None:
+    db = make_session()
+    save_ebay_revision_template(
+        db,
+        account_key="main-store",
+        filename="edit-price.csv",
+        template_csv="Action,Item number,Start price\n",
+    )
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="live", price=20.0)
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=listing.id,
+        ebay_account_key="main-store",
+        target_price=25.0,
+        status=EbayRevisionJobStatus.queued.value,
+        guard_passed=True,
+        approval_required=False,
+        approved_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    batch = prepare_next_ebay_revision_batch(db, account_key="main-store")
+    assert batch is not None
+
+    import_ebay_revision_result(
+        db,
+        batch,
+        result_csv="Item number,Status,Error message\n800999999999,Success,\n",
+    )
+    db.refresh(job)
+    assert job.status == EbayRevisionJobStatus.paused.value
+    assert "did not contain this item" in (job.message or "")

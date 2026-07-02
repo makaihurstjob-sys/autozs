@@ -43,7 +43,7 @@
     },
     {
       "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*"],
-      "js": ["capture.js", "ebay-research.js", "ebay-fill.js", "ebay-reports.js"],
+      "js": ["capture.js", "ebay-research.js", "ebay-fill.js", "ebay-reports.js", "ebay-revision-upload.js"],
       "run_at": "document_start"
     }
   ]

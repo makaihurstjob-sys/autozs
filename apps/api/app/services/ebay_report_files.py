@@ -10,12 +10,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.models.domain import EbaySyncRun, EbaySyncRunStatus
+from app.models.domain import EbayRevisionBatch, EbayRevisionBatchStatus, EbaySyncRun, EbaySyncRunStatus
+from app.services.ebay_revision_batches import import_ebay_revision_result
 from app.services.ebay_sync import import_listing_report_rows
 
 
 REPORT_FILE_PATTERN = re.compile(
     r"^ebay-(?P<report_type>active-listings)-(?P<account_key>[a-z0-9-]+)-run-(?P<run_id>\d+)\.(?P<extension>csv|tsv|txt|zip)$",
+    re.IGNORECASE,
+)
+REVISION_RESULT_PATTERN = re.compile(
+    r"^ebay-revision-results-(?P<account_key>[a-z0-9-]+)-batch-(?P<batch_id>\d+)\.(?P<extension>csv|tsv|txt|zip)$",
     re.IGNORECASE,
 )
 
@@ -89,6 +94,25 @@ def scan_ebay_report_inbox(db: Session, inbox: Path | None = None) -> list[int]:
         if not path.is_file() or path.name.endswith(".crdownload"):
             continue
         match = REPORT_FILE_PATTERN.match(path.name)
+        revision_match = REVISION_RESULT_PATTERN.match(path.name)
+        if revision_match:
+            batch_id = int(revision_match.group("batch_id"))
+            account_key = revision_match.group("account_key").lower()
+            try:
+                batch = _import_revision_result_file(db, path, batch_id=batch_id, account_key=account_key)
+            except Exception as exc:
+                db.rollback()
+                batch = db.get(EbayRevisionBatch, batch_id)
+                if batch is not None:
+                    batch.status = EbayRevisionBatchStatus.needs_review.value
+                    batch.message = f"Automatic eBay revision-result import failed: {exc}"
+                    db.commit()
+                _archive_report(path, root / "failed")
+                continue
+            _archive_report(path, root / "processed")
+            if batch.status == EbayRevisionBatchStatus.completed.value:
+                imported.append(batch.id)
+            continue
         if not match:
             continue
         run_id = int(match.group("run_id"))
@@ -109,6 +133,36 @@ def scan_ebay_report_inbox(db: Session, inbox: Path | None = None) -> list[int]:
         if run.status == EbaySyncRunStatus.completed.value:
             imported.append(run.id)
     return imported
+
+
+def _import_revision_result_file(
+    db: Session,
+    path: Path,
+    *,
+    batch_id: int,
+    account_key: str,
+) -> EbayRevisionBatch:
+    batch = db.get(EbayRevisionBatch, batch_id)
+    if batch is None:
+        raise ValueError(f"AutoZS revision batch {batch_id} does not exist")
+    if batch.account_key.lower() != account_key:
+        raise ValueError(f"Result account {account_key} does not match revision batch {batch.account_key}")
+    text = _read_report_text(path)
+    return import_ebay_revision_result(db, batch, result_csv=text, filename=path.name)
+
+
+def _read_report_text(path: Path) -> str:
+    if path.suffix.lower() != ".zip":
+        return path.read_text(encoding="utf-8-sig", errors="replace")
+    try:
+        with ZipFile(path) as archive:
+            names = [name for name in archive.namelist() if Path(name).suffix.lower() in {".csv", ".tsv", ".txt"}]
+            if not names:
+                raise ValueError("The eBay result ZIP did not contain a CSV file")
+            with archive.open(names[0]) as source:
+                return TextIOWrapper(source, encoding="utf-8-sig", errors="replace").read()
+    except BadZipFile as exc:
+        raise ValueError("The downloaded eBay result ZIP is invalid") from exc
 
 
 def _archive_report(path: Path, directory: Path) -> Path:

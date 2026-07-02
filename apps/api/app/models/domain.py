@@ -71,6 +71,15 @@ class EbayRevisionJobStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class EbayRevisionBatchStatus(str, Enum):
+    prepared = "prepared"
+    uploading = "uploading"
+    waiting_results = "waiting_results"
+    completed = "completed"
+    needs_review = "needs_review"
+    failed = "failed"
+
+
 class SourceRefreshJobStatus(str, Enum):
     queued = "queued"
     running = "running"
@@ -332,6 +341,25 @@ class EbayRevisionTemplate(Base, TimestampMixin):
     account_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     filename: Mapped[str] = mapped_column(Text, default="")
     template_csv: Mapped[str] = mapped_column(Text)
+
+
+class EbayRevisionBatch(Base, TimestampMixin):
+    __tablename__ = "ebay_revision_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(32), default=EbayRevisionBatchStatus.prepared.value, index=True)
+    job_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    filename: Mapped[str] = mapped_column(Text)
+    csv_content: Mapped[str] = mapped_column(Text)
+    result_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rows_total: Mapped[int] = mapped_column(Integer, default=0)
+    rows_succeeded: Mapped[int] = mapped_column(Integer, default=0)
+    rows_failed: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ListingJob(Base, TimestampMixin):

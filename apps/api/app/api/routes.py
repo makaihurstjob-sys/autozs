@@ -15,6 +15,7 @@ from app.models.domain import (
     CustomerUpdate,
     EbayAccount,
     EbayListing,
+    EbayRevisionBatch,
     EbayRevisionJob,
     EbaySyncRun,
     FulfillmentTask,
@@ -58,6 +59,9 @@ from app.schemas.domain import (
     EbayRevisionSheetPrepareResult,
     EbayRevisionTemplateRead,
     EbayRevisionTemplateUpdate,
+    EbayRevisionBatchRead,
+    EbayRevisionBatchResultImport,
+    EbayRevisionBatchUpdate,
     EbayExportResult,
     EbayApiPayload,
     EbayConnectionStatus,
@@ -152,6 +156,12 @@ from app.services.ebay_revision_csv import (
     build_ebay_price_revision_csv,
     read_ebay_revision_template,
     save_ebay_revision_template,
+)
+from app.services.ebay_revision_batches import (
+    import_ebay_revision_result,
+    prepare_next_ebay_revision_batch,
+    serialize_ebay_revision_batch,
+    update_ebay_revision_batch,
 )
 from app.services.ebay_sync import (
     import_listing_report_rows,
@@ -1221,6 +1231,61 @@ def get_ebay_revision_template(account_key: str, db: Session = Depends(get_db)) 
     if template is None:
         raise HTTPException(status_code=404, detail="eBay revision template not found")
     return EbayRevisionTemplateRead.model_validate(template, from_attributes=True)
+
+
+@router.post("/ebay/revision-batches/next", response_model=EbayRevisionBatchRead)
+def next_ebay_revision_batch(
+    account_key: str = Query(...),
+    limit: int = Query(25, ge=1, le=150),
+    db: Session = Depends(get_db),
+) -> EbayRevisionBatchRead:
+    try:
+        batch = prepare_next_ebay_revision_batch(db, account_key=account_key, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if batch is None:
+        raise HTTPException(status_code=404, detail="No approved eBay price revisions are queued")
+    return EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch, include_csv=True))
+
+
+@router.get("/ebay/revision-batches/{batch_id}", response_model=EbayRevisionBatchRead)
+def read_ebay_revision_batch(batch_id: int, db: Session = Depends(get_db)) -> EbayRevisionBatchRead:
+    batch = db.get(EbayRevisionBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="eBay revision batch not found")
+    return EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch, include_csv=True))
+
+
+@router.patch("/ebay/revision-batches/{batch_id}", response_model=EbayRevisionBatchRead)
+def patch_ebay_revision_batch(
+    batch_id: int,
+    payload: EbayRevisionBatchUpdate,
+    db: Session = Depends(get_db),
+) -> EbayRevisionBatchRead:
+    batch = db.get(EbayRevisionBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="eBay revision batch not found")
+    try:
+        batch = update_ebay_revision_batch(db, batch, status=payload.status, message=payload.message)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch))
+
+
+@router.post("/ebay/revision-batches/{batch_id}/results", response_model=EbayRevisionBatchRead)
+def import_ebay_revision_batch_results(
+    batch_id: int,
+    payload: EbayRevisionBatchResultImport,
+    db: Session = Depends(get_db),
+) -> EbayRevisionBatchRead:
+    batch = db.get(EbayRevisionBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="eBay revision batch not found")
+    try:
+        batch = import_ebay_revision_result(db, batch, result_csv=payload.result_csv, filename=payload.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch))
 
 
 @router.post("/ebay/revision-jobs/next", response_model=EbayRevisionJobRead)
