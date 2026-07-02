@@ -810,7 +810,10 @@
         gap: 10px;
         margin-bottom: 10px;
         position: relative;
-        z-index: 40;
+        z-index: 1;
+      }
+      .filter-shell.filter-shell-open {
+        z-index: 80;
       }
       .filter-trigger {
         align-items: center;
@@ -1249,6 +1252,18 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      .listing-product-row {
+        grid-template-columns: 58px minmax(280px, 1fr) minmax(430px, 1.25fr) minmax(130px, 170px) max-content;
+      }
+      .listing-product-row .compact-facts {
+        grid-template-columns: repeat(3, minmax(92px, 1fr));
+      }
+      .listing-product-row .compact-fact strong {
+        min-height: 0;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
       }
       .supplier-logo {
         align-items: center;
@@ -3501,6 +3516,11 @@
           const accountKey = accountKeys[0];
           if (blockIfEbayAccountMismatch(accountKey)) return;
           const assistantWindows = productIds.map(() => window.open("about:blank", "_blank"));
+          message(`Preparing images for ${productIds.length} scheduled product(s)...`);
+          await Promise.all(productIds.map(async (id) => {
+            await request(`/products/${id}/download-images`, { method: "POST" });
+            await request(`/products/${id}/prepare-images?size=1000`, { method: "POST" });
+          }));
           await Promise.all(productIds.map((id) => request(`/products/${id}/listing-schedule`, { method: "PATCH", body: JSON.stringify({ listing_schedule_at: schedule }) })));
           const jobs = await request("/listing-jobs", {
             method: "POST",
@@ -4048,7 +4068,7 @@
       }
 
       function productsFilterMenuHtml(workflowCounts, shippingCounts, visibleProductCount) {
-        return `<div class="filter-shell">
+        return `<div class="filter-shell ${productFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleProductFilterMenu()" aria-expanded="${productFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
           <span class="filter-summary">${esc(productsFilterSummary())}</span>
           <div class="filter-menu ${productFilterMenuOpen ? "open" : ""}">
@@ -4546,11 +4566,13 @@
 
       function sourceThumbHtml(product) {
         const src = productPreviewImageSrc(product);
+        const firstImage = (product?.images || []).find((image) => image.local_path) || (product?.images || [])[0];
+        const remoteFallback = firstImage?.local_path ? firstImage.image_url : "";
         const fallback = supplierLogoHtml(product) || sourceLogoSvg();
         return `<figure class="product-preview">
           <button class="source-thumb" onclick="openSource(${product.id})" title="Open source product" aria-label="Open source product preview">
           <span class="thumb-fallback">${fallback}</span>
-          ${src ? `<img src="${esc(src)}" alt="" onerror="this.classList.add('is-missing')" />` : ""}
+          ${src ? `<img src="${esc(src)}" alt="" ${remoteFallback ? `data-fallback-src="${esc(remoteFallback)}"` : ""} onerror="const fallback=this.dataset.fallbackSrc;if(fallback){delete this.dataset.fallbackSrc;this.src=fallback}else{this.classList.add('is-missing')}" />` : ""}
           </button>
           <figcaption class="preview-label">Preview</figcaption>
         </figure>`;
@@ -4700,7 +4722,7 @@
       }
 
       function listingsFilterMenuHtml(counts) {
-        return `<div class="filter-shell">
+        return `<div class="filter-shell ${listingFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleListingFilterMenu()" aria-expanded="${listingFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
           <span class="filter-summary">${esc(listingsFilterSummary())}</span>
           <div class="filter-menu ${listingFilterMenuOpen ? "open" : ""}">
@@ -4865,7 +4887,7 @@
         const summary = listingCardSummary(item);
         const updated = job?.updated_at ? new Date(job.updated_at).toLocaleDateString() : "-";
         return `<div class="product-card shipping-${shipping.key}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
-          <div class="product-row">
+          <div class="product-row listing-product-row">
             ${listingLeadingControlsHtml(item, summary)}
             <div class="product-main">
               ${product ? sourceThumbHtml(product) : listingSourceThumbHtml(item)}
@@ -5313,7 +5335,7 @@
       async function openListingJobAssistants(jobs, assistantWindows = []) {
         for (const [index, job] of jobs.entries()) {
           const result = await request(`/listing-jobs/${job.id}/run`, { method: "POST" });
-          if (result.package && result.job?.assistant_url) {
+          if (result.job?.assistant_url) {
             if (assistantWindows[index]) assistantWindows[index].location.href = result.job.assistant_url;
             else window.open(result.job.assistant_url, "_blank", "noopener,noreferrer");
           } else {
@@ -5596,10 +5618,10 @@
       function listingStartCompactHtml(item) {
         const job = item.listing_job;
         if (job?.status === "tombstoned") return `<span class="status stage-source">Missing</span>`;
-        if (listingIsLive(item)) return `<span class="status stage-ready">Live</span><div class="draft">${esc(formatSchedule(listingStartDate(item) || item.updated_at || new Date()))}</div>`;
+        if (listingIsLive(item)) return `<span class="status stage-ready">Live</span><div class="draft">${esc(formatDateTime(listingStartDate(item) || item.updated_at || new Date()))}</div>`;
         if (listingIsScheduled(item)) {
           const schedule = job?.listing_schedule_at || item.listing_schedule_at;
-          return `<span class="status stage-images">Scheduled</span>${schedule ? `<div class="draft">${esc(formatSchedule(schedule))}</div>` : ""}`;
+          return `<span class="status stage-images">Scheduled</span>${schedule ? `<div class="draft">${esc(formatDateTime(schedule))}</div>` : ""}`;
         }
         return "Now";
       }
@@ -7335,7 +7357,7 @@
           completed: "Completed",
           blocked: "Needs review",
         }[orderStatusFilter] || "All orders";
-        return `<div class="filter-shell">
+        return `<div class="filter-shell ${orderFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleOrderFilterMenu()" aria-expanded="${orderFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
           <span class="filter-summary">${esc(summary)}</span>
           <div class="filter-menu ${orderFilterMenuOpen ? "open" : ""}">

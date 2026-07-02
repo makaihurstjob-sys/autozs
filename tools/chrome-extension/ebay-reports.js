@@ -18,13 +18,18 @@
   if (!context || !/^\/sh\/reports\/downloads/i.test(location.pathname || "")) return;
   window.__autozsEbayReportRunnerStarted = true;
 
+  const REPORT_CREATE_TIMEOUT_MS = 3 * 60 * 1000;
+  const REPORT_COMPLETE_TIMEOUT_MS = 3 * 60 * 1000;
+  const IMPORT_COMPLETE_TIMEOUT_MS = 60 * 1000;
+
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const visible = (element) => Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
+  const logoUrl = chrome.runtime?.getURL ? chrome.runtime.getURL("assets/autozs-logo.png") : "";
 
   async function waitFor(find, timeout = 30000, interval = 300) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
-      const value = find();
+      const value = await find();
       if (value) return value;
       await new Promise((resolve) => setTimeout(resolve, interval));
     }
@@ -47,16 +52,134 @@
     return response.json();
   }
 
-  function setRunnerStatus(text, state = "working") {
-    let panel = document.getElementById("autozs-report-runner-status");
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "autozs-report-runner-status";
-      panel.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:2147483647;max-width:360px;padding:12px 14px;border:1px solid #355047;border-radius:8px;background:#101412;color:#edf4ef;font:600 13px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 16px 38px rgba(0,0,0,.38)";
-      document.documentElement.appendChild(panel);
+  async function prepareReportDownloadContext() {
+    const response = await chrome.runtime.sendMessage({ type: "autozs-ebay-report-sync-context", ...context });
+    if (!response?.ok) throw new Error(response?.error || "AutoZS could not prepare the report download.");
+  }
+
+  async function closeReportRunnerTab() {
+    try {
+      await chrome.runtime.sendMessage({ type: "autozs-close-report-runner-tab", runId: context.runId });
+    } catch {
+      window.close();
     }
-    panel.dataset.state = state;
-    panel.textContent = text;
+  }
+
+  async function waitForImportCompletionAndClose() {
+    setRunnerStatus("AutoZS is importing and reconciling the report...", "working", 90);
+    const run = await waitFor(async () => {
+      const latest = await readRun();
+      if (latest.status === "completed") return latest;
+      if (["failed", "needs_review"].includes(latest.status)) {
+        throw new Error(latest.message || `AutoZS sync ${latest.status}.`);
+      }
+      return null;
+    }, IMPORT_COMPLETE_TIMEOUT_MS, 1000);
+    setRunnerStatus(run.message || "AutoZS import complete. Closing this report tab.", "complete", 100);
+    setTimeout(closeReportRunnerTab, 800);
+    return run;
+  }
+
+  function ensureRunnerProgressOverlay() {
+    let host = document.getElementById("autozs-report-progress-host");
+    if (host?.shadowRoot) return host;
+    host = document.createElement("div");
+    host.id = "autozs-report-progress-host";
+    host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:auto";
+    const shadow = host.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      <style>
+        :host {
+          --az-bg: #111a15;
+          --az-line: #2b352f;
+          --az-ink: #edf4ef;
+          --az-muted: #9aa89f;
+          --az-accent: #4bb7a6;
+        }
+        .progress-overlay {
+          align-items: center;
+          background: rgba(10, 14, 12, .74);
+          backdrop-filter: blur(3px);
+          color: var(--az-ink);
+          display: flex;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          inset: 0;
+          justify-content: center;
+          pointer-events: auto;
+          position: absolute;
+        }
+        .progress-card {
+          align-items: center;
+          background: var(--az-bg);
+          border: 1px solid var(--az-line);
+          border-radius: 8px;
+          box-shadow: 0 24px 70px rgba(0,0,0,.38);
+          display: grid;
+          gap: 14px;
+          justify-items: center;
+          padding: 28px;
+          width: min(390px, calc(100vw - 48px));
+        }
+        .logo {
+          height: 52px;
+          object-fit: contain;
+          width: 52px;
+        }
+        .progress-title {
+          font-size: 28px;
+          font-weight: 850;
+          letter-spacing: 0;
+          line-height: 1.1;
+          text-align: center;
+        }
+        .progress-label {
+          color: var(--az-muted);
+          font-size: 13px;
+          min-height: 18px;
+          text-align: center;
+        }
+        .progress-track {
+          background: #263631;
+          border-radius: 999px;
+          height: 10px;
+          overflow: hidden;
+          width: 100%;
+        }
+        .progress-fill {
+          background: var(--az-accent);
+          height: 100%;
+          transition: width .22s ease;
+          width: 0%;
+        }
+        .progress-percent {
+          color: var(--az-ink);
+          font-size: 13px;
+          font-weight: 800;
+        }
+        :host([data-state="error"]) .progress-fill { background: #ff6b6b; }
+      </style>
+      <div class="progress-overlay" role="status" aria-live="polite">
+        <div class="progress-card">
+          ${logoUrl ? `<img class="logo" src="${logoUrl}" alt="AutoZS" draggable="false" />` : ""}
+          <div class="progress-title">Auto-ZS in progress</div>
+          <div id="progress-label" class="progress-label">Preparing eBay sync...</div>
+          <div class="progress-track" aria-hidden="true"><div id="progress-fill" class="progress-fill"></div></div>
+          <div id="progress-percent" class="progress-percent">0%</div>
+        </div>
+      </div>
+    `;
+    document.documentElement.appendChild(host);
+    return host;
+  }
+
+  function setRunnerStatus(text, state = "working", percent = 0) {
+    const host = ensureRunnerProgressOverlay();
+    const shadow = host.shadowRoot;
+    const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    host.dataset.state = state;
+    shadow.querySelector("#progress-label").textContent = text;
+    shadow.querySelector("#progress-fill").style.width = `${safePercent}%`;
+    shadow.querySelector("#progress-percent").textContent = `${safePercent}%`;
   }
 
   function exactButton(text, root = document) {
@@ -101,13 +224,20 @@
       const button = exactButton("Download", dialog);
       return button && !button.disabled ? button : null;
     });
+    setRunnerStatus("Starting the eBay Active Listings report download...", "working", 45);
+    await prepareReportDownloadContext();
     submit.click();
     await patchRun({
       phase: "waiting_for_report",
-      message: "eBay is generating a fresh Active Listings report.",
+      message: "eBay is generating and downloading a fresh Active Listings report.",
       increment_attempts: true,
     });
-    const createdRow = await waitFor(() => reportRows().find((row) => row.reference && !existingReferences.has(row.reference)), 45000, 500);
+    const createdRow = await waitFor(() => {
+      const row = reportRows().find((item) => item.reference && !existingReferences.has(item.reference));
+      if (row) return row;
+      return readRun().then((latest) => latest.report_filename || latest.status === "completed" ? { downloaded: true } : null);
+    }, REPORT_CREATE_TIMEOUT_MS, 2000);
+    if (createdRow.downloaded) return null;
     await patchRun({
       phase: "waiting_for_report",
       message: `Waiting for eBay report ${createdRow.reference} to finish.`,
@@ -121,40 +251,49 @@
       const row = reportRows().find((item) => item.reference === reference);
       if (!row || !/completed/i.test(row.status)) return null;
       return row;
-    }, 180000, 1500);
+    }, REPORT_COMPLETE_TIMEOUT_MS, 2000);
     const button = exactButton("Download", completed.row);
     if (!button) throw new Error(`eBay report ${reference} completed without a Download button.`);
-    const response = await chrome.runtime.sendMessage({ type: "autozs-ebay-report-sync-context", ...context });
-    if (!response?.ok) throw new Error(response?.error || "AutoZS could not prepare the report download.");
+    setRunnerStatus(`Downloading completed eBay report ${reference}.`, "working", 75);
+    await prepareReportDownloadContext();
     await patchRun({
       phase: "downloading_report",
       message: `Downloading completed eBay report ${reference}.`,
       report_reference: reference,
     });
     button.click();
-    setRunnerStatus("Report downloaded. AutoZS is importing it now.", "complete");
+    setRunnerStatus("Report downloaded. AutoZS is importing it now.", "working", 85);
   }
 
   try {
-    setRunnerStatus("AutoZS is preparing the Active Listings report...");
+    setRunnerStatus("AutoZS is preparing the Active Listings report...", "working", 5);
     const account = typeof reportEbayBrowserAccount === "function" ? await reportEbayBrowserAccount(context.accountKey) : null;
     if (account && account.can_list === false) throw new Error(account.message || "The signed-in eBay account does not match this store.");
     let run = await readRun();
     if (["completed", "failed", "needs_review"].includes(run.status)) {
-      setRunnerStatus(run.message || `Sync ${run.status}.`, run.status);
+      setRunnerStatus(run.message || `Sync ${run.status}.`, run.status, run.status === "completed" ? 100 : 95);
+      if (run.status === "completed") setTimeout(closeReportRunnerTab, 800);
       return;
     }
+    setRunnerStatus("Seller Hub Reports opened and the account matched.", "working", 15);
     await patchRun({ phase: "report_page_ready", message: "Seller Hub Reports opened and the account matched." });
     let reference = run.report_reference;
     if (!reference) {
+      setRunnerStatus("Requesting a fresh Active Listings report from eBay.", "working", 30);
       await patchRun({ phase: "requesting_report", message: "Requesting a fresh Active Listings report from eBay." });
       reference = await requestActiveListingsReport();
     }
-    setRunnerStatus(`Waiting for eBay report ${reference}...`);
+    if (!reference) {
+      setRunnerStatus("Report downloaded. AutoZS is importing it now.", "working", 85);
+      await waitForImportCompletionAndClose();
+      return;
+    }
+    setRunnerStatus(`Waiting for eBay report ${reference}...`, "working", 60);
     await downloadCompletedReport(reference);
+    await waitForImportCompletionAndClose();
   } catch (error) {
     const message = error?.message || String(error);
-    setRunnerStatus(`AutoZS report sync needs attention: ${message}`, "error");
+    setRunnerStatus(`AutoZS report sync needs attention: ${message}`, "error", 100);
     patchRun({ status: "needs_review", message: `Automatic Active Listings report failed: ${message}` }).catch(() => {});
   }
 })();
