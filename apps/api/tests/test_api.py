@@ -905,7 +905,11 @@ def test_recalculate_drafts_applies_current_settings_to_existing_products(client
 def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(client) -> None:
     imported = client.post(
         "/products/import",
-        json={"urls": "https://example.com/p/Scheduled-Reprice/333", "source_price_override": 10.0},
+        json={
+            "urls": "https://example.com/p/Scheduled-Reprice/333",
+            "source_price_override": 10.0,
+            "source_shipping_override": 0.0,
+        },
     ).json()
     product_id = imported["products"][0]["id"]
     original_price = imported["products"][0]["listing_drafts"][0]["calculated_price"]
@@ -936,10 +940,15 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     assert first["revision_jobs_updated"] == 0
     jobs = client.get("/ebay/revision-jobs").json()
     assert len(jobs) == 1
-    assert jobs[0]["status"] == "queued"
+    assert jobs[0]["status"] == "needs_review"
+    assert jobs[0]["approval_required"] is True
+    assert jobs[0]["guard_passed"] is True
+    assert jobs[0]["source_price"] == 10.0
+    assert jobs[0]["projected_profit"] is not None
     assert jobs[0]["old_price"] == original_price
     assert jobs[0]["target_price"] == 16.67
     assert "autozs_workflow=revise_price" in jobs[0]["assistant_url"]
+    assert "autozs_autosubmit=1" in jobs[0]["assistant_url"]
 
     client.patch("/settings/pricing", json={"default_margin_percent": 0.60})
     second = client.post("/products/recalculate-drafts").json()
@@ -948,6 +957,8 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     jobs = client.get("/ebay/revision-jobs").json()
     assert len(jobs) == 1
     assert jobs[0]["target_price"] == 17.78
+    assert jobs[0]["status"] == "needs_review"
+    assert jobs[0]["approved_at"] is None
 
     client.post("/ebay/accounts", json={"label": "Main Store", "account_id": "main-store", "environment": "production"})
     client.post(
@@ -960,8 +971,14 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
             "account_key": "main-store",
         },
     )
+    not_approved = client.post("/ebay/revision-jobs/next")
+    assert not_approved.status_code == 404
+    approved = client.post(f"/ebay/revision-jobs/{jobs[0]['id']}/approve").json()
+    assert approved["status"] == "queued"
+    assert approved["approved_at"] is not None
     running = client.post("/ebay/revision-jobs/next").json()
     assert running["status"] == "running"
+    assert running["lease_expires_at"] is not None
     assert client.post("/ebay/revision-jobs/next").json()["id"] == running["id"]
     completed = client.patch(
         f"/ebay/revision-jobs/{running['id']}",
@@ -969,6 +986,79 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     ).json()
     assert completed["status"] == "completed"
     assert client.get("/ebay/listings").json()[0]["price"] == 17.78
+
+
+def test_ebay_revision_profit_guard_blocks_approval(client) -> None:
+    imported = client.post(
+        "/products/import",
+        json={
+            "urls": "https://example.com/p/Unsafe-Reprice/334",
+            "source_price_override": 20.0,
+            "source_shipping_override": 0.0,
+        },
+    ).json()
+    product_id = imported["products"][0]["id"]
+    client.post(
+        f"/products/{product_id}/mark-listed",
+        json={
+            "listing_id": "800000000334",
+            "account_id": "main-store",
+            "environment": "production",
+            "quantity": 1,
+            "status": "live",
+        },
+    )
+    client.patch(
+        "/settings/pricing",
+        json={
+            "default_margin_percent": 0.0,
+            "default_pricing_strategy": "margin",
+            "default_min_profit_guard_enabled": False,
+            "default_round_to_99": False,
+        },
+    )
+    client.post("/products/recalculate-drafts")
+    client.patch(
+        "/settings/pricing",
+        json={"default_min_profit_guard_enabled": True, "default_min_profit": 8.0},
+    )
+    result = client.post(
+        "/ebay/revision-jobs/enqueue",
+        json={"product_ids": [product_id]},
+    ).json()
+    assert result["queued"] + result["updated"] == 1
+    job = client.get("/ebay/revision-jobs").json()[0]
+    assert job["status"] == "needs_review"
+    assert job["guard_passed"] is False
+    assert job["projected_profit"] < 8.0
+    blocked = client.post(f"/ebay/revision-jobs/{job['id']}/approve")
+    assert blocked.status_code == 409
+    assert "below" in blocked.json()["detail"]
+
+
+def test_ebay_revision_blocks_unknown_supplier_shipping(client) -> None:
+    imported = client.post(
+        "/products/import",
+        json={"urls": "https://example.com/p/Unknown-Shipping/335", "source_price_override": 20.0},
+    ).json()
+    product_id = imported["products"][0]["id"]
+    client.post(
+        f"/products/{product_id}/mark-listed",
+        json={
+            "listing_id": "800000000335",
+            "account_id": "main-store",
+            "environment": "production",
+            "quantity": 1,
+            "status": "scheduled",
+        },
+    )
+    client.patch("/settings/pricing", json={"default_margin_percent": 0.50})
+    client.post("/products/recalculate-drafts")
+    job = client.get("/ebay/revision-jobs").json()[0]
+    assert job["status"] == "needs_review"
+    assert job["guard_passed"] is False
+    assert "shipping is unknown" in job["guard_reason"]
+    assert client.post(f"/ebay/revision-jobs/{job['id']}/approve").status_code == 409
 
 
 def test_competitor_pricing_strategy_and_rounding(client) -> None:

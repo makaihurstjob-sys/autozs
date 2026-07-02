@@ -2544,7 +2544,7 @@
           listingJobs: nextState.listingJobs?.map((job) => [job.id, job.status, job.scheduled_for, job.listing_schedule_at, job.updated_at, job.message]).slice(0, 100),
           ebayListings: nextState.ebayListings?.map((listing) => [listing.id, listing.product_id, listing.listing_id, listing.status, listing.started_at, listing.renews_at, listing.views, listing.updated_at]).slice(0, 100),
           ebaySyncRuns: nextState.ebaySyncRuns?.map((run) => [run.id, run.account_key, run.status, run.phase, run.updated_at, run.message]).slice(0, 25),
-          ebayRevisionJobs: nextState.ebayRevisionJobs?.map((job) => [job.id, job.status, job.old_price, job.target_price, job.updated_at]).slice(0, 100),
+          ebayRevisionJobs: nextState.ebayRevisionJobs?.map((job) => [job.id, job.status, job.old_price, job.target_price, job.projected_profit, job.guard_passed, job.approved_at, job.updated_at]).slice(0, 100),
           sourceRefreshJobs: nextState.sourceRefreshJobs?.map((job) => [job.id, job.batch_key, job.status, job.captured_price, job.updated_at]).slice(0, 100),
           orders: nextState.orders?.length || 0,
           orderUpdated: latest(nextState.orders || []),
@@ -3263,14 +3263,18 @@
           title,
           subtitle: `${job.listing_id || "No listing id"} · ${job.ebay_account_key || "manual"}`,
           meta: [
-            `${money(job.old_price)} → ${money(job.target_price)}`,
+            `eBay ${money(job.old_price)} → ${money(job.target_price)}`,
+            job.source_price !== null && job.source_price !== undefined ? `Source ${money(job.source_price)}${Number(job.source_shipping || 0) > 0 ? ` + ${money(job.source_shipping)} shipping` : ""}` : "Source price missing",
+            job.projected_profit !== null && job.projected_profit !== undefined ? `Projected profit ${money(job.projected_profit)}` : "Profit unavailable",
+            job.minimum_profit !== null && job.minimum_profit !== undefined ? `Minimum ${money(job.minimum_profit)}` : "",
             job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "",
             `${job.attempts || 0} attempt(s)`,
           ].filter(Boolean),
-          message: job.message || "",
+          message: job.message || job.guard_reason || "",
           updatedAt: job.updated_at || job.created_at,
           productId: job.product_id,
           viewStatus: "listed",
+          revisionJob: job,
         };
       }
 
@@ -3332,8 +3336,35 @@
           ${entry.message ? `<div class="job-activity-message">${esc(entry.message)}</div>` : ""}
           <div class="job-activity-actions">
             ${entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
+            ${["needs_review", "paused", "failed"].includes(entry.revisionJob?.status) && entry.revisionJob?.guard_passed ? `<button onclick="approveEbayRevision(${Number(entry.id)})">${entry.revisionJob.status === "failed" ? "Retry" : entry.revisionJob.status === "paused" ? "Resume" : "Approve"}</button>` : ""}
+            ${entry.revisionJob && ["needs_review", "queued", "paused", "failed"].includes(entry.revisionJob.status) ? `<button class="danger" onclick="cancelEbayRevision(${Number(entry.id)})">Cancel</button>` : ""}
           </div>
         </div>`;
+      }
+
+      async function approveEbayRevision(jobId) {
+        try {
+          const job = await request(`/ebay/revision-jobs/${Number(jobId)}/approve`, { method: "POST" });
+          await refreshAll({ silent: true });
+          renderJobActivityDrawer();
+          message(`Approved eBay price update ${job.id}: ${money(job.old_price)} to ${money(job.target_price)}. Windows Chrome will run it.`);
+        } catch (error) {
+          message(error.message);
+        }
+      }
+
+      async function cancelEbayRevision(jobId) {
+        try {
+          await request(`/ebay/revision-jobs/${Number(jobId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "cancelled", message: "Cancelled from Job Activity." })
+          });
+          await refreshAll({ silent: true });
+          renderJobActivityDrawer();
+          message(`Cancelled eBay price update ${jobId}.`);
+        } catch (error) {
+          message(error.message);
+        }
       }
 
       function viewJobActivityProduct(productId, status = "all") {

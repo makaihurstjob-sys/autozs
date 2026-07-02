@@ -137,6 +137,7 @@ from app.services.ebay import complete_ebay_oauth, ebay_connection_status, publi
 from app.services.ebay_accounts import create_ebay_account, delete_ebay_account, list_ebay_accounts, update_ebay_account
 from app.services.ebay_browser_account import read_ebay_browser_account_status, update_ebay_browser_account_status
 from app.services.ebay_revisions import (
+    approve_ebay_revision_job,
     enqueue_ebay_price_revisions,
     list_ebay_revision_jobs,
     serialize_ebay_revision_job,
@@ -1168,6 +1169,18 @@ def run_next_ebay_revision_job(db: Session = Depends(get_db)) -> EbayRevisionJob
     return EbayRevisionJobRead(**serialize_ebay_revision_job(db, job))
 
 
+@router.post("/ebay/revision-jobs/{job_id}/approve", response_model=EbayRevisionJobRead)
+def approve_ebay_revision(job_id: int, db: Session = Depends(get_db)) -> EbayRevisionJobRead:
+    job = db.get(EbayRevisionJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="eBay revision job not found")
+    try:
+        approved = approve_ebay_revision_job(db, job)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EbayRevisionJobRead(**serialize_ebay_revision_job(db, approved))
+
+
 @router.patch("/ebay/revision-jobs/{job_id}", response_model=EbayRevisionJobRead)
 def patch_ebay_revision_job(
     job_id: int,
@@ -1177,7 +1190,10 @@ def patch_ebay_revision_job(
     job = db.get(EbayRevisionJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="eBay revision job not found")
-    updated = update_ebay_revision_job(db, job, status=payload.status, message=payload.message)
+    try:
+        updated = update_ebay_revision_job(db, job, status=payload.status, message=payload.message)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return EbayRevisionJobRead(**serialize_ebay_revision_job(db, updated))
 
 

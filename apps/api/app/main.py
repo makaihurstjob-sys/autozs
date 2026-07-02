@@ -38,6 +38,17 @@ def _ensure_lightweight_columns() -> None:
             "views": "INTEGER DEFAULT 0 NOT NULL",
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME"},
+        "ebay_revision_jobs": {
+            "source_price": "FLOAT",
+            "source_shipping": "FLOAT DEFAULT 0 NOT NULL",
+            "projected_profit": "FLOAT",
+            "minimum_profit": "FLOAT",
+            "guard_passed": "BOOLEAN DEFAULT 0 NOT NULL",
+            "guard_reason": "TEXT",
+            "approval_required": "BOOLEAN DEFAULT 1 NOT NULL",
+            "approved_at": "DATETIME",
+            "lease_expires_at": "DATETIME",
+        },
         "products": {"listing_schedule_at": "DATETIME"},
         "supplier_products": {"subscription_discount_percent": "FLOAT"},
         "ebay_sync_runs": {
@@ -64,6 +75,15 @@ def _ensure_lightweight_columns() -> None:
             for name, definition in columns.items():
                 if name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+        if "ebay_revision_jobs" in existing_tables:
+            connection.execute(
+                text(
+                    "UPDATE ebay_revision_jobs "
+                    "SET status = 'needs_review', lease_expires_at = NULL, "
+                    "message = 'Safety review required after AutoZS upgrade.' "
+                    "WHERE status IN ('queued', 'running', 'paused') AND approved_at IS NULL"
+                )
+            )
 
 
 def _write_worker_heartbeat(message: str = "AutoZS API heartbeat.") -> None:

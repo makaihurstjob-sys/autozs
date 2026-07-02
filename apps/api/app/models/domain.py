@@ -62,6 +62,7 @@ class ListingJobAction(str, Enum):
 
 
 class EbayRevisionJobStatus(str, Enum):
+    needs_review = "needs_review"
     queued = "queued"
     running = "running"
     completed = "completed"
@@ -306,9 +307,18 @@ class EbayRevisionJob(Base, TimestampMixin):
     ebay_listing_id: Mapped[int] = mapped_column(ForeignKey("ebay_listings.id"), index=True)
     ebay_account_key: Mapped[str] = mapped_column(String(128), default="manual", index=True)
     action: Mapped[str] = mapped_column(String(32), default="revise_price", index=True)
-    status: Mapped[str] = mapped_column(String(32), default=EbayRevisionJobStatus.queued.value, index=True)
+    status: Mapped[str] = mapped_column(String(32), default=EbayRevisionJobStatus.needs_review.value, index=True)
     old_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     target_price: Mapped[float] = mapped_column(Float)
+    source_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_shipping: Mapped[float] = mapped_column(Float, default=0.0)
+    projected_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    minimum_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    guard_passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    guard_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approval_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

@@ -434,7 +434,7 @@ class EbayRevisionEnqueueResult(BaseModel):
 
 
 class EbayRevisionJobUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(queued|running|completed|failed|paused|cancelled)$")
+    status: str | None = Field(default=None, pattern="^(needs_review|queued|running|completed|failed|paused|cancelled)$")
     message: str | None = None
 
 
@@ -449,6 +449,15 @@ class EbayRevisionJobRead(BaseModel):
     status: str
     old_price: float | None = None
     target_price: float
+    source_price: float | None = None
+    source_shipping: float = 0.0
+    projected_profit: float | None = None
+    minimum_profit: float | None = None
+    guard_passed: bool = False
+    guard_reason: str | None = None
+    approval_required: bool = True
+    approved_at: datetime | None = None
+    lease_expires_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     attempts: int
@@ -843,6 +852,8 @@ class SettingsRead(BaseModel):
     source_refresh_auto_enabled: bool = True
     source_refresh_auto_batch_size: float = 5.0
     source_refresh_auto_poll_minutes: float = 5.0
+    ebay_revision_auto_approve_enabled: bool = False
+    ebay_revision_max_change_percent: float = 25.0
     default_pricing_strategy: str = "margin"
     default_round_to_99: bool = False
     default_rounding_cents: float = 0.99
@@ -908,6 +919,8 @@ class PricingSettingsUpdate(BaseModel):
     source_refresh_auto_enabled: bool | None = None
     source_refresh_auto_batch_size: float | None = Field(default=None, ge=1, le=150)
     source_refresh_auto_poll_minutes: float | None = Field(default=None, ge=1, le=120)
+    ebay_revision_auto_approve_enabled: bool | None = None
+    ebay_revision_max_change_percent: float | None = Field(default=None, ge=0.1, le=100)
     default_pricing_strategy: str | None = Field(default=None, pattern="^(margin|competitor|safe_competitor)$")
     default_round_to_99: bool | None = None
     default_rounding_cents: float | None = Field(default=None, ge=0, lt=1)

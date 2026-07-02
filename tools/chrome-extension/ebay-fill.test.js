@@ -433,6 +433,17 @@ async function runAssistantTest() {
   if (detectedFinalButton !== finalScheduleButton) {
     throw new Error("Expected the exact final Schedule your listing button to be detected.");
   }
+  const revisionSubmitButton = new FakeButton("Submit revisions");
+  context.document.querySelectorAll = (selector) => {
+    if (selector === "button, [role='button'], input[type='submit']") return [revisionSubmitButton];
+    if (selector === '[role="alert"], [aria-live="assertive"], .error, [class*="error" i]') return [];
+    return [];
+  };
+  context.document.body.innerText = "Review your listing changes";
+  const revisionSubmitResult = await vm.runInContext("submitPriceRevision(27.99)", context);
+  if (!revisionSubmitResult.ok || !revisionSubmitButton.clicked) {
+    throw new Error(`Expected approved price revision to submit, got ${JSON.stringify(revisionSubmitResult)}`);
+  }
   context.document.body.innerText = "Security check: verify your identity";
   const blockingIssue = vm.runInContext("detectEbaySubmissionIssue()", context);
   if (!blockingIssue) {

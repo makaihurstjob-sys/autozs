@@ -1,5 +1,5 @@
 (async () => {
-  const ASSISTANT_BUILD = "2026-07-02-condition-schedule-focus-fix";
+  const ASSISTANT_BUILD = "2026-07-02-guarded-revision-runner";
   const existingAssistant = document.getElementById("autozs-ebay-fill-assistant");
   const existingBuild = existingAssistant?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayFillAssistant && existingBuild === ASSISTANT_BUILD) return;
@@ -417,6 +417,14 @@
     } catch (error) {
       setFillProgress(false);
       setStatus(`Error: ${error.message}`);
+      const workflow = readAutoWorkflowState() || {};
+      if (workflow.mode === "revise_price" && workflow.revisionJobId) {
+        await updateEbayRevisionJob(workflow.revisionJobId, {
+          status: "failed",
+          message: `Revision automation failed: ${error.message || String(error)}`,
+        }).catch(() => {});
+        writeAutoWorkflowState({ phase: "failed", status: "failed" });
+      }
     }
   };
 
@@ -821,25 +829,92 @@ async function runPriceRevisionWorkflow(pkg) {
     && await fillEbayFieldByHints(["price", "buy it now", "fixed price"], targetPrice.toFixed(2));
   await finishListingEditorView();
   const revisionJobId = readAutoWorkflowState()?.revisionJobId;
+  const workflow = readAutoWorkflowState() || {};
+  if (!filled) {
+    if (revisionJobId) {
+      await updateEbayRevisionJob(revisionJobId, {
+        status: "failed",
+        message: `Could not find the eBay price field for $${targetPrice.toFixed(2)}.`,
+      });
+    }
+    writeAutoWorkflowState({ phase: "failed", status: "failed" });
+    return {
+      lines: [`Review price $${targetPrice.toFixed(2)}`],
+      message: "Could not update the eBay price field.",
+      terminal: true,
+    };
+  }
   if (revisionJobId) {
     await updateEbayRevisionJob(revisionJobId, {
-      status: filled ? "running" : "failed",
-      message: filled
-        ? `Filled the eBay price field with $${targetPrice.toFixed(2)}. Review and submit the revision.`
-        : `Could not find the eBay price field for $${targetPrice.toFixed(2)}.`,
+      status: "running",
+      message: `Filled the eBay price field with $${targetPrice.toFixed(2)}.`,
     });
   }
+  if (workflow.autoSubmit === true) {
+    const submitResult = await submitPriceRevision(targetPrice);
+    if (!submitResult.ok) {
+      if (revisionJobId) {
+        await updateEbayRevisionJob(revisionJobId, { status: "failed", message: submitResult.message });
+      }
+      writeAutoWorkflowState({ phase: "failed", status: "failed" });
+      return { lines: [`OK price $${targetPrice.toFixed(2)}`, "Review revision submission"], message: submitResult.message, terminal: true };
+    }
+    if (revisionJobId) {
+      await updateEbayRevisionJob(revisionJobId, {
+        status: "running",
+        message: `Submitted eBay price revision to $${targetPrice.toFixed(2)}; waiting for confirmation.`,
+      });
+    }
+    writeAutoWorkflowState({ phase: "submitting", status: "running" });
+    const confirmed = await waitForCondition(() => Boolean(detectEbayRevisionConfirmation()), 20000, 500);
+    if (confirmed) await reportEbayRevisionConfirmation();
+    return {
+      lines: [`OK price $${targetPrice.toFixed(2)}`, "OK submitted revision"],
+      message: confirmed ? "eBay confirmed the price revision." : "Submitted the revision; waiting for eBay confirmation.",
+      terminal: confirmed,
+    };
+  }
   writeAutoWorkflowState({
-    phase: filled ? "ready_to_submit" : "failed",
-    status: filled ? "running" : "failed",
+    phase: "ready_to_submit",
+    status: "running",
   });
   return {
-    lines: [filled ? `OK price $${targetPrice.toFixed(2)}` : `Review price $${targetPrice.toFixed(2)}`],
-    message: filled
-      ? `Price updated to $${targetPrice.toFixed(2)} in the editor. Review, then submit the revision on eBay.`
-      : "Could not update the eBay price field.",
+    lines: [`OK price $${targetPrice.toFixed(2)}`],
+    message: `Price updated to $${targetPrice.toFixed(2)} in the editor. Review, then submit the revision on eBay.`,
     terminal: true,
   };
+}
+
+function findPriceRevisionSubmitButton() {
+  const candidates = [...document.querySelectorAll("button, [role='button'], input[type='submit']")]
+    .filter(isVisible)
+    .filter((element) => !element.disabled && element.getAttribute("aria-disabled") !== "true")
+    .map((element) => ({
+      element,
+      label: String(element.value || element.innerText || element.textContent || element.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim(),
+    }));
+  const patterns = [
+    /^submit revisions?$/i,
+    /^revise (?:it|listing)$/i,
+    /^update listing$/i,
+    /^save changes$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = candidates.find((candidate) => pattern.test(candidate.label));
+    if (match) return match.element;
+  }
+  return null;
+}
+
+async function submitPriceRevision(targetPrice) {
+  const issue = detectEbaySubmissionIssue();
+  if (issue) return { ok: false, message: issue };
+  const button = findPriceRevisionSubmitButton();
+  if (!button) return { ok: false, message: "Could not find eBay's final revision button. AutoZS did not submit." };
+  const clicked = await clickEbayElement(button);
+  return clicked
+    ? { ok: true, message: `Submitted eBay price revision to $${Number(targetPrice).toFixed(2)}.` }
+    : { ok: false, message: "Could not click eBay's final revision button." };
 }
 
 async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {

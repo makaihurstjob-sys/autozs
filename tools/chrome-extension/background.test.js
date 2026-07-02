@@ -7,9 +7,24 @@ async function runNativePcInputTest() {
   let listener = null;
   const commands = [];
   const closedTabs = [];
+  const createdTabs = [];
+  const storage = {};
+  const fetched = [];
   const context = {
     console,
     URL,
+    fetch: async (url, options = {}) => {
+      fetched.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 91,
+          status: "running",
+          assistant_url: "https://www.ebay.com/sl/list?autozs_workflow=revise_price&autozs_revision_job_id=91",
+        }),
+      };
+    },
     chrome: {
       debugger: {
         attach: async () => {},
@@ -25,7 +40,19 @@ async function runNativePcInputTest() {
           },
         },
       },
+      storage: {
+        local: {
+          get: async (key) => ({ [key]: storage[key] }),
+          set: async (values) => Object.assign(storage, values),
+        },
+      },
       tabs: {
+        query: async () => [],
+        create: async (options) => {
+          createdTabs.push(options);
+          return { id: 23, ...options };
+        },
+        update: async () => {},
         remove: (tabId, callback) => {
           closedTabs.push(tabId);
           callback?.();
@@ -104,6 +131,16 @@ async function runNativePcInputTest() {
   if (macInsert?.params?.text !== "Mac text") {
     throw new Error(`Expected inserted text after Command+A, got ${JSON.stringify(macInsert)}`);
   }
+
+  await context.openNextEbayRevisionJob();
+  if (!fetched.some((request) => request.url.endsWith("/ebay/revision-jobs/next") && request.options.method === "POST")) {
+    throw new Error(`Expected revision queue claim, got ${JSON.stringify(fetched)}`);
+  }
+  if (createdTabs.length !== 1 || !context.isEbayRevisionRunnerUrl(createdTabs[0].url, 91)) {
+    throw new Error(`Expected one background eBay revision tab, got ${JSON.stringify(createdTabs)}`);
+  }
+  await context.openNextEbayRevisionJob();
+  if (createdTabs.length !== 1) throw new Error("Expected revision poll throttle to prevent duplicate tabs.");
 }
 
 runNativePcInputTest()

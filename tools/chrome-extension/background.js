@@ -3,6 +3,8 @@ const REPORT_SYNC_CONTEXT_KEY = "autozsEbayReportSyncContext";
 const REPORT_DOWNLOADS_KEY = "autozsEbayReportDownloads";
 const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
 const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
+const EBAY_REVISION_ALARM = "autozs-ebay-revision-poll";
+const EBAY_REVISION_LAST_OPENED_KEY = "autozsEbayRevisionLastOpened";
 const LOCAL_API = "http://127.0.0.1:8000";
 
 function reportDownloadFilename(context, originalFilename) {
@@ -79,6 +81,54 @@ async function openNextSourceRefreshJob() {
   if (!job?.runner_url) return;
   await chrome.storage.local.set({ [SOURCE_REFRESH_LAST_OPENED_KEY]: Date.now() });
   await openSourceRefreshRunnerUrl(job.runner_url);
+}
+
+async function claimNextEbayRevisionJob() {
+  const response = await fetch(`${LOCAL_API}/ebay/revision-jobs/next`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`AutoZS API returned ${response.status}`);
+  return response.json();
+}
+
+function isEbayRevisionRunnerUrl(url, jobId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const revisionId = parsed.searchParams.get("autozs_revision_job_id");
+    return (parsed.hostname === "www.ebay.com" || parsed.hostname === "sell.ebay.com")
+      && parsed.searchParams.get("autozs_workflow") === "revise_price"
+      && Boolean(revisionId)
+      && (jobId === null || revisionId === String(jobId));
+  } catch {
+    return false;
+  }
+}
+
+async function openEbayRevisionRunner(job) {
+  if (!job?.assistant_url || job.status !== "running") return false;
+  const tabs = await chrome.tabs.query({ url: ["https://www.ebay.com/*", "https://sell.ebay.com/*"] });
+  const exact = tabs.find((tab) => isEbayRevisionRunnerUrl(tab.url, job.id));
+  if (exact?.id) return true;
+  const reusable = tabs.find((tab) => isEbayRevisionRunnerUrl(tab.url));
+  if (reusable?.id) {
+    await chrome.tabs.update(reusable.id, { url: job.assistant_url, active: false });
+    return true;
+  }
+  await chrome.tabs.create({ url: job.assistant_url, active: false });
+  return true;
+}
+
+async function openNextEbayRevisionJob() {
+  const stored = await chrome.storage.local.get(EBAY_REVISION_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[EBAY_REVISION_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 30 * 1000) return;
+  const job = await claimNextEbayRevisionJob();
+  if (!job || job.status !== "running") return;
+  const opened = await openEbayRevisionRunner(job);
+  if (opened) await chrome.storage.local.set({ [EBAY_REVISION_LAST_OPENED_KEY]: Date.now() });
 }
 
 function isEbayTab(tab) {
@@ -237,13 +287,16 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
 if (chrome.alarms) {
   chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   });
   chrome.runtime.onStartup.addListener(() => {
     chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm?.name !== SOURCE_REFRESH_ALARM) return;
-    openNextSourceRefreshJob().catch(() => {});
+    if (alarm?.name === SOURCE_REFRESH_ALARM) openNextSourceRefreshJob().catch(() => {});
+    if (alarm?.name === EBAY_REVISION_ALARM) openNextEbayRevisionJob().catch(() => {});
   });
   chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+  chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
 }
