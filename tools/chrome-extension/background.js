@@ -1,6 +1,8 @@
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const REPORT_SYNC_CONTEXT_KEY = "autozsEbayReportSyncContext";
 const REPORT_DOWNLOADS_KEY = "autozsEbayReportDownloads";
+const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
+const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
 const LOCAL_API = "http://127.0.0.1:8000";
 
 function reportDownloadFilename(context, originalFilename) {
@@ -24,6 +26,59 @@ async function patchSyncRun(runId, payload) {
   });
   if (!response.ok) throw new Error(`AutoZS sync update returned ${response.status}`);
   return response.json();
+}
+
+async function localApiJson(path, options = {}) {
+  const response = await fetch(`${LOCAL_API}${path}`, {
+    cache: "no-store",
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  if (!response.ok) throw new Error(`AutoZS API returned ${response.status}`);
+  return response.json();
+}
+
+async function hasRunningSourceRefreshJob() {
+  try {
+    const payload = await localApiJson("/source-refresh/jobs/running");
+    return Boolean(payload?.running);
+  } catch {
+    return false;
+  }
+}
+
+async function claimNextSourceRefreshJob() {
+  return localApiJson("/source-refresh/jobs/next", { method: "POST" });
+}
+
+function isSourceRefreshRunnerUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return parsed.hostname === "www.homedepot.com" && parsed.searchParams.has("autozs_refresh_job");
+  } catch {
+    return false;
+  }
+}
+
+async function openSourceRefreshRunnerUrl(url) {
+  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  const runnerTab = tabs.find((tab) => isSourceRefreshRunnerUrl(tab.url));
+  if (runnerTab?.id) {
+    await chrome.tabs.update(runnerTab.id, { url, active: false });
+    return;
+  }
+  await chrome.tabs.create({ url, active: false });
+}
+
+async function openNextSourceRefreshJob() {
+  if (await hasRunningSourceRefreshJob()) return;
+  const stored = await chrome.storage.local.get(SOURCE_REFRESH_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[SOURCE_REFRESH_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 30 * 1000) return;
+  const job = await claimNextSourceRefreshJob();
+  if (!job?.runner_url) return;
+  await chrome.storage.local.set({ [SOURCE_REFRESH_LAST_OPENED_KEY]: Date.now() });
+  await openSourceRefreshRunnerUrl(job.runner_url);
 }
 
 function isEbayTab(tab) {
@@ -177,4 +232,18 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
       await chrome.storage.local.set({ [REPORT_DOWNLOADS_KEY]: downloads, [REPORT_SYNC_CONTEXT_KEY]: null });
     })().catch(() => {});
   });
+}
+
+if (chrome.alarms) {
+  chrome.runtime.onInstalled.addListener(() => {
+    chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+  });
+  chrome.runtime.onStartup.addListener(() => {
+    chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+  });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name !== SOURCE_REFRESH_ALARM) return;
+    openNextSourceRefreshJob().catch(() => {});
+  });
+  chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
 }

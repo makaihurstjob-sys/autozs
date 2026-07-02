@@ -302,7 +302,9 @@ def test_listing_job_uses_selected_ebay_schedule_time(client) -> None:
 
 def test_publish_listing_job_enables_guarded_auto_submit(client) -> None:
     product = create_ready_product(client, "Automatic Scheduled Product")
-    schedule_at = "2026-07-01T08:00:00"
+    schedule_at = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7)).replace(
+        microsecond=0
+    ).isoformat()
 
     job = client.post(
         "/listing-jobs",
@@ -315,7 +317,7 @@ def test_publish_listing_job_enables_guarded_auto_submit(client) -> None:
 
     assert job["action"] == "publish"
     assert "autozs_autosubmit=1" in job["assistant_url"]
-    assert "autozs_listing_schedule_at=2026-07-01T08%3A00%3A00" in job["assistant_url"]
+    assert f"autozs_listing_schedule_at={schedule_at.replace(':', '%3A')}" in job["assistant_url"]
 
     completed = client.patch(
         f"/listing-jobs/{job['id']}",

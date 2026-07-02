@@ -158,12 +158,15 @@ from app.services.products import approve_candidate
 from app.services.research import create_mock_candidates
 from app.services.settings import read_pricing_settings, write_pricing_settings
 from app.services.source_refresh_jobs import (
+    claim_next_source_refresh_job_any_batch,
     claim_next_source_refresh_job,
+    create_automatic_source_refresh_batch,
     complete_source_refresh_job,
     create_source_refresh_batch,
     fail_source_refresh_job,
     list_source_refresh_jobs,
     serialize_source_refresh_job,
+    source_refresh_has_running_job,
 )
 from app.services.workers import heartbeat_current_worker, list_workers, read_current_worker
 
@@ -503,6 +506,32 @@ def create_refresh_batch(payload: SourceRefreshBatchCreate, db: Session = Depend
 def claim_next_refresh_job(batch_key: str, db: Session = Depends(get_db)) -> SourceRefreshJobRead | None:
     job = claim_next_source_refresh_job(db, batch_key)
     return SourceRefreshJobRead(**serialize_source_refresh_job(db, job)) if job else None
+
+
+@router.post("/source-refresh/jobs/next", response_model=SourceRefreshJobRead | None)
+def claim_next_refresh_job_any_batch(db: Session = Depends(get_db)) -> SourceRefreshJobRead | None:
+    job = claim_next_source_refresh_job_any_batch(db)
+    return SourceRefreshJobRead(**serialize_source_refresh_job(db, job)) if job else None
+
+
+@router.get("/source-refresh/jobs/running", response_model=dict[str, bool])
+def read_source_refresh_running(db: Session = Depends(get_db)) -> dict[str, bool]:
+    return {"running": source_refresh_has_running_job(db)}
+
+
+@router.post("/source-refresh/auto-queue", response_model=SourceRefreshBatchRead)
+def queue_automatic_source_refresh(db: Session = Depends(get_db)) -> SourceRefreshBatchRead:
+    batch_key, due_available, jobs, _message = create_automatic_source_refresh_batch(db)
+    serialized = [SourceRefreshJobRead(**serialize_source_refresh_job(db, job)) for job in jobs]
+    return SourceRefreshBatchRead(
+        batch_key=batch_key or "",
+        requested=len(jobs),
+        queued=len(jobs),
+        due_available=due_available,
+        interval_hours=float(read_pricing_settings(db).get("source_refresh_interval_hours", 6)),
+        runner_url=None,
+        jobs=serialized,
+    )
 
 
 @router.get("/source-refresh/jobs", response_model=list[SourceRefreshJobRead])

@@ -839,6 +839,9 @@ class SettingsRead(BaseModel):
     default_margin_percent: float = 0.20
     source_refresh_interval_days: float = 7.0
     source_refresh_interval_hours: float = 6.0
+    source_refresh_auto_enabled: bool = True
+    source_refresh_auto_batch_size: float = 5.0
+    source_refresh_auto_poll_minutes: float = 5.0
     default_pricing_strategy: str = "margin"
     default_round_to_99: bool = False
     default_rounding_cents: float = 0.99
@@ -901,6 +904,9 @@ class PricingSettingsUpdate(BaseModel):
     default_margin_percent: float | None = Field(default=None, ge=0, lt=10)
     source_refresh_interval_days: float | None = Field(default=None, ge=1, le=90)
     source_refresh_interval_hours: float | None = Field(default=None, ge=0.25, le=168)
+    source_refresh_auto_enabled: bool | None = None
+    source_refresh_auto_batch_size: float | None = Field(default=None, ge=1, le=150)
+    source_refresh_auto_poll_minutes: float | None = Field(default=None, ge=1, le=120)
     default_pricing_strategy: str | None = Field(default=None, pattern="^(margin|competitor|safe_competitor)$")
     default_round_to_99: bool | None = None
     default_rounding_cents: float | None = Field(default=None, ge=0, lt=1)

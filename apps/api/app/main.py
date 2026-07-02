@@ -13,6 +13,8 @@ from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.database import Base, SessionLocal, engine
 from app.services.ebay_report_files import watch_ebay_report_inbox
+from app.services.settings import read_pricing_settings
+from app.services.source_refresh_jobs import create_automatic_source_refresh_batch
 from app.services.workers import heartbeat_current_worker
 from app import models  # noqa: F401
 
@@ -69,11 +71,32 @@ def _write_worker_heartbeat(message: str = "AutoZS API heartbeat.") -> None:
         heartbeat_current_worker(db, message=message)
 
 
+def _run_source_refresh_auto_queue() -> tuple[float, str]:
+    with SessionLocal() as db:
+        pricing_settings = read_pricing_settings(db)
+        poll_minutes = max(1.0, float(pricing_settings.get("source_refresh_auto_poll_minutes", 5) or 5))
+        if not bool(pricing_settings.get("source_refresh_auto_enabled", True)):
+            return poll_minutes, "Automatic source refresh is disabled."
+        _batch_key, _due_available, jobs, message = create_automatic_source_refresh_batch(db)
+        if jobs:
+            heartbeat_current_worker(db, message=message)
+        return poll_minutes, message
+
+
 async def _worker_heartbeat_loop() -> None:
     while True:
         with contextlib.suppress(Exception):
             await asyncio.to_thread(_write_worker_heartbeat)
         await asyncio.sleep(60)
+
+
+async def _source_refresh_auto_queue_loop() -> None:
+    await asyncio.sleep(20)
+    while True:
+        poll_minutes = 5.0
+        with contextlib.suppress(Exception):
+            poll_minutes, _message = await asyncio.to_thread(_run_source_refresh_auto_queue)
+        await asyncio.sleep(max(60, int(poll_minutes * 60)))
 
 
 @asynccontextmanager
@@ -82,9 +105,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     _ensure_lightweight_columns()
     watcher = None
     heartbeat = None
+    source_refresh_scheduler = None
     with contextlib.suppress(Exception):
         await asyncio.to_thread(_write_worker_heartbeat, "AutoZS API started.")
     heartbeat = asyncio.create_task(_worker_heartbeat_loop())
+    if ":memory:" not in settings.database_url:
+        source_refresh_scheduler = asyncio.create_task(_source_refresh_auto_queue_loop())
     if settings.ebay_report_watch_enabled and ":memory:" not in settings.database_url:
         watcher = asyncio.create_task(watch_ebay_report_inbox())
     try:
@@ -98,6 +124,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
+        if source_refresh_scheduler is not None:
+            source_refresh_scheduler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await source_refresh_scheduler
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

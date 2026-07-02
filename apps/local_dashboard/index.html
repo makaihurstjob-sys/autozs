@@ -3445,6 +3445,9 @@
                   <label class="settings-field"><span>Return risk rate</span><input id="setting-default_return_risk_rate" type="number" min="0" step="0.01" value="${esc(state.settings.default_return_risk_rate)}" /></label>
                   <label class="settings-field"><span>Risk buffer</span><input id="setting-default_risk_buffer" type="number" min="0" step="0.01" value="${esc(state.settings.default_risk_buffer)}" /></label>
                   <label class="settings-field"><span>Source refresh interval (hours)</span><input id="setting-source_refresh_interval_hours" type="number" min="0.25" step="0.25" value="${esc(state.settings.source_refresh_interval_hours ?? 6)}" /></label>
+                  <label class="settings-toggle"><input id="setting-source_refresh_auto_enabled" type="checkbox" ${(state.settings.source_refresh_auto_enabled ?? true) ? "checked" : ""} /> Auto-refresh scheduled and live source prices</label>
+                  <label class="settings-field"><span>Auto-refresh batch size</span><input id="setting-source_refresh_auto_batch_size" type="number" min="1" max="150" step="1" value="${esc(state.settings.source_refresh_auto_batch_size ?? 5)}" /></label>
+                  <label class="settings-field"><span>Auto-refresh check cadence (minutes)</span><input id="setting-source_refresh_auto_poll_minutes" type="number" min="1" max="120" step="1" value="${esc(state.settings.source_refresh_auto_poll_minutes ?? 5)}" /></label>
                   <label class="settings-toggle"><input id="setting-default_gift_card_discount_enabled" type="checkbox" ${state.settings.default_gift_card_discount_enabled ? "checked" : ""} /> Apply gift card discount to product cost</label>
                   <label class="settings-field"><span>Gift card discount (%)</span><input id="setting-default_gift_card_discount_percent" type="number" min="0" max="100" step="0.01" value="${esc(state.settings.default_gift_card_discount_percent ?? 6)}" /></label>
                   <label class="settings-toggle"><input id="setting-default_round_to_99" type="checkbox" ${state.settings.default_round_to_99 ? "checked" : ""} /> Round selling prices</label>
@@ -8196,7 +8199,7 @@
       }
 
       async function saveSettings() {
-        const keys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
+        const keys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
         const textKeys = [];
         const payload = {};
         for (const key of keys) {
@@ -8212,6 +8215,7 @@
         if (writesEnabled) payload.ebay_enable_writes = writesEnabled.checked;
         payload.default_pricing_strategy = document.getElementById("setting-default_pricing_strategy").value;
         payload.default_min_profit_guard_enabled = document.getElementById("setting-default_min_profit_guard_enabled").checked;
+        payload.source_refresh_auto_enabled = document.getElementById("setting-source_refresh_auto_enabled").checked;
         payload.default_gift_card_discount_enabled = document.getElementById("setting-default_gift_card_discount_enabled").checked;
         payload.default_round_to_99 = document.getElementById("setting-default_round_to_99").checked;
         payload.default_rounding_cents = normalizedRoundingCents(document.getElementById("setting-default_rounding_cents")?.value);
@@ -8250,7 +8254,7 @@
             shipping_method: document.getElementById("supplier-shipping-method").value || "Cheapest with tracking",
           },
         };
-        const numberKeys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
+        const numberKeys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
         const pricing = {};
         numberKeys.forEach((key) => {
           const value = Number(document.getElementById(`setting-${key}`).value);
@@ -8258,6 +8262,7 @@
         });
         pricing.default_pricing_strategy = document.getElementById("setting-default_pricing_strategy").value;
         pricing.default_min_profit_guard_enabled = document.getElementById("setting-default_min_profit_guard_enabled").checked;
+        pricing.source_refresh_auto_enabled = document.getElementById("setting-source_refresh_auto_enabled").checked;
         pricing.default_gift_card_discount_enabled = document.getElementById("setting-default_gift_card_discount_enabled").checked;
         pricing.default_round_to_99 = document.getElementById("setting-default_round_to_99").checked;
         pricing.default_rounding_cents = normalizedRoundingCents(document.getElementById("setting-default_rounding_cents")?.value);
