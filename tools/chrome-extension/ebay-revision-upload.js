@@ -9,14 +9,17 @@
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const visible = (element) => Boolean(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
 
-  async function waitFor(find, timeout = 30000, interval = 300) {
+  const UPLOAD_CONTROL_TIMEOUT_MS = 2 * 60 * 1000;
+  const RESULT_TIMEOUT_MS = 5 * 60 * 1000;
+
+  async function waitFor(find, timeout = 30000, interval = 300, step = "revision-upload step") {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const value = await find();
       if (value) return value;
       await new Promise((resolve) => setTimeout(resolve, interval));
     }
-    throw new Error("eBay did not finish the expected revision-upload step in time.");
+    throw new Error(`eBay did not finish the expected ${step} in time.`);
   }
 
   async function readBatch() {
@@ -50,6 +53,39 @@
     );
   }
 
+  function actionControls(root = document) {
+    return Array.from(root.querySelectorAll('button, a, [role="button"], label')).filter((element) => visible(element));
+  }
+
+  function controlText(element) {
+    return clean([
+      element.innerText || element.textContent,
+      element.getAttribute("aria-label"),
+      element.getAttribute("title"),
+    ].filter(Boolean).join(" "));
+  }
+
+  function buttonDisabled(element) {
+    return Boolean(element.disabled || element.getAttribute("aria-disabled") === "true");
+  }
+
+  function uploadEntryControl() {
+    const exact = exactButton("Upload template");
+    if (exact) return exact;
+    return actionControls().find((element) => {
+      const text = controlText(element).toLowerCase();
+      return /upload/.test(text) && !/download|result|history/.test(text) && !buttonDisabled(element);
+    });
+  }
+
+  function uploadSubmitControl(root = document) {
+    return actionControls(root).find((element) => {
+      const text = controlText(element).toLowerCase();
+      return !buttonDisabled(element)
+        && (/^upload$/.test(text) || /upload (file|template|report|csv)/.test(text) || /submit|continue/.test(text));
+    });
+  }
+
   function uploadRows() {
     return Array.from(document.querySelectorAll('[role="row"]')).map((row) => {
       const cells = Array.from(row.querySelectorAll('[role="gridcell"]')).map((cell) => clean(cell.innerText || cell.textContent));
@@ -63,7 +99,7 @@
   }
 
   function attachBatchFile(batch) {
-    const input = document.querySelector('#file-input[type="file"], input[type="file"][accept*=".csv"]');
+    const input = document.querySelector('#file-input[type="file"], input[type="file"][accept*=".csv"], input[type="file"]');
     if (!input) return false;
     if (input.files?.length === 1 && input.files[0]?.name === batch.filename) return true;
     try {
@@ -81,15 +117,33 @@
 
   async function submitPreparedBatch(batch) {
     if (!document.querySelector('#file-input[type="file"]')) {
-      const open = await waitFor(() => exactButton("Upload template"));
+      const open = await waitFor(
+        uploadEntryControl,
+        UPLOAD_CONTROL_TIMEOUT_MS,
+        500,
+        "Seller Hub upload-template control"
+      );
+      await patchBatch({ status: "prepared", message: `Opening eBay upload controls for ${batch.filename}.` });
       open.click();
     }
-    await waitFor(() => attachBatchFile(batch));
-    const dialog = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"]')).find(visible));
-    const upload = await waitFor(() => {
-      const button = exactButton("Upload", dialog);
-      return button && !button.disabled ? button : null;
-    });
+    await waitFor(
+      () => attachBatchFile(batch),
+      UPLOAD_CONTROL_TIMEOUT_MS,
+      500,
+      "eBay CSV file input"
+    );
+    const dialog = await waitFor(
+      () => Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).find(visible) || document,
+      UPLOAD_CONTROL_TIMEOUT_MS,
+      500,
+      "eBay upload dialog"
+    );
+    const upload = await waitFor(
+      () => uploadSubmitControl(dialog),
+      UPLOAD_CONTROL_TIMEOUT_MS,
+      500,
+      "eBay upload submit button"
+    );
     await prepareResultDownload();
     await patchBatch({ status: "uploading", message: `Uploading ${batch.filename} to eBay Seller Hub.` });
     upload.click();
@@ -102,7 +156,7 @@
       if (!match) return null;
       if (/failed|error|rejected/i.test(match.text)) throw new Error(match.text);
       return /completed|complete|processed|success/i.test(match.text) ? match : null;
-    }, 5 * 60 * 1000, 2000);
+    }, RESULT_TIMEOUT_MS, 2000, "eBay upload result row");
     const download = Array.from(row.row.querySelectorAll("button,a")).find((element) => {
       const text = clean(element.innerText || element.textContent);
       const label = clean(element.getAttribute("aria-label"));
