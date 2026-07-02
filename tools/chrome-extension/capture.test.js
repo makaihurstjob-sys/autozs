@@ -3,7 +3,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync(`${__dirname}/capture.js`, "utf8");
 
-function runCapture(visibleText) {
+function runCapture(visibleText, { offerPrice = "17.97", productName = "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count" } = {}) {
   const context = {
     console,
     URL,
@@ -26,8 +26,8 @@ function runCapture(visibleText) {
             {
               textContent: JSON.stringify({
                 "@type": "Product",
-                name: "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count",
-                offers: { price: "17.97" },
+                name: productName,
+                offers: offerPrice === null ? undefined : { price: offerPrice },
                 image: ["https://images.thdstatic.com/productImages/hdx-trash-bags-front.jpg"],
               }),
             },
@@ -109,6 +109,32 @@ Free Delivery
 
 if (splitSpecialBuy.source_price !== 99) {
   throw new Error(`Expected split Home Depot Special Buy price 99, got ${splitSpecialBuy.source_price}`);
+}
+
+const emailSignupDiscount = runCapture(
+  `
+Prime-Line 30 in. Window Block and Tackle Sash Balance FA 2940
+$15.29
+Free Delivery
+Get $5 off when you sign up for emails.
+`,
+  { offerPrice: null, productName: "Prime-Line 30 in. Window Block and Tackle Sash Balance FA 2940" }
+);
+
+if (emailSignupDiscount.source_price !== 15.29) {
+  throw new Error(`Expected product price 15.29 instead of email discount, got ${emailSignupDiscount.source_price}`);
+}
+
+const structuredPriceWithoutDollar = runCapture(
+  `
+Prime-Line 30 in. Window Block and Tackle Sash Balance FA 2940
+Get $5 off when you sign up for emails.
+`,
+  { offerPrice: "15.29", productName: "Prime-Line 30 in. Window Block and Tackle Sash Balance FA 2940" }
+);
+
+if (structuredPriceWithoutDollar.source_price !== 15.29) {
+  throw new Error(`Expected structured offer price 15.29, got ${structuredPriceWithoutDollar.source_price}`);
 }
 
 function runHomeDepotModelImageFilterTest() {

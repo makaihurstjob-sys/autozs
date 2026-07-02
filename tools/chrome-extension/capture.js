@@ -387,6 +387,14 @@ function captureSourceProductFromPage() {
     const parsed = Number(explicit[1].replace(/,/g, "") + "." + (explicit[2] || "00"));
     return parsed > 0 && parsed < 10000 ? parsed : null;
   };
+  const parseStructuredPrice = (value) => {
+    const explicit = parsePrice(value);
+    if (explicit !== null) return explicit;
+    const text = clean(value).replace(/,/g, "");
+    if (!/^\d{1,4}(?:\.\d{1,2})?$/.test(text)) return null;
+    const parsed = Number(text);
+    return parsed > 0 && parsed < 10000 ? parsed : null;
+  };
 
   const detectSubscriptionDiscount = () => {
     const match =
@@ -454,31 +462,44 @@ function captureSourceProductFromPage() {
     return null;
   };
 
-  const prices = [];
-  const addPrice = (value, context = "") => {
+  const structuredPrices = [];
+  const visiblePrices = [];
+  const domPrices = [];
+  const nonProductPricePattern =
+    /sign\s*up|email|newsletter|credit\s*card|open(?:ing)?\s+(?:a|new)\s+card|financing|protection\s*plan|monthly|per\s+month|\/mo\b|after\s+\$?\d+\s+off|coupon|rebate/i;
+  const addDomPrice = (value, context = "") => {
     const text = clean(`${context} ${value}`);
-    if (subscriptionPattern.test(text)) return;
+    if (subscriptionPattern.test(text) || nonProductPricePattern.test(text)) return;
     const parsed = parsePrice(value);
-    if (parsed) prices.push(parsed);
+    if (parsed !== null) domPrices.push(parsed);
   };
-  addPrice(offer.price);
+  const structuredOfferPrice = parseStructuredPrice(
+    offer.price ?? offer.lowPrice ?? offer.highPrice ?? offer.priceSpecification?.price
+  );
+  if (structuredOfferPrice !== null) structuredPrices.push(structuredOfferPrice);
   document
     .querySelectorAll('meta[property="product:price:amount"], meta[name="product:price:amount"], meta[itemprop="price"], [itemprop="price"]')
-    .forEach((el) => addPrice(el.content || el.getAttribute("content") || el.getAttribute("value") || el.textContent, el.closest("[class], section, div")?.innerText || ""));
+    .forEach((el) => {
+      const parsed = parseStructuredPrice(el.content || el.getAttribute("content") || el.getAttribute("value") || el.textContent);
+      if (parsed !== null) structuredPrices.push(parsed);
+    });
   document
     .querySelectorAll('[data-testid*="price" i], [class*="price" i], [id*="price" i], [aria-label*="price" i], [data-automation-id*="price" i]')
     .forEach((el) => {
       const context = [el.closest("section")?.innerText, el.parentElement?.innerText, el.innerText].filter(Boolean).join(" ");
-      addPrice(el.innerText || el.textContent || el.getAttribute("aria-label") || el.getAttribute("content") || el.getAttribute("value"), context);
-      Object.values(el.dataset || {}).forEach((value) => addPrice(value, context));
+      addDomPrice(el.innerText || el.textContent || el.getAttribute("aria-label") || el.getAttribute("content") || el.getAttribute("value"), context);
+      Object.values(el.dataset || {}).forEach((value) => addDomPrice(value, context));
     });
   visibleText
     .split("\n")
     .map(clean)
-    .filter((line) => line && !subscriptionPattern.test(line))
+    .filter((line) => line && !subscriptionPattern.test(line) && !nonProductPricePattern.test(line))
     .flatMap((line) => line.match(/\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}/g) || [])
     .slice(0, 40)
-    .forEach(addPrice);
+    .forEach((value) => {
+      const parsed = parsePrice(value);
+      if (parsed !== null) visiblePrices.push(parsed);
+    });
 
   const detectShipping = () => {
     const lines = visibleText.split("\n").map(clean).filter(Boolean);
@@ -580,7 +601,8 @@ function captureSourceProductFromPage() {
   return {
     source_url: cleanSourceUrl(),
     title: clean(productJson.name || document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title),
-    source_price: detectHomeDepotSalePrice() || prices[0] || null,
+    source_price:
+      detectHomeDepotSalePrice() || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null,
     detected_shipping: detectShipping(),
     subscription_discount_percent: detectSubscriptionDiscount(),
     description: bullets.length ? bullets.join("\n") : clean(productJson.description || metaDescription),
