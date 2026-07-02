@@ -483,6 +483,23 @@
       .product-card.shipping-unknown {
         border-left-color: #d99a28;
       }
+      .product-card.is-focused {
+        border-color: #2f80ed;
+        box-shadow: 0 0 0 2px color-mix(in srgb, #2f80ed 56%, transparent), 0 18px 42px rgba(47, 128, 237, .18);
+      }
+      .product-card.is-focused::after {
+        background: #2f80ed;
+        border-radius: 999px;
+        color: white;
+        content: "Selected from Job Activity";
+        font-size: 11px;
+        font-weight: 800;
+        padding: 5px 8px;
+        position: absolute;
+        right: 12px;
+        top: 10px;
+        z-index: 5;
+      }
       .product-card.watch-only {
         min-height: 170px;
         overflow: hidden;
@@ -2424,6 +2441,7 @@
       let productWorkflowFilter = "all";
       let productFilterMenuOpen = false;
       let selectedProductIds = new Set();
+      let focusedProductId = null;
       let productDetailsOpenState = new Map();
       let productDrawerTabState = new Map();
       let listingDetailsOpenState = new Map();
@@ -3428,12 +3446,34 @@
 
       function viewJobActivityProduct(productId, status = "all") {
         active = "eBay Listings";
-        listingStatusFilter = status || "all";
+        let nextStatus = status || "all";
+        const numericProductId = productId ? Number(productId) : null;
+        if (numericProductId && nextStatus !== "all") {
+          listingStatusFilter = nextStatus;
+          const visibleInRequestedFilter = filterListingItems(ebayListingItems()).some((item) => Number(item.product_id) === numericProductId);
+          if (!visibleInRequestedFilter) nextStatus = "all";
+        }
+        listingStatusFilter = nextStatus;
         jobActivityOpen = false;
         selectedProductIds.clear();
-        if (productId) selectedProductIds.add(Number(productId));
+        focusedProductId = numericProductId;
+        if (focusedProductId) {
+          selectedProductIds.add(focusedProductId);
+          listingDetailsOpenState.set(focusedProductId, true);
+          productDrawerTabState.set(focusedProductId, "ebay");
+        }
         render();
-        message(`Showing ${status === "all" ? "listings" : status} jobs for product ${productId}.`);
+        scrollFocusedProductIntoView();
+        message(`Showing the selected Job Activity product${status === "all" ? "" : ` in ${status}`} listings.`);
+      }
+
+      function scrollFocusedProductIntoView() {
+        if (!focusedProductId) return;
+        window.setTimeout(() => {
+          const card = document.querySelector(`[data-product-card-id="${focusedProductId}"]`);
+          if (!card) return;
+          card.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, 60);
       }
 
       function researchHtml() {
@@ -5452,7 +5492,8 @@
         const summary = listingCardSummary(item);
         const updated = job?.updated_at ? new Date(job.updated_at).toLocaleDateString() : "-";
         const watchOnly = listingJobIsWatchOnly(item);
-        return `<div class="product-card shipping-${shipping.key} ${watchOnly ? "watch-only" : ""}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
+        const isFocused = Number(item.product_id) === Number(focusedProductId);
+        return `<div class="product-card shipping-${shipping.key} ${watchOnly ? "watch-only" : ""} ${isFocused ? "is-focused" : ""}" data-product-card-id="${escAttr(item.product_id)}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
           <div class="${watchOnly ? "product-card-watch-content" : ""}">
             <div class="product-row listing-product-row">
               ${listingLeadingControlsHtml(item, summary)}
