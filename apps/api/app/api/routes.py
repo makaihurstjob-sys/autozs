@@ -54,6 +54,8 @@ from app.schemas.domain import (
     EbayRevisionEnqueueResult,
     EbayRevisionJobRead,
     EbayRevisionJobUpdate,
+    EbayRevisionSheetPrepareRequest,
+    EbayRevisionSheetPrepareResult,
     EbayExportResult,
     EbayApiPayload,
     EbayConnectionStatus,
@@ -144,6 +146,7 @@ from app.services.ebay_revisions import (
     start_next_ebay_revision_job,
     update_ebay_revision_job,
 )
+from app.services.ebay_revision_csv import build_ebay_price_revision_csv
 from app.services.ebay_sync import (
     import_listing_report_rows,
     list_ebay_sync_runs,
@@ -1159,6 +1162,29 @@ def enqueue_ebay_revision_jobs(
 ) -> EbayRevisionEnqueueResult:
     queued, updated = enqueue_ebay_price_revisions(db, product_ids=payload.product_ids)
     return EbayRevisionEnqueueResult(queued=queued, updated=updated)
+
+
+@router.post("/ebay/revision-sheets/prepare", response_model=EbayRevisionSheetPrepareResult)
+def prepare_ebay_revision_sheet(
+    payload: EbayRevisionSheetPrepareRequest,
+    db: Session = Depends(get_db),
+) -> EbayRevisionSheetPrepareResult:
+    try:
+        csv_content, job_ids = build_ebay_price_revision_csv(
+            db,
+            account_key=payload.account_key,
+            job_ids=payload.job_ids,
+            template_csv=payload.template_csv,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    safe_account = "".join(character if character.isalnum() or character in "-_" else "-" for character in payload.account_key)
+    return EbayRevisionSheetPrepareResult(
+        account_key=payload.account_key,
+        job_ids=job_ids,
+        filename=f"autozs-price-revisions-{safe_account or 'account'}.csv",
+        csv_content=csv_content,
+    )
 
 
 @router.post("/ebay/revision-jobs/next", response_model=EbayRevisionJobRead)

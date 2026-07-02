@@ -976,6 +976,17 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     approved = client.post(f"/ebay/revision-jobs/{jobs[0]['id']}/approve").json()
     assert approved["status"] == "queued"
     assert approved["approved_at"] is not None
+    sheet = client.post(
+        "/ebay/revision-sheets/prepare",
+        json={
+            "account_key": "main-store",
+            "job_ids": [approved["id"]],
+            "template_csv": "#INFO,Version=0.0.2\nAction,Item number,Start price,Quantity\n",
+        },
+    ).json()
+    assert sheet["job_ids"] == [approved["id"]]
+    assert "Revise,800000000333,17.78," in sheet["csv_content"]
+    client.patch("/settings/pricing", json={"ebay_revision_execution_mode": "browser_fallback"})
     running = client.post("/ebay/revision-jobs/next").json()
     assert running["status"] == "running"
     assert running["lease_expires_at"] is not None

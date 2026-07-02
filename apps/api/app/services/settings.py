@@ -22,6 +22,7 @@ DEFAULT_SETTING_KEYS = {
     "source_refresh_auto_poll_minutes",
     "ebay_revision_auto_approve_enabled",
     "ebay_revision_max_change_percent",
+    "ebay_revision_execution_mode",
     "default_pricing_strategy",
     "default_round_to_99",
     "default_rounding_cents",
@@ -115,6 +116,7 @@ def read_pricing_settings(db: Session) -> dict[str, float | bool | str]:
         "source_refresh_auto_poll_minutes": 5.0,
         "ebay_revision_auto_approve_enabled": False,
         "ebay_revision_max_change_percent": 25.0,
+        "ebay_revision_execution_mode": "bulk_upload",
         "default_pricing_strategy": "margin",
         "default_round_to_99": False,
         "default_rounding_cents": 0.99,
@@ -221,6 +223,8 @@ def write_pricing_settings(db: Session, updates: dict[str, float | bool | str | 
         if key == "ui_theme" and value not in {"system", "light", "dark"}:
             continue
         if key == "ebay_environment" and value not in {"sandbox", "production"}:
+            continue
+        if key == "ebay_revision_execution_mode" and value not in {"bulk_upload", "browser_fallback"}:
             continue
         if key == "ebay_enable_writes" and isinstance(value, str):
             value = value.lower() == "true"

@@ -169,6 +169,8 @@ def list_ebay_revision_jobs(
 
 
 def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
+    if read_pricing_settings(db).get("ebay_revision_execution_mode") != "browser_fallback":
+        return None
     release_expired_ebay_revision_jobs(db)
     running = db.scalar(
         select(EbayRevisionJob)

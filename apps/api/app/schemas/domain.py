@@ -433,6 +433,19 @@ class EbayRevisionEnqueueResult(BaseModel):
     updated: int
 
 
+class EbayRevisionSheetPrepareRequest(BaseModel):
+    account_key: str
+    job_ids: list[int]
+    template_csv: str
+
+
+class EbayRevisionSheetPrepareResult(BaseModel):
+    account_key: str
+    job_ids: list[int]
+    filename: str
+    csv_content: str
+
+
 class EbayRevisionJobUpdate(BaseModel):
     status: str | None = Field(default=None, pattern="^(needs_review|queued|running|completed|failed|paused|cancelled)$")
     message: str | None = None
@@ -854,6 +867,7 @@ class SettingsRead(BaseModel):
     source_refresh_auto_poll_minutes: float = 5.0
     ebay_revision_auto_approve_enabled: bool = False
     ebay_revision_max_change_percent: float = 25.0
+    ebay_revision_execution_mode: str = "bulk_upload"
     default_pricing_strategy: str = "margin"
     default_round_to_99: bool = False
     default_rounding_cents: float = 0.99
@@ -921,6 +935,7 @@ class PricingSettingsUpdate(BaseModel):
     source_refresh_auto_poll_minutes: float | None = Field(default=None, ge=1, le=120)
     ebay_revision_auto_approve_enabled: bool | None = None
     ebay_revision_max_change_percent: float | None = Field(default=None, ge=0.1, le=100)
+    ebay_revision_execution_mode: str | None = Field(default=None, pattern="^(bulk_upload|browser_fallback)$")
     default_pricing_strategy: str | None = Field(default=None, pattern="^(margin|competitor|safe_competitor)$")
     default_round_to_99: bool | None = None
     default_rounding_cents: float | None = Field(default=None, ge=0, lt=1)
