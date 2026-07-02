@@ -1047,6 +1047,40 @@ def test_ebay_revision_profit_guard_blocks_approval(client) -> None:
     assert "below" in blocked.json()["detail"]
 
 
+def test_controlled_revision_canary_requires_guard_and_manual_approval(client) -> None:
+    imported = client.post(
+        "/products/import",
+        json={
+            "urls": "https://example.com/p/Revision-Canary/336",
+            "source_price_override": 20.0,
+            "source_shipping_override": 0.0,
+        },
+    ).json()
+    product_id = imported["products"][0]["id"]
+    listing = client.post(
+        f"/products/{product_id}/mark-listed",
+        json={
+            "listing_id": "800000000336",
+            "account_id": "main-store",
+            "environment": "production",
+            "quantity": 1,
+            "status": "scheduled",
+        },
+    ).json()
+    target = round(listing["price"] + 1.0, 2)
+
+    job = client.post(
+        "/ebay/revision-jobs/canary",
+        json={"product_id": product_id, "target_price": target, "reason": "fixture canary"},
+    ).json()
+
+    assert job["status"] == "needs_review"
+    assert job["approval_required"] is True
+    assert job["guard_passed"] is True
+    assert job["target_price"] == target
+    assert "fixture canary" in job["guard_reason"]
+
+
 def test_ebay_revision_blocks_unknown_supplier_shipping(client) -> None:
     imported = client.post(
         "/products/import",

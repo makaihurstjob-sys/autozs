@@ -168,6 +168,60 @@ def list_ebay_revision_jobs(
     return list(db.scalars(stmt).all())
 
 
+def create_ebay_revision_canary(
+    db: Session,
+    *,
+    product_id: int,
+    target_price: float,
+    reason: str,
+) -> EbayRevisionJob:
+    listing = db.scalar(
+        select(EbayListing)
+        .where(EbayListing.product_id == product_id, EbayListing.status.in_(REVISION_LISTING_STATUSES))
+        .order_by(EbayListing.created_at.desc(), EbayListing.id.desc())
+    )
+    if listing is None:
+        raise ValueError("Canary revisions require a scheduled or live eBay listing")
+    target = round(float(target_price), 2)
+    current = round(float(listing.price), 2) if listing.price is not None else None
+    if current == target:
+        raise ValueError("The canary target already matches the stored eBay price")
+    evidence = _revision_evidence(db, product_id, target, listing.price)
+    if not evidence["guard_passed"]:
+        raise ValueError(evidence["guard_reason"])
+    for existing in db.scalars(
+        select(EbayRevisionJob).where(
+            EbayRevisionJob.ebay_listing_id == listing.id,
+            EbayRevisionJob.status.in_(ACTIVE_STATUSES),
+        )
+    ).all():
+        existing.status = EbayRevisionJobStatus.cancelled.value
+        existing.completed_at = _now()
+        existing.lease_expires_at = None
+        existing.message = "Superseded by a controlled price-revision canary."
+    job = EbayRevisionJob(
+        product_id=product_id,
+        ebay_listing_id=listing.id,
+        ebay_account_key=listing.account_id or "manual",
+        old_price=listing.price,
+        target_price=target,
+        source_price=evidence["source_price"],
+        source_shipping=evidence["source_shipping"],
+        projected_profit=evidence["projected_profit"],
+        minimum_profit=evidence["minimum_profit"],
+        guard_passed=True,
+        guard_reason=f"{evidence['guard_reason']}; {reason.strip() or 'controlled canary'}",
+        approval_required=True,
+        approved_at=None,
+        status=EbayRevisionJobStatus.needs_review.value,
+        message=f"Canary proposes {_price(listing.price)} → ${target:.2f}; manual approval required.",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
     if read_pricing_settings(db).get("ebay_revision_execution_mode") != "browser_fallback":
         return None

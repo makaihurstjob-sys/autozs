@@ -52,6 +52,7 @@ from app.schemas.domain import (
     EbaySyncRunProgress,
     EbaySyncRunRead,
     EbayRevisionEnqueueRequest,
+    EbayRevisionCanaryRequest,
     EbayRevisionEnqueueResult,
     EbayRevisionJobRead,
     EbayRevisionJobUpdate,
@@ -146,6 +147,7 @@ from app.services.ebay_accounts import create_ebay_account, delete_ebay_account,
 from app.services.ebay_browser_account import read_ebay_browser_account_status, update_ebay_browser_account_status
 from app.services.ebay_revisions import (
     approve_ebay_revision_job,
+    create_ebay_revision_canary,
     enqueue_ebay_price_revisions,
     list_ebay_revision_jobs,
     serialize_ebay_revision_job,
@@ -1178,6 +1180,23 @@ def enqueue_ebay_revision_jobs(
 ) -> EbayRevisionEnqueueResult:
     queued, updated = enqueue_ebay_price_revisions(db, product_ids=payload.product_ids)
     return EbayRevisionEnqueueResult(queued=queued, updated=updated)
+
+
+@router.post("/ebay/revision-jobs/canary", response_model=EbayRevisionJobRead)
+def create_ebay_revision_canary_route(
+    payload: EbayRevisionCanaryRequest,
+    db: Session = Depends(get_db),
+) -> EbayRevisionJobRead:
+    try:
+        job = create_ebay_revision_canary(
+            db,
+            product_id=payload.product_id,
+            target_price=payload.target_price,
+            reason=payload.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EbayRevisionJobRead(**serialize_ebay_revision_job(db, job))
 
 
 @router.post("/ebay/revision-sheets/prepare", response_model=EbayRevisionSheetPrepareResult)

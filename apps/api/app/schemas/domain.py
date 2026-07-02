@@ -428,6 +428,12 @@ class EbayRevisionEnqueueRequest(BaseModel):
     product_ids: list[int] | None = None
 
 
+class EbayRevisionCanaryRequest(BaseModel):
+    product_id: int
+    target_price: float = Field(gt=0)
+    reason: str = Field(default="Controlled price-revision canary", max_length=240)
+
+
 class EbayRevisionEnqueueResult(BaseModel):
     queued: int
     updated: int
