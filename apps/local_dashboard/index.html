@@ -3040,6 +3040,7 @@
         const workerLabel = workerStatusLabel(worker);
         const stats = [
           ["Drafts", draftProducts().length],
+          ["Scheduled", ebayListingItems().filter(listingIsScheduled).length],
           ["Listings", ebayListingItems().filter(listingIsLive).length],
           ["Orders", state.orders.length],
         ].map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
