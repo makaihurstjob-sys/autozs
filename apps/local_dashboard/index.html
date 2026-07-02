@@ -1769,6 +1769,149 @@
         margin: 12px 0;
         padding: 12px;
       }
+      .job-activity-button {
+        position: relative;
+      }
+      .job-activity-button.has-active {
+        border-color: color-mix(in srgb, #2f80ed 45%, var(--line));
+        color: #2f80ed;
+      }
+      .job-activity-badge {
+        align-items: center;
+        background: var(--danger);
+        border: 2px solid var(--panel);
+        border-radius: 999px;
+        color: white;
+        display: inline-flex;
+        font-size: 10px;
+        font-weight: 900;
+        height: 18px;
+        justify-content: center;
+        min-width: 18px;
+        padding: 0 4px;
+        position: absolute;
+        right: -5px;
+        top: -6px;
+      }
+      .job-activity-drawer[hidden] { display: none; }
+      .job-activity-drawer {
+        inset: 0;
+        position: fixed;
+        z-index: 1300;
+      }
+      .job-activity-backdrop {
+        background: rgba(6, 12, 10, .5);
+        inset: 0;
+        position: absolute;
+      }
+      .job-activity-panel {
+        background: var(--panel);
+        border-left: 1px solid var(--line);
+        bottom: 0;
+        box-shadow: -18px 0 64px rgba(0, 0, 0, .28);
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: min(580px, calc(100vw - 18px));
+      }
+      .job-activity-head {
+        align-items: flex-start;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 16px;
+        justify-content: space-between;
+        padding: 22px;
+      }
+      .job-activity-head h2 {
+        font-size: 26px;
+        margin: 0 0 5px;
+      }
+      .job-activity-head p {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 0;
+      }
+      .job-activity-summary {
+        border-bottom: 1px solid var(--line);
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        padding: 14px 22px;
+      }
+      .job-activity-stat {
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        gap: 4px;
+        padding: 10px;
+      }
+      .job-activity-stat span {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+      .job-activity-stat strong {
+        font-size: 22px;
+      }
+      .job-activity-list {
+        display: grid;
+        gap: 10px;
+        overflow: auto;
+        padding: 16px 22px 24px;
+      }
+      .job-activity-card {
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+      }
+      .job-activity-card.is-running { border-left-color: #2f80ed; }
+      .job-activity-card.is-queued { border-left-color: var(--accent); }
+      .job-activity-card.is-attention { border-left-color: var(--danger); }
+      .job-activity-card.is-done { border-left-color: var(--success); }
+      .job-activity-card-head {
+        align-items: flex-start;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+      }
+      .job-activity-card-title {
+        display: grid;
+        gap: 3px;
+        min-width: 0;
+      }
+      .job-activity-card-title strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .job-activity-meta {
+        color: var(--muted);
+        display: flex;
+        flex-wrap: wrap;
+        font-size: 12px;
+        gap: 8px;
+      }
+      .job-activity-message {
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.4;
+        padding-top: 8px;
+      }
+      .job-activity-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
       .add-products-modal[hidden] { display: none; }
       .add-products-modal {
         align-items: center;
@@ -2229,6 +2372,7 @@
         </div>
       </div>
       <div class="actions">
+        <button class="secondary icon-button job-activity-button" onclick="toggleJobActivity()" id="job-activity-toggle" aria-label="Job activity" title="Job activity" data-tooltip="Job activity"></button>
         <button class="secondary icon-button" onclick="toggleTheme()" id="theme-toggle" aria-label="Switch to dark mode" title="Switch to dark mode" data-tooltip="Switch theme"></button>
         <button class="secondary icon-button" onclick="startEbaySyncNow()" aria-label="Sync now" title="Sync now" data-tooltip="Sync now"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
       </div>
@@ -2246,6 +2390,7 @@
     <div id="bulk-schedule-modal" class="add-products-modal" hidden></div>
     <div id="buyer-account-modal" class="add-products-modal" hidden></div>
     <div id="ebay-sync-modal" class="add-products-modal" hidden></div>
+    <div id="job-activity-drawer" class="job-activity-drawer" hidden></div>
     <script>
       const API_STORAGE_KEY = "ebayAutomationApiBaseUrl";
       const PRODUCT_EBAY_STORE_STORAGE_PREFIX = "autozsProductEbayStore:";
@@ -2298,11 +2443,12 @@
       let autoDownloadImages = localStorage.getItem("autoDownloadImagesAfterImport") !== "false";
       let lastExtensionImportItems = [];
       let lastEbayOAuthState = "";
-      let state = { candidates: [], savedSellers: [], products: [], captureQueue: { total: 0, items: [] }, listingQueue: [], listingJobs: [], ebayListings: [], ebayRevisionJobs: [], automationRuns: [], snapshots: [], refreshQueue: { items: [], total: 0, needs_refresh: 0, stale_after_days: 7 }, orders: [], settings: {}, ebayConnection: null, ebayAccounts: [], ebayBrowserAccount: null, workers: [], statsOverview: null, priceHistory: {} };
+      let state = { candidates: [], savedSellers: [], products: [], captureQueue: { total: 0, items: [] }, listingQueue: [], listingJobs: [], ebayListings: [], ebayRevisionJobs: [], sourceRefreshJobs: [], automationRuns: [], snapshots: [], refreshQueue: { items: [], total: 0, needs_refresh: 0, stale_after_days: 7 }, orders: [], settings: {}, ebayConnection: null, ebayAccounts: [], ebayBrowserAccount: null, workers: [], statsOverview: null, priceHistory: {} };
       let lastStateSignature = "";
       let refreshInFlight = false;
       let pendingSilentRender = false;
       let lastInteractionAt = 0;
+      let jobActivityOpen = false;
       const POLL_MS = 10000;
 
       ["pointerdown", "keydown", "input", "wheel"].forEach((eventName) => {
@@ -2952,6 +3098,7 @@
         renderNav();
         renderHeaderStoreSelector();
         renderHeaderStats();
+        renderJobActivityButton();
         const panel = document.getElementById("panel");
         const panelSection = panel?.closest("section");
         const usesFilterPopover = active === "Products" || active === "eBay Listings";
@@ -2975,6 +3122,215 @@
         renderBulkScheduleModal();
         renderBuyerAccountModal();
         renderEbaySyncModal();
+        renderJobActivityDrawer();
+      }
+
+      function toggleJobActivity(force) {
+        jobActivityOpen = typeof force === "boolean" ? force : !jobActivityOpen;
+        renderJobActivityButton();
+        renderJobActivityDrawer();
+      }
+
+      function renderJobActivityButton() {
+        const button = document.getElementById("job-activity-toggle");
+        if (!button) return;
+        const count = jobActivityImportantCount();
+        const label = count ? `Job activity, ${count} active or blocked` : "Job activity";
+        button.classList.toggle("has-active", count > 0);
+        button.setAttribute("aria-label", label);
+        button.title = label;
+        button.dataset.tooltip = label;
+        button.innerHTML = `${jobActivityIconSvg()}${count ? `<span class="job-activity-badge">${count > 99 ? "99+" : count}</span>` : ""}`;
+      }
+
+      function renderJobActivityDrawer() {
+        const drawer = document.getElementById("job-activity-drawer");
+        if (!drawer) return;
+        drawer.hidden = !jobActivityOpen;
+        if (!jobActivityOpen) {
+          drawer.innerHTML = "";
+          return;
+        }
+        drawer.innerHTML = jobActivityDrawerHtml();
+      }
+
+      function jobActivityIconSvg() {
+        return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16"/><path d="M4 12h10"/><path d="M4 19h7"/><path d="m16 16 2 2 4-5"/></svg>`;
+      }
+
+      function jobActivityDrawerHtml() {
+        const entries = jobActivityEntries();
+        const counts = jobActivityCounts(entries);
+        const newest = entries[0]?.updatedAt ? `Newest update ${formatDateTime(entries[0].updatedAt)}` : "No job updates yet";
+        return `<div class="job-activity-backdrop" onclick="toggleJobActivity(false)"></div>
+          <aside class="job-activity-panel" role="dialog" aria-modal="true" aria-label="Job activity">
+            <div class="job-activity-head">
+              <div>
+                <h2>Job Activity</h2>
+                <p>${esc(newest)}</p>
+              </div>
+              <button class="secondary icon-button" onclick="toggleJobActivity(false)" aria-label="Close job activity" title="Close">${esc("×")}</button>
+            </div>
+            <div class="job-activity-summary">
+              <div class="job-activity-stat"><span>Running</span><strong>${counts.running}</strong></div>
+              <div class="job-activity-stat"><span>Queued</span><strong>${counts.queued}</strong></div>
+              <div class="job-activity-stat"><span>Attention</span><strong>${counts.attention}</strong></div>
+            </div>
+            <div class="job-activity-list">
+              ${entries.length ? entries.map(jobActivityCardHtml).join("") : `<div class="settings-empty"><strong>No worker jobs yet</strong><span>Queued listing, price refresh, and revision jobs will appear here as soon as they start moving.</span></div>`}
+            </div>
+          </aside>`;
+      }
+
+      function jobActivityEntries() {
+        const entries = [
+          ...(state.listingJobs || []).map(listingJobActivityEntry),
+          ...(state.sourceRefreshJobs || []).map(sourceRefreshJobActivityEntry),
+          ...(state.ebayRevisionJobs || []).map(ebayRevisionJobActivityEntry),
+        ].filter(Boolean);
+        return entries
+          .sort((a, b) => {
+            const groupDelta = jobActivityGroupSort(a.group) - jobActivityGroupSort(b.group);
+            if (groupDelta) return groupDelta;
+            return jobActivityTimeValue(b.updatedAt) - jobActivityTimeValue(a.updatedAt);
+          })
+          .slice(0, 40);
+      }
+
+      function listingJobActivityEntry(job) {
+        const group = jobActivityGroup(job.status);
+        const schedule = job.listing_schedule_at
+          ? `eBay start ${formatDateTime(job.listing_schedule_at)}`
+          : job.scheduled_for
+            ? `Run after ${formatDateTime(job.scheduled_for)}`
+            : "Run now";
+        return {
+          kind: "Listing",
+          id: job.id,
+          group,
+          status: job.status,
+          title: job.title || `Product ${job.product_id}`,
+          subtitle: `${job.sku || `Product ${job.product_id}`} · ${job.ebay_account_key || "manual"}`,
+          meta: [schedule, job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "", `${job.attempts || 0} attempt(s)`].filter(Boolean),
+          message: job.message || listingJobIssuesText(job) || "",
+          updatedAt: job.updated_at || job.created_at || job.scheduled_for,
+          productId: job.product_id,
+          viewStatus: job.status === "completed" ? "listed" : job.listing_schedule_at ? "scheduled" : "all",
+        };
+      }
+
+      function sourceRefreshJobActivityEntry(job) {
+        return {
+          kind: "Price refresh",
+          id: job.id,
+          group: jobActivityGroup(job.status),
+          status: job.status,
+          title: job.title || `Product ${job.product_id || "-"}`,
+          subtitle: `${job.sku || "No SKU"} · ${job.batch_key || "single refresh"}`,
+          meta: [
+            `Before ${money(job.baseline_price)}`,
+            `Captured ${money(job.captured_price)}`,
+            job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "",
+            `${job.attempts || 0} attempt(s)`,
+          ].filter(Boolean),
+          message: job.message || "",
+          updatedAt: job.updated_at || job.created_at,
+          productId: job.product_id,
+          viewStatus: "all",
+        };
+      }
+
+      function ebayRevisionJobActivityEntry(job) {
+        const title = job.title || job.sku || `Revision ${job.id}`;
+        return {
+          kind: "Revision",
+          id: job.id,
+          group: jobActivityGroup(job.status),
+          status: job.status,
+          title,
+          subtitle: `${job.listing_id || "No listing id"} · ${job.ebay_account_key || "manual"}`,
+          meta: [
+            `${money(job.old_price)} → ${money(job.target_price)}`,
+            job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "",
+            `${job.attempts || 0} attempt(s)`,
+          ].filter(Boolean),
+          message: job.message || "",
+          updatedAt: job.updated_at || job.created_at,
+          productId: job.product_id,
+          viewStatus: "listed",
+        };
+      }
+
+      function listingJobIssuesText(job) {
+        const issues = [...(job.missing_manual || []), ...(job.warnings || [])].filter(Boolean);
+        return issues.length ? issues.slice(0, 3).join(" · ") : "";
+      }
+
+      function jobActivityGroup(status) {
+        const normalized = String(status || "").toLowerCase();
+        if (normalized === "running") return "running";
+        if (normalized === "queued") return "queued";
+        if (["failed", "needs_review", "paused", "cancelled"].includes(normalized)) return "attention";
+        if (["completed", "saved_draft", "ready_to_save", "tombstoned"].includes(normalized)) return "done";
+        return "other";
+      }
+
+      function jobActivityGroupSort(group) {
+        return { running: 0, attention: 1, queued: 2, other: 3, done: 4 }[group] ?? 5;
+      }
+
+      function jobActivityTimeValue(value) {
+        const time = new Date(value || 0).getTime();
+        return Number.isNaN(time) ? 0 : time;
+      }
+
+      function jobActivityCounts(entries = jobActivityEntries()) {
+        return entries.reduce((counts, entry) => {
+          if (entry.group === "running") counts.running += 1;
+          if (entry.group === "queued") counts.queued += 1;
+          if (entry.group === "attention") counts.attention += 1;
+          return counts;
+        }, { running: 0, queued: 0, attention: 0 });
+      }
+
+      function jobActivityImportantCount() {
+        const counts = jobActivityCounts();
+        return counts.running + counts.queued + counts.attention;
+      }
+
+      function jobActivityCardHtml(entry) {
+        const statusClass = {
+          running: "stage-images",
+          queued: "stage-capture",
+          attention: "stage-source",
+          done: "stage-ready",
+          other: "ship-unknown",
+        }[entry.group] || "";
+        return `<div class="job-activity-card is-${escAttr(entry.group)}">
+          <div class="job-activity-card-head">
+            <div class="job-activity-card-title">
+              <span class="draft">${esc(entry.kind)} #${esc(entry.id)}</span>
+              <strong title="${escAttr(entry.title)}">${esc(entry.title)}</strong>
+              <span class="draft">${esc(entry.subtitle)}</span>
+            </div>
+            <span class="status ${statusClass}">${esc(entry.status || "unknown")}</span>
+          </div>
+          <div class="job-activity-meta">${entry.meta.map((item) => `<span>${esc(item)}</span>`).join("")}</div>
+          ${entry.message ? `<div class="job-activity-message">${esc(entry.message)}</div>` : ""}
+          <div class="job-activity-actions">
+            ${entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
+          </div>
+        </div>`;
+      }
+
+      function viewJobActivityProduct(productId, status = "all") {
+        active = "eBay Listings";
+        listingStatusFilter = status || "all";
+        jobActivityOpen = false;
+        selectedProductIds.clear();
+        if (productId) selectedProductIds.add(Number(productId));
+        render();
+        message(`Showing ${status === "all" ? "listings" : status} jobs for product ${productId}.`);
       }
 
       function researchHtml() {
