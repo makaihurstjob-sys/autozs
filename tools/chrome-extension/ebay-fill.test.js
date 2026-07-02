@@ -4,7 +4,7 @@ const vm = require("vm");
 const source = fs.readFileSync(`${__dirname}/ebay-fill.js`, "utf8");
 
 class FakeField {
-  constructor({ id = "", name = "", placeholder = "", ariaLabel = "", tagName = "INPUT", parentText = "", type = "" } = {}) {
+  constructor({ id = "", name = "", placeholder = "", ariaLabel = "", tagName = "INPUT", parentText = "", type = "", contentEditable = false, visible = true } = {}) {
     this.id = id;
     this.name = name;
     this.placeholder = placeholder;
@@ -12,7 +12,10 @@ class FakeField {
     this._value = "";
     this.textContent = "";
     this.innerText = "";
+    this.isContentEditable = contentEditable;
+    this.visible = visible;
     this.attributes = { "aria-label": ariaLabel, type };
+    if (contentEditable) this.attributes.contenteditable = "true";
     this.parentElement = { innerText: parentText };
     this.events = [];
   }
@@ -25,6 +28,16 @@ class FakeField {
     this._value = nextValue;
   }
 
+  get innerHTML() {
+    return this._html || "";
+  }
+
+  set innerHTML(value) {
+    this._html = String(value || "");
+    this.textContent = this._html.replace(/<[^>]+>/g, "");
+    this.innerText = this.textContent;
+  }
+
   dispatchEvent(event) {
     this.events.push(event.type);
   }
@@ -34,7 +47,11 @@ class FakeField {
   }
 
   getAttribute(key) {
-    return this.attributes[key] || "";
+    return Object.prototype.hasOwnProperty.call(this.attributes, key) ? this.attributes[key] : null;
+  }
+
+  hasAttribute(key) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, key);
   }
 
   setAttribute(key, value) {
@@ -59,7 +76,7 @@ class FakeField {
   }
 
   getBoundingClientRect() {
-    return { width: 120, height: 32 };
+    return this.visible ? { width: 120, height: 32 } : { width: 0, height: 0 };
   }
 }
 
@@ -80,6 +97,10 @@ class FakeButton {
 
   getAttribute() {
     return "";
+  }
+
+  closest() {
+    return null;
   }
 
   scrollIntoView() {}
@@ -108,6 +129,7 @@ async function runAssistantTest() {
     getBoundingClientRect: () => ({ width: 120, height: 24 }),
     click: () => {
       htmlModeCheckbox.checked = !htmlModeCheckbox.checked;
+      rawDescription.visible = htmlModeCheckbox.checked;
     },
   };
   const rawDescription = new FakeField({
@@ -115,14 +137,29 @@ async function runAssistantTest() {
     name: "description",
     tagName: "TEXTAREA",
     parentText: "HTML source code",
+    visible: false,
   });
+  htmlModeCheckbox.click = () => {
+    htmlModeCheckbox.checked = !htmlModeCheckbox.checked;
+    rawDescription.visible = htmlModeCheckbox.checked;
+  };
   const prelistSearch = new FakeField({
     placeholder: "Enter brand, model, description, etc.",
     parentText: "Start listing with item info Describe your item",
   });
-  const prelistSearchButton = new FakeButton("Search");
-  const continueWithoutMatchButton = new FakeButton("Continue without match");
   let prelistMode = "search";
+  const prelistSearchButton = new FakeButton("Search");
+  prelistSearchButton.click = () => {
+    prelistSearchButton.clicked = true;
+    prelistMode = "match";
+  };
+  const continueWithoutMatchButton = new FakeButton("Continue without match");
+  continueWithoutMatchButton.click = () => {
+    continueWithoutMatchButton.clicked = true;
+    prelistMode = "condition";
+  };
+  let rawDescriptionEnabled = true;
+  let htmlModeControlEnabled = true;
 
   const context = {
     console,
@@ -153,15 +190,18 @@ async function runAssistantTest() {
       },
       querySelectorAll: (selector) => {
         if (selector === 'input[type="file"]') return [];
-        if (selector === "label") return [htmlModeLabel];
-        if (selector === 'input[type="checkbox"]') return [htmlModeCheckbox];
+        if (selector === "label") return htmlModeControlEnabled ? [htmlModeLabel] : [];
+        if (selector === 'input[type="checkbox"]') return htmlModeControlEnabled ? [htmlModeCheckbox] : [];
         if (selector === "button") return prelistMode === "match" ? [continueWithoutMatchButton] : [prelistSearchButton];
         if (selector === "button, a") return prelistMode === "match" ? [continueWithoutMatchButton] : [prelistSearchButton];
         if (selector === "input, textarea, [role='textbox']") return prelistMode === "search" ? [prelistSearch] : [];
+        if (selector === "input, textarea, [contenteditable], [role='textbox']") {
+          return context.location?.pathname === "/sl/prelist/home" && prelistMode === "search" ? [prelistSearch] : fields;
+        }
         return fields;
       },
       querySelector: (selector) => {
-        if (selector === 'textarea[name="description"][id*="rawEditor"], textarea[name="description"]') return rawDescription;
+        if (selector === 'textarea[name="description"][id*="rawEditor"], textarea[name="description"]') return rawDescriptionEnabled ? rawDescription : null;
         if (selector === `label[for="html-mode"]`) return htmlModeLabel;
         return null;
       },
@@ -258,6 +298,9 @@ async function runAssistantTest() {
     description: "<p>Fresh scented tall kitchen trash bags.</p>",
     item_specifics: { Brand: "HDX" },
   };
+  if (vm.runInContext("Boolean(findDescriptionSourceField())", context)) {
+    throw new Error("Expected hidden raw description source to be ignored before HTML mode is enabled.");
+  }
   const result = await vm.runInContext(`fillEbayListingDraft(${JSON.stringify(packageData)})`, context);
 
   const values = fields.map((field) => field._prototypeValue || field.value || field.textContent);
@@ -271,6 +314,9 @@ async function runAssistantTest() {
   if (rawDescription.value !== packageData.description) {
     throw new Error(`Expected raw HTML description to be replaced exactly, got ${JSON.stringify(rawDescription.value)}`);
   }
+  if (!htmlModeCheckbox.checked) {
+    throw new Error("Expected HTML mode checkbox to be enabled before filling hidden raw description source.");
+  }
   rawDescription._prototypeValue = `old plain text ${packageData.description}`;
   const exactDescriptionMatch = vm.runInContext(
     `descriptionSourceExactlyMatches({ value: ${JSON.stringify(rawDescription.value)} }, ${JSON.stringify(packageData.description)})`,
@@ -280,8 +326,57 @@ async function runAssistantTest() {
     throw new Error("Expected appended HTML after old text to fail exact source verification.");
   }
   if (!values.includes("HDX")) throw new Error("Expected provided brand item specific to be filled.");
+  const overlayFocusedField = new FakeField({ id: "autozs-overlay", parentText: "AutoZS loading overlay" });
+  const guardedBrandField = new FakeField({ id: "guarded-brand", parentText: "Brand" });
+  let nativeReplaceCalls = 0;
+  context.document.activeElement = overlayFocusedField;
+  context.chrome = {
+    runtime: {
+      sendMessage: (payload, callback) => {
+        if (payload.action === "replace-text") nativeReplaceCalls += 1;
+        callback({ ok: true });
+      },
+    },
+  };
+  context.__guardedBrandField = guardedBrandField;
+  const guardedBrandFilled = await vm.runInContext(`setEbayTextFieldValue(__guardedBrandField, "Guarded Brand")`, context);
+  if (!guardedBrandFilled || guardedBrandField.value !== "Guarded Brand") {
+    throw new Error("Expected guarded Brand fallback to fill synthetically when focus is owned by another element.");
+  }
+  if (nativeReplaceCalls !== 0) {
+    throw new Error("Expected native replace-text to be skipped when the focused element is not the target Brand field.");
+  }
+  delete context.chrome;
+  delete context.document.activeElement;
   if (!result.lines.every((line) => !/publish|submit|list item/i.test(line))) {
     throw new Error("Fill results should not claim to publish or submit.");
+  }
+  const deceptiveUpcField = new FakeField({
+    id: "universal-product-code",
+    name: "universalProductCode",
+    parentText: "Universal product code Description Show HTML Code",
+  });
+  fields.push(deceptiveUpcField);
+  rawDescriptionEnabled = false;
+  const safeDescriptionSource = vm.runInContext("findDescriptionSourceField()", context);
+  if (safeDescriptionSource?.element === deceptiveUpcField) {
+    throw new Error("Expected the description source finder to reject a nearby UPC input.");
+  }
+  fields.pop();
+  rawDescriptionEnabled = false;
+  htmlModeControlEnabled = false;
+  htmlModeCheckbox.checked = false;
+  const richDescription = new FakeField({
+    id: "rich-description",
+    tagName: "DIV",
+    parentText: "Item description",
+    contentEditable: true,
+  });
+  fields[4] = richDescription;
+  const richDescriptionHtml = "<section><h2>Formatted product description</h2><p>Installs quickly.</p><ul><li>Clean fit</li></ul></section>";
+  const richDescriptionFilled = await vm.runInContext(`fillDescription(${JSON.stringify(richDescriptionHtml)})`, context);
+  if (!richDescriptionFilled || richDescription.innerHTML !== richDescriptionHtml) {
+    throw new Error(`Expected HTML description fallback to fill rich editor, got filled=${richDescriptionFilled} html=${JSON.stringify(richDescription.innerHTML)}`);
   }
   const formattedFallbackDescription = vm.runInContext(
     `listingDescriptionPlainText('<div>Anim59 Home Improvement</div><div>Fast shipping</div><h1>Prime-Line Sash Balance</h1>')`,
@@ -345,18 +440,73 @@ async function runAssistantTest() {
   }
   context.document.querySelectorAll = originalQuerySelectorAll;
 
+  context.location.pathname = "/sl/prelist/home";
+  context.document.body.innerText = "Start listing with item info Describe your item";
   const prelistResult = await vm.runInContext(`prepareEbayPrelist(${JSON.stringify(packageData)})`, context);
   if (!prelistResult.ok || !prelistSearchButton.clicked) {
     throw new Error(`Expected prelist search to be prepared and submitted, got ${JSON.stringify(prelistResult)}`);
   }
   if ((prelistSearch._prototypeValue || prelistSearch.value) !== packageData.title) {
-    throw new Error("Expected prelist search field to receive the listing title.");
+    throw new Error(`Expected prelist search field to receive the listing title, got value=${JSON.stringify(prelistSearch._prototypeValue || prelistSearch.value)} result=${JSON.stringify(prelistResult)}`);
   }
   prelistMode = "match";
   context.document.body.innerText = "Find a match\nRelated listings from other sellers\nContinue without match";
   const matchResult = await vm.runInContext(`prepareEbayPrelist(${JSON.stringify(packageData)})`, context);
   if (!matchResult.ok || !continueWithoutMatchButton.clicked) {
     throw new Error(`Expected eBay match screen to continue without match, got ${JSON.stringify(matchResult)}`);
+  }
+
+  let conditionPopupOpen = false;
+  let conditionSelected = false;
+  const conditionOpener = new FakeButton("Condition Select");
+  conditionOpener.click = () => {
+    conditionPopupOpen = true;
+  };
+  const newConditionOption = new FakeButton("New");
+  newConditionOption.click = () => {
+    conditionSelected = true;
+  };
+  context.document.querySelectorAll = (selector) => {
+    if (selector === 'input[type="radio"], button, [role="button"], [role="radio"], [role="combobox"], label') return [conditionOpener];
+    if (selector === '[role="dialog"], [role="listbox"], [role="menu"], [data-testid*="condition" i]') {
+      return conditionPopupOpen ? [{ querySelectorAll: () => [newConditionOption], getBoundingClientRect: () => ({ width: 240, height: 140 }) }] : [];
+    }
+    if (selector === 'input[type="radio"], button, [role="button"], [role="radio"], [role="option"], [role="menuitem"], label, li') {
+      return conditionPopupOpen ? [newConditionOption] : [conditionOpener];
+    }
+    if (selector === 'input[type="radio"]:checked, [aria-checked="true"], [aria-selected="true"]') return conditionSelected ? [newConditionOption] : [];
+    return [];
+  };
+  const popupConditionOk = await vm.runInContext(`chooseVisibleCondition("New")`, context);
+  if (!popupConditionOk || !conditionPopupOpen || !conditionSelected) {
+    throw new Error("Expected condition popup option New to be selected automatically.");
+  }
+  context.document.querySelectorAll = originalQuerySelectorAll;
+
+  const oldDateField = new FakeField({ id: "schedule-start-date", parentText: "Schedule start date" });
+  oldDateField.value = "7/1/2026";
+  const newDateField = new FakeField({ id: "schedule-start-date", parentText: "Schedule start date" });
+  newDateField.value = "7/9/2026";
+  const calendarToggle = new FakeButton("Calendar");
+  const calendarTarget = new FakeButton("9");
+  context.__oldDateField = oldDateField;
+  context.__newDateField = newDateField;
+  context.__calendarToggle = calendarToggle;
+  context.__calendarTarget = calendarTarget;
+  context.__currentScheduleDateField = oldDateField;
+  const requeryDateOk = await vm.runInContext(`
+    (async () => {
+      const schedule = parseListingSchedule("2026-07-09T15:35:00");
+      findScheduleCalendarToggle = () => __calendarToggle;
+      findScheduleCalendarDay = () => __calendarTarget;
+      findScheduleCalendarNextMonth = () => null;
+      findScheduleDayField = () => __currentScheduleDateField;
+      __calendarTarget.click = () => { __currentScheduleDateField = __newDateField; };
+      return chooseScheduleCalendarDate(__oldDateField, schedule);
+    })()
+  `, context);
+  if (!requeryDateOk) {
+    throw new Error("Expected schedule calendar selection to verify against the re-rendered date field.");
   }
 
   const apiImageUrl = vm.runInContext(`localPathToApiUrl("downloads/product_images/40/01.jpg")`, context);

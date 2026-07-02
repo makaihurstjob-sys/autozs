@@ -1,5 +1,5 @@
 (async () => {
-  const ASSISTANT_BUILD = "2026-07-01-html-checkbox-anchor-fix";
+  const ASSISTANT_BUILD = "2026-07-02-condition-schedule-focus-fix";
   const existingAssistant = document.getElementById("autozs-ebay-fill-assistant");
   const existingBuild = existingAssistant?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayFillAssistant && existingBuild === ASSISTANT_BUILD) return;
@@ -849,10 +849,17 @@ async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
   }
   if (isEbayPrelistPage()) {
     writeAutoWorkflowState({ phase: "prelist", status: "running" });
-    const prelistResult = await prepareEbayPrelist(pkg);
+    const prelistLines = [];
+    let prelistResult = null;
+    for (let step = 0; step < 6 && isEbayPrelistPage(); step += 1) {
+      prelistResult = await prepareEbayPrelist(pkg);
+      prelistLines.push(...(prelistResult.lines || []));
+      if (!prelistResult.ok || isEbayListingEditorPage()) break;
+      await delay(650);
+    }
     return {
-      lines: prelistResult.lines,
-      message: `${prelistResult.message} Auto workflow will continue after eBay opens the next step.`,
+      lines: prelistLines,
+      message: `${prelistResult?.message || "Prepared eBay's pre-list steps."} Auto workflow will continue after eBay opens the next step.`,
       terminal: false,
     };
   }
@@ -973,11 +980,14 @@ function criticalListingCheckDetails(pkg) {
   const checks = [
     { label: "title", ok: fieldMatchesHints(["title", "listing title"], pkg.title, { exact: true }) },
     { label: "price", ok: fieldMatchesHints(["price", "buy it now", "fixed price"], Number(pkg.price).toFixed(2), { exact: true }) },
+    { label: "description", ok: descriptionSourceMatches(pkg.description) },
+    { label: "required item specifics", ok: requiredItemSpecificsSatisfied() },
     { label: "photos", ok: expectedImages > 0 && readEbayPhotoUploadCount() >= expectedImages },
   ];
   if (pkg.listing_schedule_at) {
     const schedule = parseListingSchedule(pkg.listing_schedule_at);
     checks.push({ label: "schedule date", ok: Boolean(schedule && scheduleDateFieldMatches(findScheduleDayField(), schedule)) });
+    checks.push({ label: "schedule time", ok: Boolean(schedule && scheduleTimeMatches(schedule)) });
   }
   if (pkg.offers_enabled === false) checks.push({ label: "offers disabled", ok: offersAreDisabled() });
   if (pkg.shipping_cost_type === "flat" || Number(pkg.buyer_shipping_cost) === 0) {
@@ -1161,6 +1171,9 @@ async function waitForEditorReady() {
 }
 
 async function prepareEbayPrelist(pkg) {
+  const categoryResult = await preparePrelistCategory();
+  if (categoryResult) return categoryResult;
+
   const matchResult = await continueWithoutCatalogMatch();
   if (matchResult) return matchResult;
 
@@ -1188,8 +1201,13 @@ async function prepareEbayPrelist(pkg) {
   await delay(350);
   const searchButton = findPrelistSearchButton();
   if (searchButton) {
-    await clickEbayElement(searchButton);
-    await delay(1200);
+    const searchPageUrl = location.href;
+    const searchAdvanced = await clickPrelistElementAndWait(searchButton, () => {
+      return location.href !== searchPageUrl || !findPrelistSearchInput() || /find a match|related listings from other sellers/i.test(document.body?.innerText || "");
+    });
+    if (!searchAdvanced) {
+      return { ok: false, lines: [`OK prelist search: ${title}`, "Review Search button"], message: "eBay did not advance after AutoZS clicked Search." };
+    }
     const conditionAfterSearch = await preparePrelistCondition(pkg);
     if (conditionAfterSearch?.ok) {
       return {
@@ -1216,8 +1234,13 @@ async function continueWithoutCatalogMatch() {
       message: "eBay is asking for a catalog match. Click Continue without match to keep importing.",
     };
   }
-  const clicked = await clickEbayElement(button);
-  if (clicked) await delay(1000);
+  const pageUrl = location.href;
+  const clicked = await clickPrelistElementAndWait(button, () => {
+    const stillVisible = [...document.querySelectorAll("button, a")]
+      .filter(isVisible)
+      .some((element) => /^continue without match$/i.test((element.innerText || element.textContent || "").trim()));
+    return location.href !== pageUrl || !stillVisible || isEbayListingEditorPage() || /condition/i.test(document.body?.innerText || "");
+  });
   return {
     ok: Boolean(clicked),
     lines: [`${clicked ? "OK" : "Review"} clicked Continue without match`],
@@ -1230,9 +1253,8 @@ async function preparePrelistCondition(pkg) {
   if (!/condition/i.test(pageText) || !/(new|used|open box|refurbished)/i.test(pageText)) return null;
 
   const condition = String(pkg.condition || "New").trim() || "New";
-  const conditionOk = chooseVisibleCondition(condition);
-  const continueOk = conditionOk ? clickPrelistContinueButton() : false;
-  if (continueOk) await delay(800);
+  const conditionOk = await chooseVisibleCondition(condition);
+  const continueOk = conditionOk ? await clickPrelistContinueButton() : false;
   return {
     ok: conditionOk && continueOk,
     lines: [`${conditionOk ? "OK" : "Review"} condition: ${condition}`, `${continueOk ? "OK" : "Review"} clicked Continue to listing`],
@@ -1240,9 +1262,9 @@ async function preparePrelistCondition(pkg) {
   };
 }
 
-function chooseVisibleCondition(condition) {
+async function chooseVisibleCondition(condition) {
   const normalized = normalizeText(condition);
-  const controls = [...document.querySelectorAll('input[type="radio"], button, [role="radio"], label')]
+  const controls = conditionControls()
     .filter(isVisible)
     .map((element) => ({
       element,
@@ -1259,26 +1281,158 @@ function chooseVisibleCondition(condition) {
           .join(" ")
       ),
     }));
-  const match = controls.find((control) => control.text.includes(normalized));
-  if (!match) return false;
+  let match = controls.find((control) => conditionControlMatches(control, normalized));
+  if (!match) {
+    const opener = controls.find((control) => /condition/.test(control.text) && /select|choose|condition|new|used|openbox|refurbished/.test(control.text));
+    if (opener) {
+      await clickEbayElement(opener.element);
+      await delay(350);
+      const popupControls = conditionPopupControls()
+        .filter(isVisible)
+        .map((element) => ({
+          element,
+          text: normalizeText(
+            [
+              element.value,
+              element.getAttribute("aria-label"),
+              labelText(element),
+              nearbyText(element),
+              element.innerText,
+              element.textContent,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          ),
+        }));
+      match = popupControls.find((control) => conditionControlMatches(control, normalized));
+    }
+  }
+  if (!match) return conditionSelectionMatches(condition);
   if (match.element.matches?.('input[type="radio"]')) {
-    if (match.element.checked) return true;
-    match.element.click();
+    if (match.element.checked) return conditionSelectionMatches(condition);
+    const clicked = await clickConditionChoice(match.element);
+    if (!clicked) return false;
     match.element.dispatchEvent(new Event("input", { bubbles: true }));
     match.element.dispatchEvent(new Event("change", { bubbles: true }));
-    return match.element.checked;
+    await delay(350);
+    return match.element.checked || conditionSelectionMatches(condition) || conditionContinueButtonEnabled();
   }
-  match.element.click();
-  return true;
+  await clickConditionChoice(match.element);
+  await delay(350);
+  return conditionSelectionMatches(condition) || conditionContinueButtonEnabled();
 }
 
-function clickPrelistContinueButton() {
+function conditionControls() {
+  return [...document.querySelectorAll('input[type="radio"], button, [role="button"], [role="radio"], [role="combobox"], label')];
+}
+
+function conditionPopupControls() {
+  const popups = [...document.querySelectorAll('[role="dialog"], [role="listbox"], [role="menu"], [data-testid*="condition" i]')].filter(isVisible);
+  const scoped = popups.flatMap((popup) => [...popup.querySelectorAll?.('input[type="radio"], button, [role="button"], [role="radio"], [role="option"], [role="menuitem"], label, li') || []]);
+  return [...scoped, ...document.querySelectorAll('input[type="radio"], button, [role="button"], [role="radio"], [role="option"], [role="menuitem"], label, li')];
+}
+
+function conditionControlMatches(control, normalizedCondition) {
+  if (!control?.text || !normalizedCondition) return false;
+  const exactText = normalizeText(control.element?.innerText || control.element?.textContent || control.element?.value || control.element?.getAttribute?.("aria-label") || "");
+  return exactText === normalizedCondition || control.text === normalizedCondition || control.text.includes(`condition${normalizedCondition}`) || control.text.includes(normalizedCondition);
+}
+
+async function clickConditionChoice(element) {
+  const label = conditionAssociatedLabel(element);
+  if (label && isVisible(label) && await clickEbayElement(label)) return true;
+  const row = element?.closest?.(".radio, .field, li, div");
+  if (row && row !== element && isVisible(row) && /new|open box|used|for parts|not working|refurbished/i.test(row.innerText || row.textContent || "")) {
+    if (await clickEbayElement(row)) return true;
+  }
+  return clickEbayElement(element);
+}
+
+function conditionAssociatedLabel(element) {
+  if (!element) return null;
+  if (element.id) {
+    const direct = document.querySelector(`label[for="${cssEscape(element.id)}"]`);
+    if (direct) return direct;
+  }
+  return element.closest?.("label") || null;
+}
+
+function conditionSelectionMatches(condition) {
+  const normalized = normalizeText(condition);
+  if (!normalized) return false;
+  const selected = [...document.querySelectorAll('input[type="radio"]:checked, [aria-checked="true"], [aria-selected="true"]')]
+    .filter(isVisible)
+    .some((element) => normalizeText(`${element.value || ""} ${element.getAttribute?.("aria-label") || ""} ${labelText(element)} ${nearbyText(element)} ${element.innerText || ""} ${element.textContent || ""}`).includes(normalized));
+  if (selected) return true;
+  return conditionControls().filter(isVisible).some((element) => {
+    const text = normalizeText(`${element.getAttribute?.("aria-label") || ""} ${element.innerText || ""} ${element.textContent || ""} ${nearbyText(element)}`);
+    return text.includes("condition") && text.includes(normalized) && !/select|choose|required/.test(text);
+  });
+}
+
+function conditionContinueButtonEnabled() {
+  return [...document.querySelectorAll("button, [role='button']")]
+    .filter(isVisible)
+    .some((button) => /^(continue|continue to listing|next)$/i.test((button.innerText || button.textContent || "").trim()) && !button.disabled && button.getAttribute("aria-disabled") !== "true");
+}
+
+async function clickPrelistContinueButton() {
   const button = [...document.querySelectorAll("button, a")]
     .filter(isVisible)
     .find((element) => /^(continue|continue to listing|next)$/i.test((element.innerText || element.textContent || "").trim()));
   if (!button || typeof button.click !== "function") return false;
-  button.click();
-  return true;
+  const pageUrl = location.href;
+  return clickPrelistElementAndWait(button, () => {
+    return location.href !== pageUrl || isEbayListingEditorPage() || !isVisible(button);
+  });
+}
+
+function requiredItemSpecificsSatisfied() {
+  const text = document.body?.innerText || "";
+  return !/additional details are required|item specific\s+[^.\n]+\s+is missing/i.test(text);
+}
+
+async function preparePrelistCategory() {
+  const pageText = document.body?.innerText || "";
+  if (!/provide a category for your item|select a category/i.test(pageText)) return null;
+  const dialog = document.querySelector('[role="dialog"]') || document;
+  const categoryButton = [...dialog.querySelectorAll("button")]
+    .filter(isVisible)
+    .find((button) => /\s>\s/.test((button.innerText || button.textContent || "").trim()));
+  if (!categoryButton) {
+    return { ok: false, lines: ["Review suggested category"], message: "eBay needs a category, but AutoZS could not find a suggested category." };
+  }
+  const categorySelected = await clickPrelistElementAndWait(categoryButton, () => {
+    const text = document.body?.innerText || "";
+    return !/none selected/i.test(text) || !/provide a category for your item/i.test(text);
+  }, 3000);
+  if (categorySelected && !/provide a category for your item/i.test(document.body?.innerText || "")) {
+    return { ok: true, lines: ["OK selected first suggested category"], message: "Selected eBay's first suggested category and continued." };
+  }
+  const doneButton = [...dialog.querySelectorAll("button")]
+    .filter(isVisible)
+    .find((button) => /^done$/i.test((button.innerText || button.textContent || "").trim()));
+  if (!doneButton) {
+    return { ok: false, lines: ["OK selected first suggested category", "Review category Done button"], message: "Selected eBay's first suggested category, but could not find Done." };
+  }
+  const pageUrl = location.href;
+  const completed = await clickPrelistElementAndWait(doneButton, () => {
+    return location.href !== pageUrl || !/provide a category for your item/i.test(document.body?.innerText || "");
+  });
+  return {
+    ok: completed,
+    lines: ["OK selected first suggested category", `${completed ? "OK" : "Review"} confirmed category`],
+    message: completed ? "Selected eBay's first suggested category and continued." : "Selected a suggested category, but eBay did not continue after Done.",
+  };
+}
+
+async function clickPrelistElementAndWait(element, advanced, timeoutMs = 5000) {
+  if (!element || typeof element.click !== "function") return false;
+  element.scrollIntoView?.({ block: "center", inline: "center" });
+  element.click();
+  if (await waitForCondition(advanced, timeoutMs, 150)) return true;
+  const nativeClicked = await clickEbayElement(element);
+  return Boolean(nativeClicked && (await waitForCondition(advanced, timeoutMs, 150)));
 }
 
 function findPrelistSearchInput() {
@@ -1395,18 +1549,18 @@ function inferredItemSpecifics(pkg) {
 async function fillDescription(value) {
   const htmlValue = String(value || "");
   const isHtmlDescription = looksLikeHtml(htmlValue);
-  if (isHtmlDescription) {
-    return fillDescriptionHtmlSource(htmlValue);
-  }
+  if (isHtmlDescription && await fillDescriptionHtmlSource(htmlValue)) return true;
   const text = listingDescriptionPlainText(htmlValue);
   if (await fillDescriptionNativeFrame(htmlValue)) return true;
   if (await fillDescriptionHtmlSource(htmlValue)) return true;
-  const directDescription = [...document.querySelectorAll("textarea, [contenteditable='true'], [role='textbox']")]
+  const directDescription = [...document.querySelectorAll("textarea, [contenteditable], [role='textbox']")]
     .filter(isVisible)
     .find((element) =>
       /description|item description/i.test(
         [
           element.getAttribute("aria-label"),
+          element.getAttribute("aria-placeholder"),
+          element.getAttribute("data-placeholder"),
           element.getAttribute("placeholder"),
           labelText(element),
           nearbyText(element),
@@ -1416,7 +1570,7 @@ async function fillDescription(value) {
       )
     );
   if (directDescription) {
-    if (directDescription.isContentEditable || directDescription.getAttribute("contenteditable") === "true") {
+    if (isRichTextElement(directDescription)) {
       if (setRichTextValue(directDescription, htmlValue)) {
         await delay(350);
         if (fieldContainsValue(directDescription, text)) return true;
@@ -1431,7 +1585,7 @@ async function fillDescription(value) {
     const matchingField = candidateFields().find((field) => field.haystack.includes("description"));
     if (matchingField && fieldContainsValue(matchingField.element, text)) return true;
   }
-  const editable = [...document.querySelectorAll('[contenteditable="true"], [role="textbox"]')].find((element) => isVisible(element));
+  const editable = [...document.querySelectorAll("[contenteditable], [role='textbox']")].find((element) => isVisible(element));
   if (editable) {
     if (setRichTextValue(editable, htmlValue)) {
       await delay(350);
@@ -1488,14 +1642,10 @@ async function fillDescriptionHtmlSource(htmlValue) {
 
   const sourceField = await waitForDescriptionSourceField();
   if (!sourceField) return false;
+  if (!isVisible(sourceField.element)) return false;
 
-  if (isVisible(sourceField.element)) {
-    await replaceDescriptionSourceNativeFirst(sourceField.element, htmlValue);
-  } else if (sourceField.forceSynthetic) {
-    replaceDescriptionSourceValue(sourceField.element, htmlValue);
-  } else {
-    replaceDescriptionSourceValue(sourceField.element, htmlValue);
-  }
+  await replaceDescriptionSourceNativeFirst(sourceField.element, htmlValue);
+  sourceField.element.blur?.();
   await delay(450);
   if (!descriptionSourceExactlyMatches(sourceField.element, htmlValue)) {
     if (isVisible(sourceField.element)) await replaceDescriptionSourceNativeFirst(sourceField.element, htmlValue);
@@ -1515,20 +1665,29 @@ async function enableHtmlCodeMode() {
 
   const checkbox = findHtmlCodeCheckbox();
   if (checkbox) {
-    if (!checkbox.checked) {
-      await clickHtmlCodeCheckbox(checkbox);
-      await waitForCondition(() => checkbox.checked || Boolean(findDescriptionSourceField()), 4500, 100);
+    if (checkbox.checked && !visibleDescriptionSourceField()) {
+      checkbox.click();
+      await delay(300);
     }
-    if (checkbox.checked || findDescriptionSourceField()) return true;
+    if (!checkbox.checked || !visibleDescriptionSourceField()) {
+      const label = findHtmlCodeLabel(checkbox) || checkbox.closest?.("label");
+      (label || checkbox).click();
+      await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4500, 100);
+    }
+    if (visibleDescriptionSourceField()) return true;
   }
 
   const control = findHtmlCodeControl();
   if (!control) return false;
   await clickHtmlCodeCheckbox(findHtmlCodeCheckboxNear(control) || findHtmlCodeCheckbox() || control);
   return waitForCondition(() => {
-    const refreshedCheckbox = findHtmlCodeCheckbox();
-    return refreshedCheckbox?.checked || Boolean(findDescriptionSourceField());
+    return Boolean(visibleDescriptionSourceField());
   }, 4500, 100);
+}
+
+function visibleDescriptionSourceField() {
+  const field = findDescriptionSourceField();
+  return field && isVisible(field.element) ? field : null;
 }
 
 async function clickHtmlCodeCheckbox(target) {
@@ -1545,10 +1704,9 @@ async function clickHtmlCodeCheckbox(target) {
     target?.parentElement,
   ].filter(Boolean);
   for (const item of targets) {
-    await clickEbayElement(item);
+    item.click?.();
     await delay(250);
-    const checkbox = findHtmlCodeCheckbox();
-    if (checkbox?.checked || findDescriptionSourceField()) return true;
+    if (visibleDescriptionSourceField()) return true;
   }
   const checkbox = findHtmlCodeCheckbox();
   if (checkbox && !checkbox.checked) {
@@ -1557,7 +1715,7 @@ async function clickHtmlCodeCheckbox(target) {
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     await delay(300);
   }
-  return Boolean(findHtmlCodeCheckbox()?.checked || findDescriptionSourceField());
+  return Boolean(visibleDescriptionSourceField());
 }
 
 async function waitForDescriptionSourceField() {
@@ -1572,16 +1730,15 @@ function findDescriptionSourceField() {
   const rawDescription = document.querySelector(
     'textarea[name="description"][id*="rawEditor"], textarea[id*="rawEditor"], textarea[name="description"][aria-label*="HTML" i], textarea[name="description"]'
   ) || document.querySelector('textarea[name="description"][id*="rawEditor"], textarea[name="description"]');
-  if (rawDescription && (descriptionHtmlModeIsEnabled() || descriptionFieldLooksLikeHtmlSource(rawDescription))) {
+  const htmlModeEnabled = descriptionHtmlModeIsEnabled();
+  if (rawDescription && (htmlModeEnabled || (isVisible(rawDescription) && descriptionFieldLooksLikeHtmlSource(rawDescription)))) {
     return { element: rawDescription, forceSynthetic: false };
   }
   const sourceField = candidateFields().find((field) => {
     const haystack = field.haystack;
-    const tagName = String(field.element.tagName || "").toLowerCase();
-    return (
-      (/html|source|code/.test(haystack) && /description|html|source|code/.test(haystack)) ||
-      (tagName === "textarea" && /description|html|source|code/.test(haystack))
-    );
+    const element = field.element;
+    const editorLike = element?.tagName === "TEXTAREA" || Boolean(element?.isContentEditable);
+    return editorLike && /html|source|code/.test(haystack) && /description|raweditor/.test(haystack);
   });
   if (sourceField) return sourceField;
   if (!descriptionHtmlModeIsEnabled()) return null;
@@ -1617,18 +1774,23 @@ async function replaceDescriptionSourceNativeFirst(element, value) {
   if (!text.trim()) return false;
   if (!element || !isVisible(element)) return false;
   try {
-    const clicked = await clickEbayElement(element);
-    await delay(clicked ? 200 : 80);
-    element.focus?.();
-    if (typeof element.select === "function") element.select();
-    if (typeof element.setSelectionRange === "function") element.setSelectionRange(0, String(element.value || "").length);
-    const nativeInput = await requestNativeEbayInput({ action: "replace-text", text });
-    await delay(500);
+    const nativeInput = await withEbayAssistantHidden(async () => {
+      const focused = await focusTextFieldForNativeReplacement(element);
+      if (!focused) return false;
+      return requestNativeEbayInput({ action: "replace-text", text });
+    });
+    await delay(450);
+    element.blur?.();
+    await delay(250);
     if (nativeInput && descriptionSourceExactlyMatches(element, text)) return true;
   } catch {}
   await replaceVisibleDescriptionSourceValue(element, text);
+  element.blur?.();
+  await delay(350);
   if (descriptionSourceExactlyMatches(element, text)) return true;
   await setEbayTextFieldValue(element, text);
+  element.blur?.();
+  await delay(350);
   return descriptionSourceExactlyMatches(element, text);
 }
 
@@ -1899,7 +2061,7 @@ function contentTypeForPath(path) {
 }
 
 function candidateFields() {
-  const elements = [...document.querySelectorAll("input, textarea, [contenteditable='true'], [role='textbox']")]
+  const elements = [...document.querySelectorAll("input, textarea, [contenteditable], [role='textbox']")]
     .filter(isVisible)
     .filter((element) => {
       if (element.tagName !== "INPUT") return true;
@@ -1914,6 +2076,8 @@ function candidateFields() {
         element.name,
         element.placeholder,
         element.getAttribute("aria-label"),
+        element.getAttribute("aria-placeholder"),
+        element.getAttribute("data-placeholder"),
         element.getAttribute("data-testid"),
         element.getAttribute("autocomplete"),
         labelText(element),
@@ -1962,29 +2126,31 @@ async function applyListingSchedule(pkg) {
 }
 
 async function setScheduleDate(schedule) {
-  const fields = candidateFields().filter(
-    (field) => /schedule|listingstart|startdate|starttime|date|time|goeslive/.test(field.haystack) || ["date", "time"].includes(field.element.type)
-  );
-  const dateField =
-    fields.find((field) => field.element === findScheduleDayField()) ||
-    fields.find((field) => /date|day|start/.test(field.haystack) && !/time/.test(field.haystack)) ||
-    fields.find((field) => field.element.type === "date");
-  if (!dateField) return scheduleVisible(schedule.usDate);
-  const calendarDateSet = await chooseScheduleCalendarDate(dateField.element, schedule);
-  if (calendarDateSet && scheduleDateFieldMatches(dateField.element, schedule)) return true;
+  const dateElement = findScheduleDateElement();
+  if (!dateElement) return scheduleVisible(schedule.usDate);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const currentDateElement = findScheduleDateElement() || dateElement;
+    const calendarDateSet = await chooseScheduleCalendarDate(currentDateElement, schedule);
+    if (calendarDateSet && scheduleDateFieldMatches(findScheduleDayField() || currentDateElement, schedule)) return true;
+  }
 
   // Fallback for eBay layouts that do not expose the calendar buttons. This
   // alone is not trusted for autosave because eBay can display a typed date
   // without committing it to the scheduled-listing state.
-  const value = dateField.element.type === "date" ? schedule.isoDate : schedule.usDate;
-  await setEbayTextFieldValue(dateField.element, value);
-  return scheduleDateFieldMatches(dateField.element, schedule);
+  const currentDateElement = findScheduleDateElement() || dateElement;
+  const value = currentDateElement.type === "date" ? schedule.isoDate : schedule.usDate;
+  await setEbayTextFieldValue(currentDateElement, value);
+  currentDateElement.dispatchEvent?.(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+  currentDateElement.dispatchEvent?.(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+  currentDateElement.blur?.();
+  await delay(250);
+  return scheduleDateFieldMatches(findScheduleDayField() || currentDateElement, schedule);
 }
 
 async function chooseScheduleCalendarDate(dateField, schedule) {
   const toggle = findScheduleCalendarToggle(dateField);
-  if (!toggle) return false;
-  await clickEbayElement(toggle);
+  if (!toggle && !dateField) return false;
+  await clickEbayElement(toggle || dateField);
   await delay(250);
 
   for (let attempt = 0; attempt < 18; attempt += 1) {
@@ -1992,7 +2158,7 @@ async function chooseScheduleCalendarDate(dateField, schedule) {
     if (target) {
       await clickEbayElement(target);
       await delay(400);
-      return scheduleDateFieldMatches(dateField, schedule);
+      return scheduleDateFieldMatches(findScheduleDayField() || dateField, schedule) || scheduleVisible(schedule.usDate);
     }
     const nextMonth = findScheduleCalendarNextMonth();
     if (!nextMonth) return false;
@@ -2046,13 +2212,20 @@ function findScheduleCalendarDay(schedule) {
   });
   if (fullDateMatch) return fullDateMatch;
 
-  const visibleCalendarText = buttons
-    .map((element) => element.parentElement?.innerText || "")
+  const visibleCalendarText = visibleCalendarContainers()
+    .map((element) => element.innerText || element.textContent || "")
     .filter(Boolean)
     .join(" ");
   const calendarMonthVisible = new RegExp(`${target.monthName}\\s+${schedule.year}`, "i").test(visibleCalendarText);
   if (!calendarMonthVisible) return null;
   return buttons.find((element) => (element.innerText || element.textContent || "").trim() === String(schedule.day)) || null;
+}
+
+function visibleCalendarContainers() {
+  const containers = [...document.querySelectorAll('[role="dialog"], [role="grid"], [role="application"], .calendar, [class*="calendar" i], [data-testid*="calendar" i], div')]
+    .filter(isVisible)
+    .filter((element) => /january|february|march|april|may|june|july|august|september|october|november|december/i.test(element.innerText || element.textContent || ""));
+  return containers.length ? containers : [document.body].filter(Boolean);
 }
 
 function findScheduleCalendarNextMonth() {
@@ -2073,6 +2246,19 @@ function findScheduleDayField() {
       );
       return /schedulestartdate|day|listingstartdate|startdate/.test(text);
     });
+}
+
+function findScheduleDateElement() {
+  const scheduleDayField = findScheduleDayField();
+  if (scheduleDayField) return scheduleDayField;
+  const fields = candidateFields().filter(
+    (field) => /schedule|listingstart|startdate|starttime|date|time|goeslive/.test(field.haystack) || ["date", "time"].includes(field.element.type)
+  );
+  return (
+    fields.find((field) => /date|day|start/.test(field.haystack) && !/time|hour|minute|am|pm/.test(field.haystack))?.element ||
+    fields.find((field) => field.element.type === "date")?.element ||
+    null
+  );
 }
 
 function scheduleDateFieldMatches(element, schedule) {
@@ -2159,18 +2345,18 @@ async function setScheduleMeridiem(suffix) {
   let opener = currentScheduleMeridiemButton();
   if (opener && elementText(opener).toUpperCase() === expected) return true;
   if (opener) {
-    await clickEbayElement(opener);
+    opener.click();
     await waitForCondition(() => Boolean(findScheduleMeridiemOption(expected, opener)), 2500, 100);
   }
   const target = findScheduleMeridiemOption(expected, opener);
   if (!target || typeof target.click !== "function") return false;
-  await clickEbayElement(target);
+  target.click();
   await waitForCondition(() => scheduleMeridiemReadsAs(expected), 2500, 100);
   if (scheduleMeridiemReadsAs(expected)) return true;
 
   opener = currentScheduleMeridiemButton();
   if (!opener) return false;
-  await clickEbayElement(opener);
+  opener.click();
   await delay(150);
   const refreshedTarget = findScheduleMeridiemOption(expected, opener);
   if (!refreshedTarget) return false;
@@ -2182,16 +2368,21 @@ async function setScheduleMeridiem(suffix) {
   return scheduleMeridiemReadsAs(expected);
 }
 
-function setScheduleMeridiemSelect(expected) {
+async function setScheduleMeridiemSelect(expected) {
   const select = [...document.querySelectorAll("select")]
     .filter(isVisible)
     .find((element) => [...element.options || []].some((option) => /^(AM|PM)$/i.test((option.textContent || option.value || "").trim())));
   if (!select) return false;
   const option = [...select.options].find((item) => (item.textContent || item.value || "").trim().toUpperCase() === expected);
   if (!option) return false;
-  select.value = option.value;
+  const nativeSetter = typeof HTMLSelectElement !== "undefined"
+    ? Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set
+    : null;
+  if (nativeSetter) nativeSetter.call(select, option.value);
+  else select.value = option.value;
   select.dispatchEvent(new Event("input", { bubbles: true }));
   select.dispatchEvent(new Event("change", { bubbles: true }));
+  await delay(300);
   return (select.options[select.selectedIndex]?.textContent || select.value || "").trim().toUpperCase() === expected;
 }
 
@@ -2516,7 +2707,7 @@ function setCheckboxByHints(hints, checked) {
 function setFieldValue(element, value) {
   const text = String(value ?? "");
   element.focus();
-  if (element.isContentEditable || element.getAttribute("contenteditable") === "true") {
+  if (isRichTextElement(element)) {
     element.textContent = text;
     element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2545,8 +2736,11 @@ async function setEbayTextFieldValue(element, value) {
   const text = String(value ?? "");
   const valueMatches = () => shouldRequireExactTextMatch(element) ? fieldValueMatchesExactly(element, text) : fieldContainsValue(element, text);
   try {
-    element.focus();
-    const nativeInput = await requestNativeEbayInput({ action: "replace-text", text });
+    const nativeInput = await withEbayAssistantHidden(async () => {
+      const focused = await focusTextFieldForNativeReplacement(element);
+      if (!focused) return false;
+      return requestNativeEbayInput({ action: "replace-text", text });
+    });
     if (nativeInput) {
       await delay(300);
       if (valueMatches()) return true;
@@ -2571,19 +2765,96 @@ async function setEbayTextFieldValue(element, value) {
   return valueMatches();
 }
 
+async function withEbayAssistantHidden(callback) {
+  const assistant = document.getElementById?.("autozs-ebay-fill-assistant");
+  const previousVisibility = assistant?.style?.visibility || "";
+  try {
+    if (assistant?.style) assistant.style.visibility = "hidden";
+    return await callback();
+  } finally {
+    if (assistant?.style) assistant.style.visibility = previousVisibility;
+  }
+}
+
+async function focusTextFieldForNativeReplacement(element) {
+  if (!element || !isVisible(element)) return false;
+  try {
+    element.scrollIntoView?.({ block: "center", inline: "center" });
+    await delay(100);
+    element.click?.();
+    element.focus?.();
+    selectTextFieldContents(element);
+    await delay(75);
+    if (elementOwnsActiveFocus(element)) return true;
+    await clickEbayElement(element);
+    await delay(150);
+    element.focus?.();
+    selectTextFieldContents(element);
+    await delay(75);
+    return elementOwnsActiveFocus(element);
+  } catch {
+    return false;
+  }
+}
+
+function selectTextFieldContents(element) {
+  if (!element) return;
+  try {
+    if (typeof element.select === "function") {
+      element.select();
+      return;
+    }
+    if (typeof element.setSelectionRange === "function") {
+      element.setSelectionRange(0, String(element.value || "").length);
+    }
+  } catch {}
+}
+
+function elementOwnsActiveFocus(element) {
+  const active = document.activeElement;
+  if (!active) return true;
+  if (active === element) return true;
+  if (typeof element.contains === "function" && element.contains(active)) return true;
+  if (isRichTextElement(element) && typeof active.closest === "function" && active.closest("[contenteditable], [role='textbox']") === element) return true;
+  return false;
+}
+
 function setRichTextValue(element, value) {
   const html = String(value || "");
   const text = listingDescriptionPlainText(html);
   element.focus();
-  if (looksLikeHtml(html)) {
-    element.innerHTML = html;
-  } else {
-    element.textContent = text;
+  let inserted = false;
+  if (isRichTextElement(element)) {
+    try {
+      const selection = window.getSelection?.();
+      const range = document.createRange?.();
+      if (selection && range) {
+        range.selectNodeContents(element);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      inserted = Boolean(document.execCommand?.(looksLikeHtml(html) ? "insertHTML" : "insertText", false, looksLikeHtml(html) ? html : text));
+    } catch {}
+  }
+  if (!inserted) {
+    if (looksLikeHtml(html)) {
+      element.innerHTML = html;
+    } else {
+      element.textContent = text;
+    }
   }
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertHTML", data: html }));
   element.dispatchEvent(new Event("change", { bubbles: true }));
   element.dispatchEvent(new Event("blur", { bubbles: true }));
   return fieldContainsValue(element, text);
+}
+
+function isRichTextElement(element) {
+  const contenteditable = element?.getAttribute?.("contenteditable");
+  return Boolean(
+    element?.isContentEditable ||
+    (contenteditable !== null && contenteditable !== undefined && String(contenteditable).toLowerCase() !== "false")
+  );
 }
 
 function fieldContainsValue(element, value) {

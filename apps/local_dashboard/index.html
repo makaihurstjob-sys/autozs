@@ -3500,6 +3500,11 @@
           const accountKey = accountKeys[0];
           if (blockIfEbayAccountMismatch(accountKey)) return;
           const assistantWindows = productIds.map(() => window.open("about:blank", "_blank"));
+          message(`Preparing images for ${productIds.length} scheduled product(s)...`);
+          await Promise.all(productIds.map(async (id) => {
+            await request(`/products/${id}/download-images`, { method: "POST" });
+            await request(`/products/${id}/prepare-images?size=1000`, { method: "POST" });
+          }));
           await Promise.all(productIds.map((id) => request(`/products/${id}/listing-schedule`, { method: "PATCH", body: JSON.stringify({ listing_schedule_at: schedule }) })));
           const jobs = await request("/listing-jobs", {
             method: "POST",
@@ -5314,7 +5319,7 @@
       async function openListingJobAssistants(jobs, assistantWindows = []) {
         for (const [index, job] of jobs.entries()) {
           const result = await request(`/listing-jobs/${job.id}/run`, { method: "POST" });
-          if (result.package && result.job?.assistant_url) {
+          if (result.job?.assistant_url) {
             if (assistantWindows[index]) assistantWindows[index].location.href = result.job.assistant_url;
             else window.open(result.job.assistant_url, "_blank", "noopener,noreferrer");
           } else {
