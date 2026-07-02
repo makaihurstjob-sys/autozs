@@ -141,6 +141,22 @@ if (saleBannerWithoutSpecialBuyText.source_price !== 99) {
   throw new Error(`Expected Home Depot sale banner price 99, got ${saleBannerWithoutSpecialBuyText.source_price}`);
 }
 
+const splitNormalPriceBeatsRoundedStructuredOffer = runCapture(
+  `
+ROBERTS Laminate and Wood Flooring Installation Kit 10-28
+Shop ROBERTS
+$
+22
+97
+Free Delivery
+`,
+  { offerPrice: "22.00", productName: "ROBERTS Laminate and Wood Flooring Installation Kit 10-28" }
+);
+
+if (splitNormalPriceBeatsRoundedStructuredOffer.source_price !== 22.97) {
+  throw new Error(`Expected split Home Depot visible price 22.97, got ${splitNormalPriceBeatsRoundedStructuredOffer.source_price}`);
+}
+
 const emailSignupDiscount = runCapture(
   `
 Prime-Line 30 in. Window Block and Tackle Sash Balance FA 2940

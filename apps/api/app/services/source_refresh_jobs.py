@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain import AutomationRun, EbayListing, Product, ProductStatus, SourceRefreshJob, SourceRefreshJobStatus
 from app.services.ebay_revisions import enqueue_ebay_price_revisions
+from app.services.importer import recalculate_all_draft_prices
 from app.services.settings import read_pricing_settings
 
 
@@ -231,6 +232,7 @@ def complete_source_refresh_job(db: Session, job_id: int, product_id: int) -> So
     job.message = "Price changed" if job.price_changed else "Price confirmed"
     db.commit()
     if job.price_changed:
+        recalculate_all_draft_prices(db, product_ids=[product_id])
         queued, updated = enqueue_ebay_price_revisions(db, product_ids=[product_id])
         job.revision_queued = bool(queued or updated)
         job.message = f"Price changed; {queued + updated} eBay revision job(s) queued"

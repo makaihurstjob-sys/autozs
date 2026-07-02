@@ -1,13 +1,15 @@
 from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.domain import AppSetting, EbayListing, Product, SourceRefreshJobStatus, SupplierProduct
+from app.models.domain import AppSetting, EbayListing, EbayRevisionJob, ListingDraft, Product, SourceRefreshJobStatus, SupplierProduct
 from app.services.source_refresh_jobs import (
     claim_next_source_refresh_job_any_batch,
+    complete_source_refresh_job,
     create_automatic_source_refresh_batch,
     create_source_refresh_batch,
     release_expired_source_refresh_jobs,
@@ -56,6 +58,20 @@ def add_ebay_listing(db, product, status="live"):
     db.add(listing)
     db.commit()
     return listing
+
+
+def add_listing_draft(db, product, calculated_price=30.0):
+    draft = ListingDraft(
+        product_id=product.id,
+        title=product.title,
+        description="Test description",
+        source_price=20.0,
+        calculated_price=calculated_price,
+        status="draft",
+    )
+    db.add(draft)
+    db.commit()
+    return draft
 
 
 def test_automatic_source_refresh_queues_due_products_and_claims_next_job() -> None:
@@ -124,3 +140,28 @@ def test_expired_source_refresh_job_returns_to_queue() -> None:
     assert released == 1
     assert job.status == SourceRefreshJobStatus.queued.value
     assert jobs[0].id == job.id
+
+
+def test_completed_source_refresh_recalculates_before_queuing_revision() -> None:
+    db = make_session()
+    product = add_source_product(db, updated_at=datetime.utcnow() - timedelta(hours=7))
+    supplier = product.supplier_products[0]
+    draft = add_listing_draft(db, product, calculated_price=30.0)
+    add_ebay_listing(db, product, status="live")
+    _batch_key, _due_available, jobs = create_source_refresh_batch(db, limit=1, interval_hours=6, force=False)
+
+    supplier.last_price = 10.0
+    db.commit()
+    completed = complete_source_refresh_job(db, jobs[0].id, product.id)
+    db.refresh(draft)
+    revision = db.scalar(select(EbayRevisionJob).where(EbayRevisionJob.product_id == product.id))
+
+    assert completed is not None
+    assert completed.captured_price == 10.0
+    assert completed.price_changed is True
+    assert completed.revision_queued is True
+    assert draft.source_price == 10.0
+    assert draft.calculated_price != 30.0
+    assert revision is not None
+    assert revision.source_price == 10.0
+    assert revision.target_price == draft.calculated_price

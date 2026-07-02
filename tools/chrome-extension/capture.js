@@ -500,11 +500,27 @@ function captureSourceProductFromPage() {
     .split("\n")
     .map(clean)
     .filter((line) => line && !subscriptionPattern.test(line) && !nonProductPricePattern.test(line))
-    .flatMap((line) => line.match(/\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}/g) || [])
-    .slice(0, 40)
-    .forEach((value) => {
-      const parsed = parsePrice(value);
-      if (parsed !== null) visiblePrices.push(parsed);
+    .slice(0, 80)
+    .forEach((line, index, lines) => {
+      const separateDollarWhole = line.match(/^\$$/);
+      const wholeAfterDollar = clean(lines[index + 1] || "").match(/^([0-9]{1,4}(?:,[0-9]{3})*)$/);
+      const centsAfterDollar = clean(lines[index + 2] || "").match(/^([0-9]{2})$/);
+      if (separateDollarWhole && wholeAfterDollar && centsAfterDollar) {
+        const parsed = Number(`${wholeAfterDollar[1].replace(/,/g, "")}.${centsAfterDollar[1]}`);
+        if (parsed > 0 && parsed < 10000) visiblePrices.push(parsed);
+        return;
+      }
+      const splitPrice = line.match(/^\$\s*([0-9]{1,4}(?:,[0-9]{3})*)$/);
+      const nextLineCents = clean(lines[index + 1] || "").match(/^([0-9]{2})$/);
+      if (splitPrice && nextLineCents) {
+        const parsed = Number(`${splitPrice[1].replace(/,/g, "")}.${nextLineCents[1]}`);
+        if (parsed > 0 && parsed < 10000) visiblePrices.push(parsed);
+        return;
+      }
+      (line.match(/\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\s*[.]\s*|\s+)?[0-9]{0,2}/g) || []).forEach((value) => {
+        const parsed = parsePrice(value);
+        if (parsed !== null) visiblePrices.push(parsed);
+      });
     });
 
   const detectShipping = () => {
@@ -607,8 +623,9 @@ function captureSourceProductFromPage() {
   return {
     source_url: cleanSourceUrl(),
     title: clean(productJson.name || document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title),
-    source_price:
-      detectHomeDepotSalePrice() || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null,
+    source_price: location.hostname.includes("homedepot.com")
+      ? detectHomeDepotSalePrice() || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
+      : detectHomeDepotSalePrice() || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null,
     detected_shipping: detectShipping(),
     subscription_discount_percent: detectSubscriptionDiscount(),
     description: bullets.length ? bullets.join("\n") : clean(productJson.description || metaDescription),
