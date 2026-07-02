@@ -59,8 +59,8 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
         assert listings["800262913581"].status == "active"
         assert listings["800262913581"].price == 123.53
         assert listings["800262913581"].views == 7
-        assert listings["800262913581"].started_at.isoformat() == "2026-06-29T16:00:01"
-        assert listings["800262913581"].renews_at.isoformat() == "2026-07-29T16:00:01"
+        assert listings["800262913581"].started_at.isoformat() == "2026-06-29T23:00:01"
+        assert listings["800262913581"].renews_at.isoformat() == "2026-07-29T23:00:01"
         assert listings["ACTIVE-MISSING-1"].status == "tombstoned"
         assert listings["SCHEDULED-MISSING-1"].status == "scheduled"
         assert listings["STALE-SCHEDULED-1"].status == "tombstoned"

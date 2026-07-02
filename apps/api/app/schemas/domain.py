@@ -923,6 +923,7 @@ class SettingsRead(BaseModel):
     default_listing_schedule_mode: str = "now"
     default_listing_schedule_days_ahead: float = 0.0
     default_listing_schedule_time: str = "09:00"
+    display_timezone: str = "America/New_York"
     auto_delist_zero_view_enabled: bool = False
     auto_delist_zero_view_days: float = 25.0
     default_vero_remove_brand_from_title: bool = True
@@ -991,6 +992,10 @@ class PricingSettingsUpdate(BaseModel):
     default_listing_schedule_mode: str | None = Field(default=None, pattern="^(now|scheduled)$")
     default_listing_schedule_days_ahead: float | None = Field(default=None, ge=0, le=30)
     default_listing_schedule_time: str | None = Field(default=None, pattern="^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    display_timezone: str | None = Field(
+        default=None,
+        pattern="^(America/New_York|America/Chicago|America/Denver|America/Los_Angeles|UTC)$",
+    )
     auto_delist_zero_view_enabled: bool | None = None
     auto_delist_zero_view_days: float | None = Field(default=None, ge=1, le=365)
     default_vero_remove_brand_from_title: bool | None = None

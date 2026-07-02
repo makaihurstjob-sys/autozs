@@ -2563,22 +2563,34 @@ function isSelectedChoice(element) {
 
 function parseListingSchedule(value) {
   if (!value) return null;
-  const date = new Date(value);
+  const text = String(value);
+  const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`);
   if (Number.isNaN(date.getTime())) return null;
   const pad = (number) => String(number).padStart(2, "0");
-  let hour = date.getHours();
-  const minute = date.getMinutes();
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+  );
+  let hour = Number(parts.hour);
+  const minute = Number(parts.minute);
   const suffix = hour >= 12 ? "PM" : "AM";
   const hour12 = hour % 12 || 12;
   return {
-    year: date.getFullYear(),
-    month: date.getMonth() + 1,
-    day: date.getDate(),
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
     hour12,
     minute: pad(minute),
     suffix,
-    isoDate: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
-    usDate: `${pad(date.getMonth() + 1)}/${pad(date.getDate())}/${date.getFullYear()}`,
+    isoDate: `${parts.year}-${parts.month}-${parts.day}`,
+    usDate: `${parts.month}/${parts.day}/${parts.year}`,
     time24: `${pad(hour)}:${pad(minute)}`,
     time12: `${hour12}:${pad(minute)} ${suffix}`,
   };

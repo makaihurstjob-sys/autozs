@@ -917,6 +917,12 @@ def test_source_refresh_interval_setting_drives_queue_default(client) -> None:
     assert item["reason"] == "Fresh enough"
 
 
+def test_dashboard_timezone_setting_defaults_to_eastern_and_can_change(client) -> None:
+    assert client.get("/settings").json()["display_timezone"] == "America/New_York"
+    updated = client.patch("/settings/pricing", json={"display_timezone": "America/Los_Angeles"})
+    assert updated.status_code == 200
+    assert updated.json()["display_timezone"] == "America/Los_Angeles"
+
 def test_recalculate_drafts_applies_current_settings_to_existing_products(client) -> None:
     imported = client.post(
         "/products/import",

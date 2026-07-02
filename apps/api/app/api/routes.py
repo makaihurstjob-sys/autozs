@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -665,7 +665,8 @@ def update_product_listing_schedule(
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    product.listing_schedule_at = payload.listing_schedule_at
+    schedule = payload.listing_schedule_at
+    product.listing_schedule_at = schedule.astimezone(timezone.utc).replace(tzinfo=None) if schedule and schedule.tzinfo else schedule
     db.commit()
     db.refresh(product)
     return product

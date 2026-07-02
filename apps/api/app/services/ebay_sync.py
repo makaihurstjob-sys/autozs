@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from typing import Any
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -414,12 +415,18 @@ def _parse_datetime(value: str) -> datetime | None:
         return None
     normalized = re.sub(r"\s+", " ", text)
     normalized = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", normalized, flags=re.IGNORECASE)
+    zone_match = re.search(r"\s+(PDT|PST|MDT|MST|CDT|CST|EDT|EST)$", normalized, flags=re.IGNORECASE)
+    zone_name = zone_match.group(1).upper() if zone_match else ""
     normalized = re.sub(r"\s+(PDT|PST|MDT|MST|CDT|CST|EDT|EST)$", "", normalized, flags=re.IGNORECASE)
     if normalized.endswith("Z"):
         normalized = f"{normalized[:-1]}+00:00"
     try:
         parsed = datetime.fromisoformat(normalized)
-        return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        if zone_name:
+            return _zoned_report_datetime_to_utc(parsed, zone_name)
+        return parsed
     except ValueError:
         pass
     for pattern in (
@@ -434,10 +441,25 @@ def _parse_datetime(value: str) -> datetime | None:
         "%b-%d-%y %H:%M:%S",
     ):
         try:
-            return datetime.strptime(normalized, pattern)
+            parsed = datetime.strptime(normalized, pattern)
+            return _zoned_report_datetime_to_utc(parsed, zone_name) if zone_name else parsed
         except ValueError:
             continue
     return None
+
+
+def _zoned_report_datetime_to_utc(value: datetime, abbreviation: str) -> datetime:
+    zone = {
+        "PDT": "America/Los_Angeles",
+        "PST": "America/Los_Angeles",
+        "MDT": "America/Denver",
+        "MST": "America/Denver",
+        "CDT": "America/Chicago",
+        "CST": "America/Chicago",
+        "EDT": "America/New_York",
+        "EST": "America/New_York",
+    }.get(abbreviation.upper(), "UTC")
+    return value.replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _unique_placeholder_sku(db: Session, requested: str) -> str:

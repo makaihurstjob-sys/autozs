@@ -388,9 +388,13 @@ async function runAssistantTest() {
   ) {
     throw new Error(`Expected HTML description fallback to preserve line breaks, got ${JSON.stringify(formattedFallbackDescription)}`);
   }
-  const schedule = vm.runInContext(`parseListingSchedule("2026-07-01T08:00:00")`, context);
+  const schedule = vm.runInContext(`parseListingSchedule("2026-07-01T15:00:00Z")`, context);
   if (schedule.usDate !== "07/01/2026" || schedule.time12 !== "8:00 AM" || schedule.time24 !== "08:00") {
     throw new Error(`Expected next Wednesday 8 AM schedule formatting, got ${JSON.stringify(schedule)}`);
+  }
+  const easternSchedule = vm.runInContext(`parseListingSchedule("2026-07-20T21:00:00Z")`, context);
+  if (easternSchedule.usDate !== "07/20/2026" || easternSchedule.time12 !== "2:00 PM" || easternSchedule.time24 !== "14:00") {
+    throw new Error(`Expected 5 PM Eastern to fill eBay as 2 PM Pacific, got ${JSON.stringify(easternSchedule)}`);
   }
   const doubledTitleMatch = vm.runInContext(
     `fieldValueMatchesExactly({ tagName: "INPUT", value: "1313 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen | FREE SHIPPING" }, "13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen | FREE SHIPPING")`,

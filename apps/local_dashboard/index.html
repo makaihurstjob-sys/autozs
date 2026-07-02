@@ -2879,10 +2879,31 @@
         if (panel) panel.scrollTop = viewState.scrollTop || 0;
       }
       function money(value) { return value === null || value === undefined ? "-" : `$${Number(value).toFixed(2)}`; }
+      function displayTimeZone() { return state.settings.display_timezone || "America/New_York"; }
+      function appDate(value) {
+        if (!value) return null;
+        if (value instanceof Date) return value;
+        const text = String(value);
+        const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
       function formatDateTime(value) {
         if (!value) return "-";
-        const date = new Date(value);
-        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+        const date = appDate(value);
+        return !date ? String(value) : date.toLocaleString([], { timeZone: displayTimeZone(), month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+      }
+      function zonedWallTimeToUtcIso(value, timeZone = displayTimeZone()) {
+        const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+        if (!match) return "";
+        const desired = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]));
+        const formatter = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+        const offsetAt = (instant) => {
+          const parts = Object.fromEntries(formatter.formatToParts(new Date(instant)).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+          return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second)) - instant;
+        };
+        let instant = desired - offsetAt(desired);
+        instant = desired - offsetAt(instant);
+        return new Date(instant).toISOString();
       }
       function timeAgo(seconds) {
         if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) return "never";
@@ -3504,6 +3525,7 @@
                   <label class="settings-field"><span>Title suffix</span><input id="setting-default_title_suffix" value="${esc(state.settings.default_title_suffix || "")}" placeholder=" | FREE SHIPPING" /></label>
                   <label class="settings-field"><span>Default eBay start</span><select id="setting-default_listing_schedule_mode"><option value="now" ${state.settings.default_listing_schedule_mode === "now" ? "selected" : ""}>Start immediately</option><option value="scheduled" ${state.settings.default_listing_schedule_mode === "scheduled" ? "selected" : ""}>Schedule by default</option></select></label>
                   <label class="settings-field"><span>Default start time</span><input id="setting-default_listing_schedule_time" type="time" value="${esc(state.settings.default_listing_schedule_time || "09:00")}" /></label>
+                  <label class="settings-field"><span>Dashboard time zone</span><select id="setting-display_timezone">${[["America/New_York", "Eastern Time"], ["America/Chicago", "Central Time"], ["America/Denver", "Mountain Time"], ["America/Los_Angeles", "Pacific Time"], ["UTC", "UTC"]].map(([value, label]) => `<option value="${value}" ${displayTimeZone() === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
                   <label class="settings-field"><span>Days ahead when scheduled</span><input id="setting-default_listing_schedule_days_ahead" type="number" min="0" max="30" value="${esc(state.settings.default_listing_schedule_days_ahead ?? 0)}" /></label>
                   <label class="settings-field"><span>Domestic shipping service</span><input id="setting-default_domestic_shipping_service" value="${esc(state.settings.default_domestic_shipping_service || "Economy Shipping")}" /></label>
                   <label class="settings-field"><span>Buyer shipping charge</span><input id="setting-default_buyer_shipping_cost" type="number" min="0" step="0.01" value="${esc(state.settings.default_buyer_shipping_cost ?? 0)}" /></label>
@@ -4000,7 +4022,7 @@
       function selectedBulkScheduleValue() {
         const date = document.getElementById("bulk-schedule-date")?.value || "";
         const time = document.getElementById("bulk-schedule-time")?.value || "";
-        return date && time ? `${date}T${time}` : "";
+        return date && time ? zonedWallTimeToUtcIso(`${date}T${time}`) : "";
       }
 
       async function applyBulkSchedule() {
@@ -5683,7 +5705,7 @@
           `<strong>${esc(job.title)}</strong><div class="draft">${supplierLogoSvgFromUrl(job.source_url)} ${esc(job.sku)} / product ${job.product_id}</div>`,
           `<div>${money(job.price)}</div><div class="draft">Profit ${money(job.estimated_profit)}</div>`,
           `<div>${esc(job.ebay_account_key)}</div><div class="draft">${esc(job.action)}</div>`,
-          job.listing_schedule_at ? `eBay start: ${new Date(job.listing_schedule_at).toLocaleString()}` : job.scheduled_for ? `Run: ${new Date(job.scheduled_for).toLocaleString()}` : "Now",
+          job.listing_schedule_at ? `eBay start: ${formatDateTime(job.listing_schedule_at)}` : job.scheduled_for ? `Run: ${formatDateTime(job.scheduled_for)}` : "Now",
           `<span class="status ${job.image_upload_status === "ready" ? "stage-ready" : "stage-images"}">${esc(`${job.local_image_count}/${job.image_count} images`)}</span>`,
           listingJobIssuesHtml(job),
           `<div class="actions">
@@ -5817,7 +5839,8 @@
       }
 
       function selectedEbayImportSchedule() {
-        return document.getElementById("ebay-import-schedule-at")?.value || document.getElementById("queue-scheduled-for")?.value || "";
+        const value = document.getElementById("ebay-import-schedule-at")?.value || document.getElementById("queue-scheduled-for")?.value || "";
+        return value ? zonedWallTimeToUtcIso(value) : "";
       }
 
       function clearEbayImportSchedule() {
@@ -5827,8 +5850,9 @@
 
       function selectedProductListingSchedule(productId) {
         const input = document.getElementById(`listing-schedule-${productId}`);
-        if (input?.value) return input.value;
-        return dateTimeLocalValue(productListingScheduleAt(productId)) || selectedEbayImportSchedule();
+        if (input?.value) return zonedWallTimeToUtcIso(input.value);
+        const savedSchedule = productListingScheduleAt(productId);
+        return savedSchedule ? appDate(savedSchedule)?.toISOString() || "" : selectedEbayImportSchedule();
       }
 
       function productListingScheduleAt(productId) {
@@ -5842,28 +5866,28 @@
 
       function dateTimeLocalValue(value) {
         if (!value) return "";
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
-        const pad = (part) => String(part).padStart(2, "0");
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        const date = appDate(value);
+        if (!date) return String(value).slice(0, 16);
+        const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: displayTimeZone(), year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+        return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
       }
 
       function formatSchedule(value) {
-        const date = new Date(value);
-        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+        return formatDateTime(value);
       }
 
       function defaultQueueDateTimeLocal() {
         if (state.settings.default_listing_schedule_mode !== "scheduled") return "";
         const days = Number(state.settings.default_listing_schedule_days_ahead || 0);
         const time = String(state.settings.default_listing_schedule_time || "09:00");
-        const date = new Date();
-        date.setDate(date.getDate() + days);
-        const [hour, minute] = time.split(":").map((part) => Number(part));
-        date.setHours(Number.isFinite(hour) ? hour : 9, Number.isFinite(minute) ? minute : 0, 0, 0);
-        if (date <= new Date()) date.setDate(date.getDate() + 1);
-        const pad = (value) => String(value).padStart(2, "0");
-        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        const target = new Date(Date.now() + days * 86400000);
+        const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: displayTimeZone(), year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(target).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+        let value = `${parts.year}-${parts.month}-${parts.day}T${time}`;
+        if (new Date(zonedWallTimeToUtcIso(value)) <= new Date()) {
+          const followingDay = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + 1));
+          value = `${followingDay.getUTCFullYear()}-${String(followingDay.getUTCMonth() + 1).padStart(2, "0")}-${String(followingDay.getUTCDate()).padStart(2, "0")}T${time}`;
+        }
+        return value;
       }
 
       async function queueSelectedProductDraft() {
@@ -5871,7 +5895,8 @@
         if (blockIfEbayAccountMismatch(accountKey)) return;
         const productId = Number(document.getElementById("queue-product-id")?.value);
         if (!productId) return message("No ready product selected.");
-        const scheduledFor = document.getElementById("queue-scheduled-for")?.value || "";
+        const selectedSchedule = document.getElementById("queue-scheduled-for")?.value || "";
+        const scheduledFor = selectedSchedule ? zonedWallTimeToUtcIso(selectedSchedule) : "";
         const jobs = await request("/listing-jobs", { method: "POST", body: JSON.stringify(queuePayload([productId], scheduledFor, accountKey)) });
         await refreshAll();
         message(`Created ${jobs.length} eBay draft job(s).`);
@@ -6076,27 +6101,30 @@
 
       function listingIsLive(item) {
         const status = String(item.listing_status || "").toLowerCase();
+        const scheduledStart = appDate(item.listing_started_at || item.listing_job?.listing_schedule_at);
+        if (scheduledStart && scheduledStart > new Date()) return false;
         if (["active", "live", "listed"].includes(status)) return true;
         const job = item.listing_job;
         if (job?.status !== "completed" || !job.listing_schedule_at) return false;
-        const start = new Date(job.listing_schedule_at);
-        return !Number.isNaN(start.getTime()) && start <= new Date();
+        const start = appDate(job.listing_schedule_at);
+        return Boolean(start && start <= new Date());
       }
 
       function listingIsScheduled(item) {
         if (listingIsLive(item) || item.listing_job?.status === "tombstoned") return false;
+        const scheduledStart = appDate(item.listing_started_at || item.listing_job?.listing_schedule_at);
+        if (scheduledStart && scheduledStart > new Date()) return true;
         if (String(item.listing_status || "").toLowerCase() === "scheduled") return true;
         return Boolean(item.listing_job?.listing_schedule_at);
       }
 
       function listingStartDate(item) {
         const explicit = item.listing_started_at || (listingIsLive(item) ? item.listing_job?.listing_schedule_at : null);
-        const date = explicit ? new Date(explicit) : null;
-        return date && !Number.isNaN(date.getTime()) ? date : null;
+        return appDate(explicit);
       }
 
       function listingRenewalDate(item) {
-        const explicit = item.listing_renews_at ? new Date(item.listing_renews_at) : null;
+        const explicit = appDate(item.listing_renews_at);
         if (explicit && !Number.isNaN(explicit.getTime())) return explicit;
         const start = listingStartDate(item);
         if (!start) return null;
@@ -7250,7 +7278,13 @@
       }
 
       function localDateKey(value) {
-        const date = value instanceof Date ? value : new Date(value);
+        if (!(value instanceof Date)) {
+          const instant = appDate(value);
+          if (!instant) return "";
+          const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: displayTimeZone(), year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(instant).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+          return `${parts.year}-${parts.month}-${parts.day}`;
+        }
+        const date = value;
         if (Number.isNaN(date.getTime())) return "";
         return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
       }
@@ -8378,6 +8412,7 @@
         pricing.default_listing_schedule_mode = document.getElementById("setting-default_listing_schedule_mode").value;
         pricing.default_listing_schedule_days_ahead = Number(document.getElementById("setting-default_listing_schedule_days_ahead").value || 0);
         pricing.default_listing_schedule_time = document.getElementById("setting-default_listing_schedule_time").value || "09:00";
+        pricing.display_timezone = document.getElementById("setting-display_timezone").value || "America/New_York";
         pricing.default_vero_remove_brand_from_title = document.getElementById("setting-default_vero_remove_brand_from_title").checked;
         pricing.default_strip_brand_from_title = pricing.default_vero_remove_brand_from_title;
         pricing.default_title_suffix = document.getElementById("setting-default_title_suffix").value;
