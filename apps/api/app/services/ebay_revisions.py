@@ -229,9 +229,15 @@ def update_ebay_revision_job(
             EbayRevisionJobStatus.completed.value,
             EbayRevisionJobStatus.failed.value,
             EbayRevisionJobStatus.cancelled.value,
+            EbayRevisionJobStatus.paused.value,
+        }:
+            job.lease_expires_at = None
+        if status in {
+            EbayRevisionJobStatus.completed.value,
+            EbayRevisionJobStatus.failed.value,
+            EbayRevisionJobStatus.cancelled.value,
         }:
             job.completed_at = _now()
-            job.lease_expires_at = None
         if status == EbayRevisionJobStatus.queued.value:
             job.started_at = None
             job.completed_at = None

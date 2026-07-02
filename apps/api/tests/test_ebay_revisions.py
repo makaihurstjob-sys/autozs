@@ -7,7 +7,12 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.domain import EbayListing, EbayRevisionJob, EbayRevisionJobStatus
 from app.services.ebay_revision_csv import build_ebay_price_revision_csv
-from app.services.ebay_revisions import MAX_REVISION_ATTEMPTS, release_expired_ebay_revision_jobs, start_next_ebay_revision_job
+from app.services.ebay_revisions import (
+    MAX_REVISION_ATTEMPTS,
+    release_expired_ebay_revision_jobs,
+    start_next_ebay_revision_job,
+    update_ebay_revision_job,
+)
 
 
 def make_session():
@@ -148,3 +153,25 @@ def test_bulk_upload_mode_does_not_lease_browser_revision_jobs() -> None:
     db.refresh(job)
     assert job.status == EbayRevisionJobStatus.queued.value
     assert job.attempts == 0
+
+
+def test_pausing_revision_clears_browser_lease_without_completing_job() -> None:
+    db = make_session()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=1,
+        target_price=29.99,
+        status=EbayRevisionJobStatus.running.value,
+        guard_passed=True,
+        approval_required=False,
+        approved_at=datetime.utcnow(),
+        started_at=datetime.utcnow(),
+        lease_expires_at=datetime.utcnow() + timedelta(minutes=10),
+    )
+    db.add(job)
+    db.commit()
+
+    update_ebay_revision_job(db, job, status=EbayRevisionJobStatus.paused.value)
+
+    assert job.lease_expires_at is None
+    assert job.completed_at is None
