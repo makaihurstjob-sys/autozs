@@ -144,8 +144,12 @@
         color: var(--ink);
         font-size: 12px;
       }
-      .header-stat.worker-online strong { color: var(--success); }
-      .header-stat.worker-stale strong { color: var(--warning); }
+      .header-stat.worker-online {
+        border-color: color-mix(in srgb, #2f80ed 38%, var(--line));
+        color: #2f80ed;
+      }
+      .header-stat.worker-online strong { color: #2f80ed; }
+      .header-stat.worker-stale strong { color: #d99a28; }
       .header-stat.worker-offline strong { color: var(--danger); }
       .system-runtime-grid {
         display: grid;
@@ -476,6 +480,57 @@
       }
       .product-card.shipping-unknown {
         border-left-color: #d99a28;
+      }
+      .product-card.watch-only {
+        min-height: 170px;
+        overflow: hidden;
+      }
+      .product-card-watch-content {
+        filter: blur(2.5px);
+        opacity: .38;
+        pointer-events: none;
+        user-select: none;
+      }
+      .product-card-progress-overlay {
+        align-items: center;
+        background: color-mix(in srgb, var(--panel) 78%, transparent);
+        border-radius: 8px;
+        display: flex;
+        inset: 0;
+        justify-content: center;
+        padding: 24px;
+        position: absolute;
+        z-index: 6;
+      }
+      .product-card-progress-box {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 18px 38px rgba(0,0,0,.18);
+        display: grid;
+        gap: 10px;
+        max-width: 420px;
+        padding: 16px;
+        width: min(420px, 90%);
+      }
+      .product-card-progress-box strong {
+        font-size: 16px;
+      }
+      .product-card-progress-box span,
+      .product-card-progress-box small {
+        color: var(--muted);
+      }
+      .product-card-progress-track {
+        background: var(--soft);
+        border-radius: 999px;
+        height: 10px;
+        overflow: hidden;
+      }
+      .product-card-progress-fill {
+        background: #2f80ed;
+        border-radius: inherit;
+        height: 100%;
+        transition: width .25s ease;
       }
       .listing-card-marker {
         align-items: center;
@@ -2841,7 +2896,7 @@
           ["Orders", state.orders.length],
         ].map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
         const workerClass = worker ? `worker-${worker.status || "offline"}` : "worker-offline";
-        container.innerHTML = `${stats}<span class="header-stat ${workerClass}" title="${escAttr(workerStatusTitle(worker))}">Worker <strong>${esc(workerLabel)}</strong></span>`;
+        container.innerHTML = `${stats}<span class="header-stat ${workerClass}" title="${escAttr(workerStatusTitle(worker))}"><strong>${esc(workerLabel)}</strong></span>`;
       }
 
       function primaryWorker() {
@@ -2850,10 +2905,23 @@
 
       function workerStatusLabel(worker) {
         if (!worker) return "offline";
-        const label = /windows/i.test(`${worker.label} ${worker.platform}`) ? "Windows worker" : worker.label || worker.worker_id || "Worker";
+        const label = workerDisplayName(worker);
         if (worker.status === "online") return `${label} online`;
         if (worker.status === "stale") return `${label} stale`;
         return `${label} offline`;
+      }
+
+      function workerDisplayName(worker) {
+        if (!worker) return "Worker";
+        const raw = worker.label || "";
+        const generic = !raw || /^(windows worker|local worker|local-worker|worker)$/i.test(raw.trim());
+        if (generic && worker.api_url) {
+          try {
+            const host = new URL(worker.api_url).hostname.split(".")[0];
+            if (host) return host;
+          } catch (_) {}
+        }
+        return raw || worker.worker_id || (/windows/i.test(`${worker.platform}`) ? "Windows worker" : "Worker");
       }
 
       function workerStatusTitle(worker) {
@@ -3445,7 +3513,7 @@
         return `<div class="add-products-dialog bulk-schedule-dialog" role="dialog" aria-modal="true" aria-label="Schedule drafts">
           <button class="add-products-close" onclick="closeBulkSchedule()" aria-label="Close schedule drafts">×</button>
           <h2>${isProductSchedule ? "Schedule listings" : "Schedule drafts"}</h2>
-          <p class="add-products-subtitle">${esc(count)} selected item${count === 1 ? "" : "s"} will ${isProductSchedule ? "be imported to eBay with this native listing start" : "use this eBay listing start"}.</p>
+          <p class="add-products-subtitle">${esc(count)} selected item${count === 1 ? "" : "s"} will ${isProductSchedule ? "be queued on the Windows worker with this native eBay listing start" : "use this eBay listing start"}.</p>
           <div class="bulk-schedule-fields">
             <label>Select date
               <input id="bulk-schedule-date" type="date" oninput="updateBulkScheduleButton()" />
@@ -3455,20 +3523,26 @@
             </label>
           </div>
           <div class="bulk-schedule-actions">
-            <button id="bulk-schedule-submit" onclick="applyBulkSchedule()" disabled>${isProductSchedule ? "Schedule and import" : "Schedule"}</button>
+            <button id="bulk-schedule-submit" onclick="applyBulkSchedule()" disabled>Schedule</button>
           </div>
         </div>`;
       }
 
       function bulkScheduleTargetCount(context) {
+        if (bulkScheduleView?.productIds?.length) return bulkScheduleView.productIds.length;
         return context === "listings" ? selectedVisibleListingItems().length : selectedVisibleProductIds().length;
       }
 
-      function openBulkSchedule(context) {
-        const count = bulkScheduleTargetCount(context);
+      function openBulkSchedule(context, productIds = null) {
+        const nextView = { context, productIds: Array.isArray(productIds) ? productIds.map(Number).filter(Boolean) : [] };
+        const count = nextView.productIds.length || (context === "listings" ? selectedVisibleListingItems().length : selectedVisibleProductIds().length);
         if (!count) return message("Select at least one visible item first.");
-        bulkScheduleView = { context };
+        bulkScheduleView = nextView;
         renderBulkScheduleModal();
+      }
+
+      function openProductSchedule(productId) {
+        openBulkSchedule("products", [productId]);
       }
 
       function closeBulkSchedule() {
@@ -3507,14 +3581,14 @@
           await refreshAll();
           message(`Scheduled ${items.length} selected eBay listing draft(s).`);
         } else {
-          const productIds = selectedVisibleProductIds();
+          const productIds = bulkScheduleView.productIds?.length ? bulkScheduleView.productIds : selectedVisibleProductIds();
           if (!productIds.length) return message("Select at least one visible product first.");
-          const products = visibleProducts().filter((product) => selectedProductIds.has(product.id));
+          const targetIdSet = new Set(productIds.map(Number));
+          const products = state.products.filter((product) => targetIdSet.has(product.id));
           const accountKeys = [...new Set(products.map((product) => selectedProductEbayStoreKey(product.id)).filter(Boolean))];
           if (accountKeys.length !== 1) return message("Select products assigned to one eBay store at a time.");
           const accountKey = accountKeys[0];
           if (blockIfEbayAccountMismatch(accountKey)) return;
-          const assistantWindows = productIds.map(() => window.open("about:blank", "_blank"));
           message(`Preparing images for ${productIds.length} scheduled product(s)...`);
           await Promise.all(productIds.map(async (id) => {
             await request(`/products/${id}/download-images`, { method: "POST" });
@@ -3525,10 +3599,12 @@
             method: "POST",
             body: JSON.stringify(queuePayload(productIds, schedule, accountKey))
           });
-          await openListingJobAssistants(jobs, assistantWindows);
+          productIds.forEach((id) => selectedProductIds.delete(id));
+          active = "eBay Listings";
+          listingStatusFilter = "scheduled";
           closeBulkSchedule();
           await refreshAll();
-          message(`Importing ${jobs.length} selected product(s) to eBay with a scheduled start.`);
+          message(`Scheduled ${jobs.length} product(s). Windows worker will handle the eBay flow.`);
         }
       }
 
@@ -4501,9 +4577,9 @@
         const accountKey = selectedProductEbayStoreKey(product.id);
         const accountOk = Boolean(accountKey) && ebayBrowserAccountOk(accountKey);
         return `<div class="product-card-primary-action">
-          <button ${accountOk ? "" : "disabled"} onclick="importProductToEbay(${product.id})" title="${escAttr(accountOk ? "Import this product to eBay" : accountKey ? ebayBrowserAccountMessage(accountKey) : "Add an eBay store profile in Settings first.")}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V8m0 0-4 4m4-4 4 4"/><path d="M5 4h14"/></svg>
-            Import
+          <button ${accountOk ? "" : "disabled"} onclick="openProductSchedule(${product.id})" title="${escAttr(accountOk ? "Schedule this product on eBay through the Windows worker" : accountKey ? ebayBrowserAccountMessage(accountKey) : "Add an eBay store profile in Settings first.")}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/><path d="M8 14h3v3H8z"/></svg>
+            Schedule
           </button>
         </div>`;
       }
@@ -4885,30 +4961,34 @@
         const job = item.listing_job;
         const summary = listingCardSummary(item);
         const updated = job?.updated_at ? new Date(job.updated_at).toLocaleDateString() : "-";
-        return `<div class="product-card shipping-${shipping.key}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
-          <div class="product-row listing-product-row">
-            ${listingLeadingControlsHtml(item, summary)}
-            <div class="product-main">
-              ${product ? sourceThumbHtml(product) : listingSourceThumbHtml(item)}
-              <div>
-                <div class="product-title">${esc(item.title)}</div>
-                <div class="product-sku">${listingMetaLineHtml(item, product, updated)}</div>
+        const watchOnly = listingJobIsWatchOnly(item);
+        return `<div class="product-card shipping-${shipping.key} ${watchOnly ? "watch-only" : ""}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
+          <div class="${watchOnly ? "product-card-watch-content" : ""}">
+            <div class="product-row listing-product-row">
+              ${listingLeadingControlsHtml(item, summary)}
+              <div class="product-main">
+                ${product ? sourceThumbHtml(product) : listingSourceThumbHtml(item)}
+                <div>
+                  <div class="product-title">${esc(item.title)}</div>
+                  <div class="product-sku">${listingMetaLineHtml(item, product, updated)}</div>
+                </div>
+              </div>
+              ${listingCompactFactsHtml(item, product, shipping)}
+              <div class="product-card-context listing-context">
+                <div class="compact-fact"><span>Status</span><strong>${listingStageBadgeHtml(item)}</strong></div>
+                ${item.revision_job ? `<div class="draft">${esc(ebayRevisionLabel(item.revision_job))}</div>` : ""}
+                ${job?.ebay_draft_id ? `<div class="draft">Draft ${esc(job.ebay_draft_id)}</div>` : ""}
+              </div>
+              <div class="product-card-primary-action">
+                ${ebayListingPrimaryActionHtml(item)}
               </div>
             </div>
-            ${listingCompactFactsHtml(item, product, shipping)}
-            <div class="product-card-context listing-context">
-              <div class="compact-fact"><span>Status</span><strong>${listingStageBadgeHtml(item)}</strong></div>
-              ${item.revision_job ? `<div class="draft">${esc(ebayRevisionLabel(item.revision_job))}</div>` : ""}
-              ${job?.ebay_draft_id ? `<div class="draft">Draft ${esc(job.ebay_draft_id)}</div>` : ""}
-            </div>
-            <div class="product-card-primary-action">
-              ${ebayListingPrimaryActionHtml(item)}
-            </div>
+            <details class="capture listing-drawer" id="listing-details-${item.product_id}" data-listing-details-id="${item.product_id}" ${listingDetailsOpenAttribute(item)} ontoggle="rememberListingDetailsOpenState(${item.product_id}, this.open)">
+              <summary>${esc(summary)}</summary>
+              ${listingDrawerHtml(item, product)}
+            </details>
           </div>
-          <details class="capture listing-drawer" id="listing-details-${item.product_id}" data-listing-details-id="${item.product_id}" ${listingDetailsOpenAttribute(item)} ontoggle="rememberListingDetailsOpenState(${item.product_id}, this.open)">
-            <summary>${esc(summary)}</summary>
-            ${listingDrawerHtml(item, product)}
-          </details>
+          ${watchOnly ? listingJobProgressOverlayHtml(item) : ""}
         </div>`;
       }
 
@@ -4957,6 +5037,36 @@
               <button class="secondary" onclick="checkReadiness(${item.product_id})">Readiness</button>
             </div>
             <pre id="ready-${item.product_id}" class="draft"></pre>
+          </div>
+        </div>`;
+      }
+
+      function listingJobIsWatchOnly(item) {
+        const job = item.listing_job;
+        return Boolean(job?.listing_schedule_at && ["queued", "running"].includes(job.status));
+      }
+
+      function listingJobProgressPercent(item) {
+        const job = item.listing_job;
+        if (!job) return 0;
+        if (job.status === "queued") return 15;
+        if (job.status === "running") return 55;
+        return 100;
+      }
+
+      function listingJobProgressOverlayHtml(item) {
+        const job = item.listing_job || {};
+        const percent = listingJobProgressPercent(item);
+        const label = job.status === "running" ? "Scheduling on Windows" : "Queued for Windows worker";
+        const start = job.listing_schedule_at ? formatDateTime(job.listing_schedule_at) : "Start time selected";
+        return `<div class="product-card-progress-overlay" aria-live="polite">
+          <div class="product-card-progress-box">
+            <strong>${esc(label)}</strong>
+            <span>${esc(item.title)}</span>
+            <small>${esc(start)} · ${esc(job.message || "AutoZS is preparing this listing in the Windows queue.")}</small>
+            <div class="product-card-progress-track" aria-label="${escAttr(`${percent}% complete`)}">
+              <div class="product-card-progress-fill" style="width: ${percent}%"></div>
+            </div>
           </div>
         </div>`;
       }
