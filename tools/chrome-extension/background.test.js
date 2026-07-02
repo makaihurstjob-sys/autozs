@@ -6,6 +6,7 @@ const source = fs.readFileSync(`${__dirname}/background.js`, "utf8");
 async function runNativePcInputTest() {
   let listener = null;
   const commands = [];
+  const closedTabs = [];
   const context = {
     console,
     URL,
@@ -24,6 +25,12 @@ async function runNativePcInputTest() {
           },
         },
       },
+      tabs: {
+        remove: (tabId, callback) => {
+          closedTabs.push(tabId);
+          callback?.();
+        },
+      },
     },
     navigator: { platform: "Win32" },
   };
@@ -37,6 +44,19 @@ async function runNativePcInputTest() {
   );
   if (reportFilename !== "AutoZS/ebay-active-listings-main-store-run-42.csv") {
     throw new Error(`Unexpected tagged report filename: ${reportFilename}`);
+  }
+
+  let closeResponse = null;
+  const closeReturned = listener(
+    { type: "autozs-close-report-runner-tab", runId: 42 },
+    { tab: { id: 11, url: "https://www.ebay.com/sh/reports/downloads#autozs_sync_run=42" } },
+    (payload) => {
+      closeResponse = payload;
+    }
+  );
+  if (closeReturned !== true) throw new Error("Expected async close response marker.");
+  if (closedTabs[0] !== 11 || !closeResponse?.ok) {
+    throw new Error(`Expected report runner tab close, got tabs=${JSON.stringify(closedTabs)} response=${JSON.stringify(closeResponse)}`);
   }
 
   let response = null;
