@@ -436,7 +436,7 @@ class EbayRevisionEnqueueResult(BaseModel):
 class EbayRevisionSheetPrepareRequest(BaseModel):
     account_key: str
     job_ids: list[int]
-    template_csv: str
+    template_csv: str | None = None
 
 
 class EbayRevisionSheetPrepareResult(BaseModel):
@@ -444,6 +444,18 @@ class EbayRevisionSheetPrepareResult(BaseModel):
     job_ids: list[int]
     filename: str
     csv_content: str
+
+
+class EbayRevisionTemplateUpdate(BaseModel):
+    filename: str
+    template_csv: str
+
+
+class EbayRevisionTemplateRead(BaseModel):
+    account_key: str
+    filename: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class EbayRevisionJobUpdate(BaseModel):

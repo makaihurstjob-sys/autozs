@@ -56,6 +56,8 @@ from app.schemas.domain import (
     EbayRevisionJobUpdate,
     EbayRevisionSheetPrepareRequest,
     EbayRevisionSheetPrepareResult,
+    EbayRevisionTemplateRead,
+    EbayRevisionTemplateUpdate,
     EbayExportResult,
     EbayApiPayload,
     EbayConnectionStatus,
@@ -146,7 +148,11 @@ from app.services.ebay_revisions import (
     start_next_ebay_revision_job,
     update_ebay_revision_job,
 )
-from app.services.ebay_revision_csv import build_ebay_price_revision_csv
+from app.services.ebay_revision_csv import (
+    build_ebay_price_revision_csv,
+    read_ebay_revision_template,
+    save_ebay_revision_template,
+)
 from app.services.ebay_sync import (
     import_listing_report_rows,
     list_ebay_sync_runs,
@@ -1169,12 +1175,16 @@ def prepare_ebay_revision_sheet(
     payload: EbayRevisionSheetPrepareRequest,
     db: Session = Depends(get_db),
 ) -> EbayRevisionSheetPrepareResult:
+    stored_template = read_ebay_revision_template(db, payload.account_key)
+    template_csv = payload.template_csv or (stored_template.template_csv if stored_template is not None else "")
+    if not template_csv:
+        raise HTTPException(status_code=409, detail=f"No eBay price revision template is stored for {payload.account_key}")
     try:
         csv_content, job_ids = build_ebay_price_revision_csv(
             db,
             account_key=payload.account_key,
             job_ids=payload.job_ids,
-            template_csv=payload.template_csv,
+            template_csv=template_csv,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1185,6 +1195,32 @@ def prepare_ebay_revision_sheet(
         filename=f"autozs-price-revisions-{safe_account or 'account'}.csv",
         csv_content=csv_content,
     )
+
+
+@router.put("/ebay/revision-templates/{account_key}", response_model=EbayRevisionTemplateRead)
+def put_ebay_revision_template(
+    account_key: str,
+    payload: EbayRevisionTemplateUpdate,
+    db: Session = Depends(get_db),
+) -> EbayRevisionTemplateRead:
+    try:
+        template = save_ebay_revision_template(
+            db,
+            account_key=account_key,
+            filename=payload.filename,
+            template_csv=payload.template_csv,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return EbayRevisionTemplateRead.model_validate(template, from_attributes=True)
+
+
+@router.get("/ebay/revision-templates/{account_key}", response_model=EbayRevisionTemplateRead)
+def get_ebay_revision_template(account_key: str, db: Session = Depends(get_db)) -> EbayRevisionTemplateRead:
+    template = read_ebay_revision_template(db, account_key)
+    if template is None:
+        raise HTTPException(status_code=404, detail="eBay revision template not found")
+    return EbayRevisionTemplateRead.model_validate(template, from_attributes=True)
 
 
 @router.post("/ebay/revision-jobs/next", response_model=EbayRevisionJobRead)

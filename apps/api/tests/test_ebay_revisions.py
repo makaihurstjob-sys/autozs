@@ -99,9 +99,47 @@ def test_price_revision_sheet_preserves_info_and_only_writes_guarded_columns() -
     )
 
     assert prepared_ids == [job.id]
-    assert content.startswith("#INFO,Version=0.0.2,Template=Edit price and quantity\r\n")
+    assert content.startswith("\ufeff#INFO,Version=0.0.2,Template=Edit price and quantity\r\n")
     assert "Action,Item number,Start price,Quantity\r\n" in content
     assert "Revise,800123456789,28.53,\r\n" in content
+
+
+def test_real_ebay_template_drops_prefilled_listing_row() -> None:
+    db = make_session()
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="live", price=24.53)
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=listing.id,
+        ebay_account_key="main-store",
+        target_price=28.53,
+        status=EbayRevisionJobStatus.queued.value,
+        guard_passed=True,
+        approval_required=False,
+        approved_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    template = (
+        "\ufeff#INFO,Version=1.0.0,Template= eBay-active-revise-price-quantity-download_US,,,,,,,,,\n"
+        "Action,Category name,Item number,Title,Listing site,Currency,Start price,Buy It Now price,"
+        "Available quantity,Relationship,Relationship details,Custom label (SKU)\n"
+        'Revise,"Impact Drivers (168134)","800262913581",Old listing,"US","USD","123.53",,"1",,,\n'
+    )
+
+    content, _ = build_ebay_price_revision_csv(
+        db,
+        account_key="main-store",
+        job_ids=[job.id],
+        template_csv=template,
+    )
+
+    assert content.startswith("\ufeff#INFO,Version=1.0.0,Template= eBay-active-revise-price-quantity-download_US")
+    assert "800262913581" not in content
+    assert "Revise,,800123456789,,,USD" not in content
+    assert "Revise,,800123456789,,," in content
+    assert ",28.53," in content
 
 
 def test_price_revision_sheet_rejects_wrong_account() -> None:

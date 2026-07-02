@@ -3,7 +3,7 @@ from io import StringIO
 
 from sqlalchemy.orm import Session
 
-from app.models.domain import EbayListing, EbayRevisionJob, EbayRevisionJobStatus
+from app.models.domain import EbayListing, EbayRevisionJob, EbayRevisionJobStatus, EbayRevisionTemplate
 
 
 HEADER_ALIASES = {
@@ -48,8 +48,34 @@ def build_ebay_price_revision_csv(
         prepared_ids.append(job.id)
 
     output = StringIO(newline="")
+    output.write("\ufeff")
     csv.writer(output, lineterminator="\r\n").writerows(output_rows)
     return output.getvalue(), prepared_ids
+
+
+def save_ebay_revision_template(
+    db: Session,
+    *,
+    account_key: str,
+    filename: str,
+    template_csv: str,
+) -> EbayRevisionTemplate:
+    rows = list(csv.reader(StringIO(template_csv.lstrip("\ufeff"))))
+    _find_header(rows)
+    template = db.query(EbayRevisionTemplate).filter(EbayRevisionTemplate.account_key == account_key).first()
+    if template is None:
+        template = EbayRevisionTemplate(account_key=account_key, filename=filename, template_csv=template_csv)
+        db.add(template)
+    else:
+        template.filename = filename
+        template.template_csv = template_csv
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+def read_ebay_revision_template(db: Session, account_key: str) -> EbayRevisionTemplate | None:
+    return db.query(EbayRevisionTemplate).filter(EbayRevisionTemplate.account_key == account_key).first()
 
 
 def _find_header(rows: list[list[str]]) -> tuple[int, dict[str, int]]:

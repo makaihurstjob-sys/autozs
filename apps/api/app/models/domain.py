@@ -325,6 +325,15 @@ class EbayRevisionJob(Base, TimestampMixin):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class EbayRevisionTemplate(Base, TimestampMixin):
+    __tablename__ = "ebay_revision_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    filename: Mapped[str] = mapped_column(Text, default="")
+    template_csv: Mapped[str] = mapped_column(Text)
+
+
 class ListingJob(Base, TimestampMixin):
     __tablename__ = "listing_jobs"
 
