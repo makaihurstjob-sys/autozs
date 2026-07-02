@@ -25,6 +25,25 @@ ACTIVE_BATCH_STATUSES = {
 BULK_REVISION_LEASE_MINUTES = 30
 
 
+def list_ebay_revision_batches(
+    db: Session,
+    *,
+    account_key: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[EbayRevisionBatch]:
+    stmt = select(EbayRevisionBatch)
+    if account_key:
+        stmt = stmt.where(EbayRevisionBatch.account_key == account_key)
+    if status:
+        stmt = stmt.where(EbayRevisionBatch.status == status)
+    return list(
+        db.scalars(
+            stmt.order_by(EbayRevisionBatch.updated_at.desc(), EbayRevisionBatch.id.desc()).limit(limit)
+        ).all()
+    )
+
+
 def prepare_next_ebay_revision_batch(
     db: Session,
     *,
@@ -190,6 +209,7 @@ def serialize_ebay_revision_batch(batch: EbayRevisionBatch, *, include_csv: bool
         "status": batch.status,
         "job_ids": json.loads(batch.job_ids_json or "[]"),
         "filename": batch.filename,
+        "result_filename": batch.result_filename,
         "rows_total": batch.rows_total,
         "rows_succeeded": batch.rows_succeeded,
         "rows_failed": batch.rows_failed,

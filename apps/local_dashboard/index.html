@@ -2545,6 +2545,7 @@
           ebayListings: nextState.ebayListings?.map((listing) => [listing.id, listing.product_id, listing.listing_id, listing.status, listing.started_at, listing.renews_at, listing.views, listing.updated_at]).slice(0, 100),
           ebaySyncRuns: nextState.ebaySyncRuns?.map((run) => [run.id, run.account_key, run.status, run.phase, run.updated_at, run.message]).slice(0, 25),
           ebayRevisionJobs: nextState.ebayRevisionJobs?.map((job) => [job.id, job.status, job.old_price, job.target_price, job.projected_profit, job.guard_passed, job.approved_at, job.updated_at]).slice(0, 100),
+          ebayRevisionBatches: nextState.ebayRevisionBatches?.map((batch) => [batch.id, batch.status, batch.rows_total, batch.rows_succeeded, batch.rows_failed, batch.attempts, batch.updated_at, batch.message]).slice(0, 100),
           sourceRefreshJobs: nextState.sourceRefreshJobs?.map((job) => [job.id, job.batch_key, job.status, job.captured_price, job.updated_at]).slice(0, 100),
           orders: nextState.orders?.length || 0,
           orderUpdated: latest(nextState.orders || []),
@@ -2593,7 +2594,7 @@
         refreshInFlight = true;
         try {
           if (silent) updatePollStatus("Syncing", "syncing");
-          const [candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, statsOverview] = await Promise.all([
+          const [candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, statsOverview] = await Promise.all([
             request("/research/candidates"),
             request("/research/sellers"),
             request("/products"),
@@ -2603,6 +2604,7 @@
             request("/ebay/listings"),
             request("/ebay/sync-runs"),
             request("/ebay/revision-jobs"),
+            request("/ebay/revision-batches"),
             request("/source-refresh/jobs"),
             request("/automation/runs"),
             request("/repricing/snapshots"),
@@ -2615,7 +2617,7 @@
             request("/workers"),
             request(`/stats/overview?range=${encodeURIComponent(statsRange)}&grain=${encodeURIComponent(statsGrain)}&account=${encodeURIComponent(statsAccount)}`)
           ]);
-          const nextState = { candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, statsOverview, priceHistory: state.priceHistory || {} };
+          const nextState = { candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, statsOverview, priceHistory: state.priceHistory || {} };
           updateEbaySyncView(nextState);
           const nextSignature = stateSignature(nextState);
           if (silent && nextSignature === lastStateSignature) {
@@ -3190,6 +3192,7 @@
           ...(state.listingJobs || []).map(listingJobActivityEntry),
           ...(state.sourceRefreshJobs || []).map(sourceRefreshJobActivityEntry),
           ...(state.ebayRevisionJobs || []).map(ebayRevisionJobActivityEntry),
+          ...(state.ebayRevisionBatches || []).map(ebayRevisionBatchActivityEntry),
         ].filter(Boolean);
         return entries
           .sort((a, b) => {
@@ -3278,6 +3281,40 @@
         };
       }
 
+      function ebayRevisionBatchActivityEntry(batch) {
+        const succeeded = Number(batch.rows_succeeded || 0);
+        const failed = Number(batch.rows_failed || 0);
+        const total = Number(batch.rows_total || 0);
+        return {
+          kind: "Revision batch",
+          id: batch.id,
+          group: ebayRevisionBatchActivityGroup(batch.status),
+          status: batch.status,
+          title: batch.filename || `eBay revision batch ${batch.id}`,
+          subtitle: `${batch.account_key || "unknown account"} · ${total} revision${total === 1 ? "" : "s"}`,
+          meta: [
+            `${succeeded} succeeded`,
+            `${failed} need attention`,
+            batch.result_filename ? `Result ${batch.result_filename}` : "Result pending",
+            batch.updated_at ? `Updated ${formatDateTime(batch.updated_at)}` : "",
+            `${batch.attempts || 0} upload attempt(s)`,
+          ].filter(Boolean),
+          message: batch.message || "",
+          updatedAt: batch.updated_at || batch.created_at,
+          productId: null,
+          viewStatus: "listed",
+        };
+      }
+
+      function ebayRevisionBatchActivityGroup(status) {
+        const normalized = String(status || "").toLowerCase();
+        if (["uploading", "waiting_results"].includes(normalized)) return "running";
+        if (normalized === "prepared") return "queued";
+        if (["needs_review", "failed"].includes(normalized)) return "attention";
+        if (normalized === "completed") return "done";
+        return "other";
+      }
+
       function listingJobIssuesText(job) {
         const issues = [...(job.missing_manual || []), ...(job.warnings || [])].filter(Boolean);
         return issues.length ? issues.slice(0, 3).join(" · ") : "";
@@ -3287,8 +3324,8 @@
         const normalized = String(status || "").toLowerCase();
         if (normalized === "running") return "running";
         if (normalized === "queued") return "queued";
-        if (["failed", "needs_review", "paused", "cancelled"].includes(normalized)) return "attention";
-        if (["completed", "saved_draft", "ready_to_save", "tombstoned"].includes(normalized)) return "done";
+        if (["failed", "needs_review", "paused"].includes(normalized)) return "attention";
+        if (["completed", "saved_draft", "ready_to_save", "tombstoned", "cancelled"].includes(normalized)) return "done";
         return "other";
       }
 

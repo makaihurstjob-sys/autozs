@@ -480,6 +480,7 @@ class EbayRevisionBatchRead(BaseModel):
     status: str
     job_ids: list[int]
     filename: str
+    result_filename: str | None = None
     rows_total: int
     rows_succeeded: int
     rows_failed: int

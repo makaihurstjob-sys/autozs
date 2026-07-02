@@ -5,8 +5,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.domain import EbayListing, EbayRevisionBatchStatus, EbayRevisionJob, EbayRevisionJobStatus
-from app.services.ebay_revision_batches import import_ebay_revision_result, prepare_next_ebay_revision_batch
+from app.models.domain import EbayListing, EbayRevisionBatch, EbayRevisionBatchStatus, EbayRevisionJob, EbayRevisionJobStatus
+from app.services.ebay_revision_batches import (
+    import_ebay_revision_result,
+    list_ebay_revision_batches,
+    prepare_next_ebay_revision_batch,
+)
 from app.services.ebay_revision_csv import build_ebay_price_revision_csv, save_ebay_revision_template
 from app.services.ebay_revisions import (
     MAX_REVISION_ATTEMPTS,
@@ -262,6 +266,7 @@ def test_bulk_revision_batch_reconciles_success_and_failure_rows() -> None:
     )
     imported = import_ebay_revision_result(db, batch, result_csv=result, filename="results.csv")
     assert imported.status == EbayRevisionBatchStatus.needs_review.value
+    assert imported.result_filename == "results.csv"
     assert imported.rows_succeeded == 1
     assert imported.rows_failed == 1
     db.refresh(jobs[0])
@@ -307,3 +312,31 @@ def test_bulk_revision_result_pauses_job_missing_from_results() -> None:
     db.refresh(job)
     assert job.status == EbayRevisionJobStatus.paused.value
     assert "did not contain this item" in (job.message or "")
+
+
+def test_revision_batches_list_is_newest_first_and_filterable() -> None:
+    db = make_session()
+    batches = [
+        EbayRevisionBatch(
+            account_key="secondary-store",
+            status=EbayRevisionBatchStatus.completed.value,
+            job_ids_json="[3]",
+            filename="secondary.csv",
+            csv_content="Action,Item number,Start price\n",
+            rows_total=1,
+        ),
+        EbayRevisionBatch(
+            account_key="main-store",
+            status=EbayRevisionBatchStatus.prepared.value,
+            job_ids_json="[2]",
+            filename="newest.csv",
+            csv_content="Action,Item number,Start price\n",
+            rows_total=1,
+        ),
+    ]
+    db.add_all(batches)
+    db.commit()
+
+    assert [batch.filename for batch in list_ebay_revision_batches(db)] == ["newest.csv", "secondary.csv"]
+    assert [batch.filename for batch in list_ebay_revision_batches(db, account_key="main-store")] == ["newest.csv"]
+    assert [batch.filename for batch in list_ebay_revision_batches(db, status="completed")] == ["secondary.csv"]

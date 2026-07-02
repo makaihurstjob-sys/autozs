@@ -161,6 +161,7 @@ from app.services.ebay_revision_csv import (
 )
 from app.services.ebay_revision_batches import (
     import_ebay_revision_result,
+    list_ebay_revision_batches,
     prepare_next_ebay_revision_batch,
     serialize_ebay_revision_batch,
     update_ebay_revision_batch,
@@ -1265,6 +1266,22 @@ def next_ebay_revision_batch(
     if batch is None:
         raise HTTPException(status_code=404, detail="No approved eBay price revisions are queued")
     return EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch, include_csv=True))
+
+
+@router.get("/ebay/revision-batches", response_model=list[EbayRevisionBatchRead])
+def read_ebay_revision_batches(
+    account_key: str | None = None,
+    status: str | None = None,
+    limit: int = Query(100, ge=1, le=250),
+    db: Session = Depends(get_db),
+) -> list[EbayRevisionBatchRead]:
+    batches = list_ebay_revision_batches(
+        db,
+        account_key=account_key,
+        status=status,
+        limit=limit,
+    )
+    return [EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch)) for batch in batches]
 
 
 @router.get("/ebay/revision-batches/{batch_id}", response_model=EbayRevisionBatchRead)
