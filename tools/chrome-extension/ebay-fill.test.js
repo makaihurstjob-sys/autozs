@@ -424,6 +424,22 @@ async function runAssistantTest() {
   if (!revisionConfirmation) {
     throw new Error("Expected eBay revision confirmation to be detected.");
   }
+  context.document.body.innerText = "Your changes were saved successfully.";
+  context.document.title = "Revise listing | eBay";
+  const revisionDiagnostic = vm.runInContext("ebayRevisionConfirmationDiagnostic()", context);
+  if (!revisionDiagnostic.includes("Your changes were saved successfully")) {
+    throw new Error(`Expected revision diagnostic to preserve relevant status text, got ${revisionDiagnostic}`);
+  }
+  vm.runInContext(`readAutoWorkflowState = () => ({
+    mode: "revise_price",
+    revisionJobId: "91",
+    phase: "confirmation_pending",
+    targetPrice: "27.99"
+  }); reportEbayRevisionConfirmation = async () => null;`, context);
+  const pendingRevision = await vm.runInContext(`runPriceRevisionWorkflow(${JSON.stringify({ price: 27.99 })})`, context);
+  if (!pendingRevision.message.includes("will not submit it again")) {
+    throw new Error(`Expected pending revision to remain idempotent, got ${JSON.stringify(pendingRevision)}`);
+  }
   context.document.querySelectorAll = originalQuerySelectorAll;
 
   const finalScheduleButton = new FakeButton("Schedule your listing");

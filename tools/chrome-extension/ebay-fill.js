@@ -19,6 +19,15 @@
   const requestedFill = params.get("autozs_fill") === "1" || Boolean(requestedProductId);
   if (requestedProductId && !requestedWorkflow) clearAutoWorkflowState();
   if (requestedWorkflow) {
+    const existingWorkflow = readAutoWorkflowState();
+    const sameRevisionAttempt =
+      requestedWorkflow === "revise_price" &&
+      existingWorkflow?.mode === "revise_price" &&
+      String(existingWorkflow?.revisionJobId || "") === String(requestedRevisionJobId || "");
+    const preservedRevisionPhase =
+      sameRevisionAttempt && ["submitting", "confirmation_pending", "completed"].includes(existingWorkflow?.phase)
+        ? existingWorkflow.phase
+        : "opened";
     writeAutoWorkflowState({
       productId: requestedProductId || readSavedProductId(),
       jobId: requestedJobId || "",
@@ -29,8 +38,8 @@
       autosave: requestedAutosave,
       autoSubmit: requestedAutoSubmit,
       listingScheduleAt: requestedListingScheduleAt,
-      status: "running",
-      phase: "opened",
+      status: preservedRevisionPhase === "completed" ? "completed" : "running",
+      phase: preservedRevisionPhase,
     });
   }
   const activeWorkflow = readAutoWorkflowState();
@@ -816,6 +825,17 @@ async function fillEbayListingDraft(pkg, onProgress = () => {}) {
 }
 
 async function runPriceRevisionWorkflow(pkg) {
+  const existingWorkflow = readAutoWorkflowState() || {};
+  if (["submitting", "confirmation_pending", "completed"].includes(existingWorkflow.phase)) {
+    const confirmation = await reportEbayRevisionConfirmation();
+    return {
+      lines: [confirmation ? "OK eBay confirmed revision" : "Waiting for authoritative eBay confirmation"],
+      message: confirmation
+        ? confirmation.message
+        : "AutoZS already submitted this revision and will not submit it again without a new attempt.",
+      terminal: Boolean(confirmation) || existingWorkflow.phase === "completed",
+    };
+  }
   if (!isEbayListingEditorPage()) {
     return {
       lines: ["Review eBay page"],
@@ -867,10 +887,23 @@ async function runPriceRevisionWorkflow(pkg) {
     }
     writeAutoWorkflowState({ phase: "submitting", status: "running" });
     const confirmed = await waitForCondition(() => Boolean(detectEbayRevisionConfirmation()), 20000, 500);
-    if (confirmed) await reportEbayRevisionConfirmation();
+    if (confirmed) {
+      await reportEbayRevisionConfirmation();
+    } else {
+      const diagnostic = ebayRevisionConfirmationDiagnostic();
+      if (revisionJobId) {
+        await updateEbayRevisionJob(revisionJobId, {
+          status: "paused",
+          message: `Submission clicked, but eBay confirmation was not recognized. ${diagnostic}`,
+        });
+      }
+      writeAutoWorkflowState({ phase: "confirmation_pending", status: "running" });
+    }
     return {
       lines: [`OK price $${targetPrice.toFixed(2)}`, "OK submitted revision"],
-      message: confirmed ? "eBay confirmed the price revision." : "Submitted the revision; waiting for eBay confirmation.",
+      message: confirmed
+        ? "eBay confirmed the price revision."
+        : "Submission clicked once; paused until AutoZS can prove the eBay result.",
       terminal: confirmed,
     };
   }
@@ -904,6 +937,20 @@ function findPriceRevisionSubmitButton() {
     if (match) return match.element;
   }
   return null;
+}
+
+function ebayRevisionConfirmationDiagnostic() {
+  const lines = String(document.body?.innerText || "")
+    .split("\n")
+    .map((value) => value.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((value) => /listing|revision|revis|updated?|changes?|saved?|success|error|problem/i.test(value))
+    .slice(0, 3)
+    .join(" | ")
+    .slice(0, 360);
+  const pageTitle = String(document.title || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  const path = String(location.pathname || "").slice(0, 160);
+  return `Page ${path || "/"}; title ${pageTitle || "unknown"}; status ${lines || "no matching status text"}.`;
 }
 
 async function submitPriceRevision(targetPrice) {
