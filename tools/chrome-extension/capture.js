@@ -387,7 +387,7 @@ function captureSourceProductFromPage() {
     const text = clean(value);
     if (!text) return null;
     const explicit =
-      text.match(/\$\s*([0-9]{1,4}(?:,[0-9]{3})*)(?:\s*[.]\s*|\s+)([0-9]{2})\b/) ||
+      text.match(/\$\s*([0-9]{1,4}(?:,[0-9]{3})*)(?:\s*[.]\s*|\s+\.?\s*)([0-9]{2})\b/) ||
       text.match(/\$\s*([0-9]{1,4}(?:,[0-9]{3})*)(?:\.([0-9]{2}))?/);
     if (!explicit) return null;
     const parsed = Number(explicit[1].replace(/,/g, "") + "." + (explicit[2] || "00"));
@@ -505,6 +505,13 @@ function captureSourceProductFromPage() {
       const separateDollarWhole = line.match(/^\$$/);
       const wholeAfterDollar = clean(lines[index + 1] || "").match(/^([0-9]{1,4}(?:,[0-9]{3})*)$/);
       const centsAfterDollar = clean(lines[index + 2] || "").match(/^([0-9]{2})(?:\b|[^0-9])/);
+      const dotAfterWhole = clean(lines[index + 2] || "") === ".";
+      const centsAfterDot = clean(lines[index + 3] || "").match(/^([0-9]{2})(?:\b|[^0-9])/);
+      if (separateDollarWhole && wholeAfterDollar && dotAfterWhole && centsAfterDot) {
+        const parsed = Number(`${wholeAfterDollar[1].replace(/,/g, "")}.${centsAfterDot[1]}`);
+        if (parsed > 0 && parsed < 10000) visiblePrices.push(parsed);
+        return;
+      }
       if (separateDollarWhole && wholeAfterDollar && centsAfterDollar) {
         const parsed = Number(`${wholeAfterDollar[1].replace(/,/g, "")}.${centsAfterDollar[1]}`);
         if (parsed > 0 && parsed < 10000) visiblePrices.push(parsed);
