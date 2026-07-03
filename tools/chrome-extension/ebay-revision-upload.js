@@ -191,12 +191,12 @@
     const account = typeof reportEbayBrowserAccount === "function" ? await reportEbayBrowserAccount(accountKey) : null;
     if (account && account.can_list === false) throw new Error(account.message || "The signed-in eBay account does not match this revision batch.");
     let batch = await readBatch();
-    if (["completed", "needs_review", "failed"].includes(batch.status)) return;
+    if (batch.status === "completed") return;
     if (batch.status === "prepared") {
       await submitPreparedBatch(batch);
       batch = await readBatch();
     }
-    if (["uploading", "waiting_results"].includes(batch.status)) await waitForResult(batch);
+    if (["uploading", "waiting_results", "needs_review", "failed"].includes(batch.status)) await waitForResult(batch);
   } catch (error) {
     const message = error?.message || String(error);
     patchBatch({ status: "needs_review", message: `Automatic eBay revision upload needs attention: ${message}` }).catch(() => {});

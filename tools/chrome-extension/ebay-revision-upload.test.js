@@ -136,7 +136,52 @@ async function runRenamedUploadResultTest() {
   }
 }
 
+async function runNeedsReviewRetryTest() {
+  const expectedFilename = "autozs-price-revisions-main-store-20260703040048.csv";
+  const downloadOutputLink = new FakeElement({
+    text: "Download results",
+    tagName: "A",
+    visible: false,
+    attrs: { href: "/sh/fpp/getfiledetails?client=fileexchange&requestId=456&filetype=output&fileName=result.csv" },
+  });
+  const row = new FakeElement({
+    text: `${expectedFilename}-renamed.csv Completed Download results`,
+    cells: [
+      new FakeElement({ text: expectedFilename }),
+      new FakeElement({ text: "Completed" }),
+      new FakeElement({ text: "Download results" }),
+    ],
+  });
+  row.downloads = [downloadOutputLink];
+
+  const context = {
+    console,
+    setTimeout,
+    URLSearchParams,
+    API: "http://127.0.0.1:8000",
+    location: { search: "?autozs_revision_batch=5&autozs_account_key=main-store", pathname: "/sh/reports/uploads" },
+    window: {},
+    document: {
+      querySelectorAll(selector) { return selector === '[role="row"], tr' ? [row] : []; },
+      querySelector() { return null; },
+    },
+    chrome: { runtime: { async sendMessage() { return { ok: true }; } } },
+    reportEbayBrowserAccount: async () => ({ can_list: true }),
+    fetch: async (url) => {
+      if (String(url).includes("/ebay/revision-batches/5")) {
+        return { ok: true, async json() { return { id: 5, status: "needs_review", filename: expectedFilename }; } };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  if (!downloadOutputLink.clicked) throw new Error("Expected a needs-review retry to download the existing eBay result.");
+}
+
 runRenamedUploadResultTest()
+  .then(runNeedsReviewRetryTest)
   .then(() => console.log("ebay revision upload tests ok"))
   .catch((error) => {
     console.error(error);
