@@ -2,6 +2,21 @@ function setStatus(text) {
   document.getElementById("status").textContent = text;
 }
 
+function setBuildLabel() {
+  const label = document.getElementById("build-label");
+  if (!label) return;
+  label.textContent = `Extension build: ${typeof CAPTURE_BUILD === "string" ? CAPTURE_BUILD : "unknown"}`;
+}
+
+function formatCaptureDebug(debug) {
+  if (!debug || typeof debug !== "object") return "";
+  const standard = debug.standard_price_text ? `standard "${debug.standard_price_text}"` : "standard -";
+  const visible = Array.isArray(debug.visible_prices) ? debug.visible_prices.join(", ") || "-" : "-";
+  const dom = Array.isArray(debug.dom_prices) ? debug.dom_prices.join(", ") || "-" : "-";
+  const structured = Array.isArray(debug.structured_prices) ? debug.structured_prices.join(", ") || "-" : "-";
+  return `\nBuild: ${typeof CAPTURE_BUILD === "string" ? CAPTURE_BUILD : "unknown"}\nPrice debug: ${standard}; visible ${visible}; dom ${dom}; structured ${structured}`;
+}
+
 function setConnectionState(state) {
   const status = document.getElementById("connection-status");
   const label = document.getElementById("connection-label");
@@ -78,6 +93,9 @@ async function captureCurrentTab() {
     });
 
     const payload = { ...result };
+    const captureDebug = result.capture_debug;
+    delete payload.capture_build;
+    delete payload.capture_debug;
     if (result.detected_shipping !== null && result.detected_shipping !== undefined) payload.source_shipping = result.detected_shipping;
     delete payload.detected_shipping;
 
@@ -97,7 +115,7 @@ async function captureCurrentTab() {
         payload.source_shipping === undefined ? "unknown" : payload.source_shipping === 0 ? "free" : `$${Number(payload.source_shipping).toFixed(2)}`
       }\nSubscription discount: ${payload.subscription_discount_percent ? `${payload.subscription_discount_percent}%` : "none detected"}\nImages: ${
         payload.image_urls ? payload.image_urls.split("\n").length : 0
-      }\nDownloaded: ${imageStatus}`
+      }\nDownloaded: ${imageStatus}${formatCaptureDebug(captureDebug)}`
     );
   } catch (error) {
     const hint = error.message === "Failed to fetch" ? "\n\nHint: make sure the AutoZS API is running and reload this unpacked extension after updates." : "";
@@ -204,6 +222,7 @@ async function refreshEbayBrowserAccountFromActiveTab(accountKey = "manual") {
 }
 
 applyTheme(fallbackTheme());
+setBuildLabel();
 syncTheme();
 checkApi();
 syncEbayProductIdDisplay().catch(() => setEbayProductIdDisplay(""));

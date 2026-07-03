@@ -1,5 +1,6 @@
 var API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-56u49jf.tailb2892a.ts.net:8443";
+var CAPTURE_BUILD = "2026-07-02-decimal-split-debug";
 
 function numberOrNull(value) {
   const cleaned = String(value || "").replace(/[^0-9.]/g, "");
@@ -627,16 +628,27 @@ function captureSourceProductFromPage() {
     document.querySelector('meta[property="og:description"]')?.content ||
     "";
 
+  const sourcePrice = location.hostname.includes("homedepot.com")
+    ? detectHomeDepotSalePrice() || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
+    : detectHomeDepotSalePrice() || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null;
+  const standardPriceText = clean(document.querySelector("#standard-price")?.innerText || "");
+
   return {
     source_url: cleanSourceUrl(),
     title: clean(productJson.name || document.querySelector("h1")?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title),
-    source_price: location.hostname.includes("homedepot.com")
-      ? detectHomeDepotSalePrice() || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
-      : detectHomeDepotSalePrice() || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null,
+    source_price: sourcePrice,
     detected_shipping: detectShipping(),
     subscription_discount_percent: detectSubscriptionDiscount(),
     description: bullets.length ? bullets.join("\n") : clean(productJson.description || metaDescription),
     image_urls: images.join("\n"),
+    capture_build: CAPTURE_BUILD,
+    capture_debug: {
+      standard_price_text: standardPriceText,
+      visible_prices: visiblePrices.slice(0, 6),
+      dom_prices: domPrices.slice(0, 6),
+      structured_prices: structuredPrices.slice(0, 6),
+      selected_price: sourcePrice,
+    },
   };
 }
 
