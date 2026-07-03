@@ -24,7 +24,7 @@ class FakeElement {
 
   querySelectorAll(selector) {
     if (selector === '[role="gridcell"], td, th') return this.cells;
-    if (selector === "button,a") return this.download ? [this.download] : [];
+    if (selector === 'a,button,[role="button"]') return this.downloads || [];
     return [];
   }
 
@@ -48,7 +48,13 @@ class FakeElement {
 async function runRenamedUploadResultTest() {
   const expectedFilename = "autozs-price-revisions-main-store-20260702153746.csv";
   const ebayRenamedFilename = "autozs-price-revisions-main-store-20260702153746-Jul-2026-02-08-37-48-13311709092.csv";
-  const downloadButton = new FakeElement({ text: "Download results", tagName: "BUTTON" });
+  const downloadMenuButton = new FakeElement({ text: "Download results", tagName: "BUTTON" });
+  const downloadOutputLink = new FakeElement({
+    text: "Download results",
+    tagName: "A",
+    visible: false,
+    attrs: { href: "/sh/fpp/getfiledetails?client=fileexchange&requestId=123&filetype=output&fileName=result.csv" },
+  });
   const row = new FakeElement({
     text: `${ebayRenamedFilename} Completed Download results`,
     cells: [
@@ -57,7 +63,7 @@ async function runRenamedUploadResultTest() {
       new FakeElement({ text: "Download results" }),
     ],
   });
-  row.download = downloadButton;
+  row.downloads = [downloadMenuButton, downloadOutputLink];
 
   const patches = [];
   let resultContextPrepared = 0;
@@ -119,8 +125,8 @@ async function runRenamedUploadResultTest() {
   vm.runInContext(source, context);
   await new Promise((resolve) => setImmediate(resolve));
 
-  if (!downloadButton.clicked) {
-    throw new Error("Expected AutoZS to click the eBay result download for the renamed upload row.");
+  if (!downloadOutputLink.clicked || downloadMenuButton.clicked) {
+    throw new Error("Expected AutoZS to click the output-file link instead of eBay's duplicate download menu button.");
   }
   if (resultContextPrepared !== 1) {
     throw new Error(`Expected one prepared result download context, got ${resultContextPrepared}`);

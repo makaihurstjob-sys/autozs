@@ -108,6 +108,20 @@
     return uploadRows().find((item) => rowMatchesUploadFilename(item.text, filename));
   }
 
+  function resultDownloadControl(row) {
+    const controls = Array.from(row.querySelectorAll("a,button,[role=\"button\"]"));
+    const outputLink = controls.find((element) => {
+      const href = clean(element.getAttribute("href"));
+      return /[?&]filetype=output(?:&|$)/i.test(href);
+    });
+    if (outputLink) return outputLink;
+    return controls.filter(visible).find((element) => {
+      const text = clean(element.innerText || element.textContent);
+      const label = clean(element.getAttribute("aria-label"));
+      return /download.*result|result.*download/i.test(`${text} ${label}`);
+    });
+  }
+
   function attachBatchFile(batch) {
     const input = document.querySelector('#file-input[type="file"], input[type="file"][accept*=".csv"], input[type="file"]');
     if (!input) return false;
@@ -167,11 +181,7 @@
       if (/failed|error|rejected/i.test(match.text)) throw new Error(match.text);
       return /completed|complete|processed|success/i.test(match.text) ? match : null;
     }, RESULT_TIMEOUT_MS, 2000, "eBay upload result row");
-    const download = Array.from(row.row.querySelectorAll("button,a")).find((element) => {
-      const text = clean(element.innerText || element.textContent);
-      const label = clean(element.getAttribute("aria-label"));
-      return visible(element) && /download.*result|result.*download|download/i.test(`${text} ${label}`);
-    });
+    const download = resultDownloadControl(row.row);
     if (!download) throw new Error("eBay completed the upload without exposing a result download.");
     await prepareResultDownload();
     download.click();

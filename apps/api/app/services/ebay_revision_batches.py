@@ -167,7 +167,9 @@ def import_ebay_revision_result(
         seen.add(job.id)
         error = _row_value(row, "error message", "error", "message", "failure reason")
         status = _row_value(row, "status", "result", "response status")
-        success = not error and (not status or any(token in status.lower() for token in ("success", "complete", "uploaded")))
+        success = not error and (
+            not status or any(token in status.lower() for token in ("success", "complete", "uploaded", "warning"))
+        )
         if success:
             update_ebay_revision_job(
                 db,
@@ -268,7 +270,11 @@ def _read_result_rows(text: str) -> list[dict[str, str]]:
     clean = text.lstrip("\ufeff")
     lines = clean.splitlines()
     header_index = next(
-        (index for index, line in enumerate(lines) if "item number" in line.lower() or "item id" in line.lower()),
+        (
+            index
+            for index, line in enumerate(lines)
+            if any(token in line.lower() for token in ("item number", "item id", "itemid"))
+        ),
         None,
     )
     if header_index is None:

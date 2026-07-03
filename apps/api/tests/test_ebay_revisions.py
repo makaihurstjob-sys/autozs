@@ -340,6 +340,47 @@ def test_revision_result_can_be_decoded_from_extension_base64() -> None:
     assert decode_ebay_revision_result(filename="result.csv", result_base64=encoded) == result
 
 
+def test_bulk_revision_result_accepts_ebay_itemid_warning_row() -> None:
+    db = make_session()
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="scheduled", price=20.0)
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=listing.id,
+        ebay_account_key="main-store",
+        target_price=22.0,
+        status=EbayRevisionJobStatus.running.value,
+        guard_passed=True,
+        approval_required=False,
+        approved_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.flush()
+    batch = EbayRevisionBatch(
+        account_key="main-store",
+        status=EbayRevisionBatchStatus.waiting_results.value,
+        job_ids_json=f"[{job.id}]",
+        filename="revision.csv",
+        csv_content="Action,Item number,Start price\nRevise,800123456789,22.00\n",
+        rows_total=1,
+    )
+    db.add(batch)
+    db.commit()
+
+    result = (
+        "Line Number,Action,Status,ErrorCode,ErrorMessage,WarningCode,WarningMessage,ItemID\n"
+        "2,Revise,Warning,,,21917236,Funds may be held,800123456789\n"
+    )
+    imported = import_ebay_revision_result(db, batch, result_csv=result, filename="results.csv")
+
+    assert imported.status == EbayRevisionBatchStatus.completed.value
+    db.refresh(job)
+    db.refresh(listing)
+    assert job.status == EbayRevisionJobStatus.completed.value
+    assert listing.price == 22.0
+
+
 def test_bulk_revision_result_pauses_job_missing_from_results() -> None:
     db = make_session()
     save_ebay_revision_template(
