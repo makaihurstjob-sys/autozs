@@ -504,14 +504,14 @@ function captureSourceProductFromPage() {
     .forEach((line, index, lines) => {
       const separateDollarWhole = line.match(/^\$$/);
       const wholeAfterDollar = clean(lines[index + 1] || "").match(/^([0-9]{1,4}(?:,[0-9]{3})*)$/);
-      const centsAfterDollar = clean(lines[index + 2] || "").match(/^([0-9]{2})$/);
+      const centsAfterDollar = clean(lines[index + 2] || "").match(/^([0-9]{2})(?:\b|[^0-9])/);
       if (separateDollarWhole && wholeAfterDollar && centsAfterDollar) {
         const parsed = Number(`${wholeAfterDollar[1].replace(/,/g, "")}.${centsAfterDollar[1]}`);
         if (parsed > 0 && parsed < 10000) visiblePrices.push(parsed);
         return;
       }
       const splitPrice = line.match(/^\$\s*([0-9]{1,4}(?:,[0-9]{3})*)$/);
-      const nextLineCents = clean(lines[index + 1] || "").match(/^([0-9]{2})$/);
+      const nextLineCents = clean(lines[index + 1] || "").match(/^([0-9]{2})(?:\b|[^0-9])/);
       if (splitPrice && nextLineCents) {
         const parsed = Number(`${splitPrice[1].replace(/,/g, "")}.${nextLineCents[1]}`);
         if (parsed > 0 && parsed < 10000) visiblePrices.push(parsed);

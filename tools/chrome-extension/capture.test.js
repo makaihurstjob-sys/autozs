@@ -157,6 +157,21 @@ if (splitNormalPriceBeatsRoundedStructuredOffer.source_price !== 22.97) {
   throw new Error(`Expected split Home Depot visible price 22.97, got ${splitNormalPriceBeatsRoundedStructuredOffer.source_price}`);
 }
 
+const splitNormalPriceWithUnitCents = runCapture(
+  `
+Henry 555 Level Pro 40 lb. Self-Leveling Underlayment 12165
+Shop Henry
+$39
+97 /case
+Free Delivery
+`,
+  { offerPrice: "39.00", productName: "Henry 555 Level Pro 40 lb. Self-Leveling Underlayment 12165" }
+);
+
+if (splitNormalPriceWithUnitCents.source_price !== 39.97) {
+  throw new Error(`Expected split Home Depot cents with unit price 39.97, got ${splitNormalPriceWithUnitCents.source_price}`);
+}
+
 const emailSignupDiscount = runCapture(
   `
 Prime-Line 30 in. Window Block and Tackle Sash Balance FA 2940
