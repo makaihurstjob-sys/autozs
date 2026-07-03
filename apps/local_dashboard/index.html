@@ -3339,6 +3339,7 @@
           updatedAt: job.updated_at || job.created_at,
           productId: job.product_id,
           viewStatus: "all",
+          runnerUrl: job.runner_url || "",
         };
       }
 
@@ -3468,11 +3469,22 @@
           <div class="job-activity-meta">${entry.meta.map((item) => `<span>${esc(item)}</span>`).join("")}</div>
           ${entry.message ? `<div class="job-activity-message">${esc(entry.message)}</div>` : ""}
           <div class="job-activity-actions">
-            ${entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
+            ${entry.runnerUrl ? `<button class="secondary" onclick="openJobActivityRunner(${jsArg(entry.runnerUrl)}, ${Number(entry.id)})">View</button>` : entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
             ${["needs_review", "paused", "failed"].includes(entry.revisionJob?.status) && entry.revisionJob?.guard_passed ? `<button onclick="approveEbayRevision(${Number(entry.id)})">${entry.revisionJob.status === "failed" ? "Retry" : entry.revisionJob.status === "paused" ? "Resume" : "Approve"}</button>` : ""}
             ${entry.revisionJob && ["needs_review", "queued", "paused", "failed"].includes(entry.revisionJob.status) ? `<button class="danger" onclick="cancelEbayRevision(${Number(entry.id)})">Cancel</button>` : ""}
           </div>
         </div>`;
+      }
+
+      function openJobActivityRunner(runnerUrl, jobId) {
+        if (!runnerUrl) return;
+        const opened = window.open(runnerUrl, "_blank", "noopener,noreferrer");
+        jobActivityOpen = false;
+        renderJobActivityButton();
+        renderJobActivityDrawer();
+        message(opened
+          ? `Opened source refresh #${jobId}. Capture/import there will complete this Job Activity item.`
+          : "Chrome blocked the source tab. Allow popups, then click View again.");
       }
 
       async function approveEbayRevision(jobId) {
