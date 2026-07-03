@@ -1863,9 +1863,22 @@
         background: var(--capture-bg);
         border: 1px solid var(--line);
         border-radius: 8px;
+        color: var(--ink);
+        cursor: pointer;
         display: grid;
         gap: 4px;
+        font: inherit;
         padding: 10px;
+        text-align: left;
+        transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
+      }
+      .job-activity-stat:hover,
+      .job-activity-stat.is-active {
+        background: color-mix(in srgb, var(--accent) 14%, var(--capture-bg));
+        border-color: var(--accent);
+      }
+      .job-activity-stat:hover {
+        transform: translateY(-1px);
       }
       .job-activity-stat span {
         color: var(--muted);
@@ -1875,6 +1888,26 @@
       }
       .job-activity-stat strong {
         font-size: 22px;
+      }
+      .job-activity-stat.is-active span,
+      .job-activity-stat.is-active strong {
+        color: var(--accent);
+      }
+      .job-activity-filter-row {
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        display: flex;
+        font-size: 13px;
+        gap: 12px;
+        justify-content: space-between;
+        padding: 0 22px 12px;
+      }
+      .job-activity-filter-row strong {
+        color: var(--ink);
+      }
+      .job-activity-filter-row button {
+        padding: 6px 10px;
       }
       .job-activity-list {
         display: grid;
@@ -2469,6 +2502,7 @@
       let pendingSilentRender = false;
       let lastInteractionAt = 0;
       let jobActivityOpen = false;
+      let jobActivityFilter = "all";
       const POLL_MS = 10000;
 
       ["pointerdown", "keydown", "input", "wheel"].forEach((eventName) => {
@@ -3202,10 +3236,31 @@
         return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16"/><path d="M4 12h10"/><path d="M4 19h7"/><path d="m16 16 2 2 4-5"/></svg>`;
       }
 
+      function setJobActivityFilter(filter) {
+        jobActivityFilter = ["all", "running", "queued", "attention"].includes(filter) ? filter : "all";
+        renderJobActivityDrawer();
+      }
+
+      function jobActivityFilterLabel(filter) {
+        return {
+          all: "All",
+          running: "Running",
+          queued: "Queued",
+          attention: "Attention",
+        }[filter] || "All";
+      }
+
       function jobActivityDrawerHtml() {
-        const entries = jobActivityEntries();
-        const counts = jobActivityCounts(entries);
-        const newest = entries[0]?.updatedAt ? `Newest update ${formatDateTime(entries[0].updatedAt)}` : "No job updates yet";
+        const allEntries = jobActivityEntries();
+        const counts = jobActivityCounts(allEntries);
+        const activeFilter = ["running", "queued", "attention"].includes(jobActivityFilter) ? jobActivityFilter : "all";
+        const entries = activeFilter === "all" ? allEntries : allEntries.filter((entry) => entry.group === activeFilter);
+        const newest = allEntries[0]?.updatedAt ? `Newest update ${formatDateTime(allEntries[0].updatedAt)}` : "No job updates yet";
+        const filterLabel = jobActivityFilterLabel(activeFilter);
+        const emptyTitle = activeFilter === "all" ? "No worker jobs yet" : `No ${filterLabel.toLowerCase()} jobs`;
+        const emptyBody = activeFilter === "all"
+          ? "Queued listing, price refresh, and revision jobs will appear here as soon as they start moving."
+          : `No ${filterLabel.toLowerCase()} jobs match this filter right now.`;
         return `<div class="job-activity-backdrop" onclick="toggleJobActivity(false)"></div>
           <aside class="job-activity-panel" role="dialog" aria-modal="true" aria-label="Job activity">
             <div class="job-activity-head">
@@ -3216,12 +3271,13 @@
               <button class="secondary icon-button" onclick="toggleJobActivity(false)" aria-label="Close job activity" title="Close">${esc("×")}</button>
             </div>
             <div class="job-activity-summary">
-              <div class="job-activity-stat"><span>Running</span><strong>${counts.running}</strong></div>
-              <div class="job-activity-stat"><span>Queued</span><strong>${counts.queued}</strong></div>
-              <div class="job-activity-stat"><span>Attention</span><strong>${counts.attention}</strong></div>
+              <button class="job-activity-stat ${activeFilter === "running" ? "is-active" : ""}" onclick="setJobActivityFilter('running')" aria-pressed="${activeFilter === "running"}"><span>Running</span><strong>${counts.running}</strong></button>
+              <button class="job-activity-stat ${activeFilter === "queued" ? "is-active" : ""}" onclick="setJobActivityFilter('queued')" aria-pressed="${activeFilter === "queued"}"><span>Queued</span><strong>${counts.queued}</strong></button>
+              <button class="job-activity-stat ${activeFilter === "attention" ? "is-active" : ""}" onclick="setJobActivityFilter('attention')" aria-pressed="${activeFilter === "attention"}"><span>Attention</span><strong>${counts.attention}</strong></button>
             </div>
+            ${activeFilter === "all" ? "" : `<div class="job-activity-filter-row"><span>Showing <strong>${esc(filterLabel)}</strong> jobs</span><button class="secondary" onclick="setJobActivityFilter('all')">Show all</button></div>`}
             <div class="job-activity-list">
-              ${entries.length ? entries.map(jobActivityCardHtml).join("") : `<div class="settings-empty"><strong>No worker jobs yet</strong><span>Queued listing, price refresh, and revision jobs will appear here as soon as they start moving.</span></div>`}
+              ${entries.length ? entries.map(jobActivityCardHtml).join("") : `<div class="settings-empty"><strong>${esc(emptyTitle)}</strong><span>${esc(emptyBody)}</span></div>`}
             </div>
           </aside>`;
       }
