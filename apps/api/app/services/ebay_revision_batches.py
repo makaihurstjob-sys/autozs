@@ -1,7 +1,9 @@
 import csv
+import base64
 from datetime import datetime, timedelta
-from io import StringIO
+from io import BytesIO, StringIO, TextIOWrapper
 import json
+from zipfile import BadZipFile, ZipFile
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -201,6 +203,30 @@ def import_ebay_revision_result(
     db.commit()
     db.refresh(batch)
     return batch
+
+
+def decode_ebay_revision_result(*, filename: str, result_csv: str = "", result_base64: str | None = None) -> str:
+    if result_csv.strip():
+        return result_csv
+    if not result_base64:
+        raise ValueError("The eBay revision result is empty")
+    try:
+        content = base64.b64decode(result_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("The eBay revision result is not valid base64") from exc
+    if not content:
+        raise ValueError("The eBay revision result is empty")
+    if str(filename or "").lower().endswith(".zip"):
+        try:
+            with ZipFile(BytesIO(content)) as archive:
+                names = [name for name in archive.namelist() if name.lower().endswith((".csv", ".tsv", ".txt"))]
+                if not names:
+                    raise ValueError("The eBay revision result ZIP did not contain a CSV file")
+                with archive.open(names[0]) as source:
+                    return TextIOWrapper(source, encoding="utf-8-sig", errors="replace").read()
+        except BadZipFile as exc:
+            raise ValueError("The eBay revision result ZIP is invalid") from exc
+    return content.decode("utf-8-sig", errors="replace")
 
 
 def serialize_ebay_revision_batch(batch: EbayRevisionBatch, *, include_csv: bool = False) -> dict:

@@ -196,6 +196,31 @@ function revisionResultFilename(context, originalFilename) {
   return `AutoZS/ebay-revision-results-${accountKey}-batch-${Number(context?.batchId)}.${extension}`;
 }
 
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function uploadRevisionResultDownload(context, downloadItem) {
+  const sourceUrl = downloadItem?.finalUrl || downloadItem?.url;
+  if (!sourceUrl) throw new Error("The completed eBay result download has no source URL.");
+  const response = await fetch(sourceUrl, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw new Error(`eBay result download returned ${response.status}`);
+  const content = new Uint8Array(await response.arrayBuffer());
+  if (!content.length) throw new Error("The downloaded eBay result is empty.");
+  return localApiJson(`/ebay/revision-batches/${Number(context.batchId)}/results`, {
+    method: "POST",
+    body: JSON.stringify({
+      filename: String(downloadItem.filename || context.filename || "ebay-revision-result.csv").split(/[\\/]/).pop(),
+      result_base64: bytesToBase64(content),
+    }),
+  });
+}
+
 function isEbayTab(tab) {
   try {
     const url = new URL(tab?.url || "");
@@ -366,18 +391,25 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
       const revisionDownloads = stored?.[EBAY_REVISION_RESULT_DOWNLOADS_KEY] || {};
       const revisionContext = revisionDownloads[String(delta.id)];
       if (revisionContext) {
-        await localApiJson(`/ebay/revision-batches/${revisionContext.batchId}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            status: "waiting_results",
-            message: "eBay result report downloaded. AutoZS is importing it now.",
-          }),
-        });
-        delete revisionDownloads[String(delta.id)];
-        await chrome.storage.local.set({
-          [EBAY_REVISION_RESULT_DOWNLOADS_KEY]: revisionDownloads,
-          [EBAY_REVISION_RESULT_CONTEXT_KEY]: null,
-        });
+        try {
+          const items = await chrome.downloads.search({ id: Number(delta.id) });
+          const item = items?.[0];
+          await uploadRevisionResultDownload(revisionContext, item);
+        } catch (error) {
+          await localApiJson(`/ebay/revision-batches/${revisionContext.batchId}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              status: "needs_review",
+              message: `Downloaded the eBay result, but direct import failed: ${error?.message || String(error)}`,
+            }),
+          });
+        } finally {
+          delete revisionDownloads[String(delta.id)];
+          await chrome.storage.local.set({
+            [EBAY_REVISION_RESULT_DOWNLOADS_KEY]: revisionDownloads,
+            [EBAY_REVISION_RESULT_CONTEXT_KEY]: null,
+          });
+        }
         return;
       }
       const downloads = stored?.[REPORT_DOWNLOADS_KEY] || {};

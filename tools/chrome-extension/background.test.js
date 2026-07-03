@@ -13,8 +13,18 @@ async function runNativePcInputTest() {
   const context = {
     console,
     URL,
+    Uint8Array,
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     fetch: async (url, options = {}) => {
       fetched.push({ url, options });
+      if (url === "https://www.ebay.com/result.csv") {
+        const bytes = Buffer.from("Action,Item number,Status\nRevise,800123456789,Success\n", "utf8");
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      }
       return {
         ok: true,
         status: 200,
@@ -71,6 +81,17 @@ async function runNativePcInputTest() {
   );
   if (reportFilename !== "AutoZS/ebay-active-listings-main-store-run-42.csv") {
     throw new Error(`Unexpected tagged report filename: ${reportFilename}`);
+  }
+
+  await context.uploadRevisionResultDownload(
+    { batchId: 3, accountKey: "main-store", filename: "result.csv" },
+    { finalUrl: "https://www.ebay.com/result.csv", filename: "/Downloads/AutoZS/result.csv" }
+  );
+  const directImport = fetched.find((request) => request.url.endsWith("/ebay/revision-batches/3/results"));
+  if (!directImport) throw new Error(`Expected direct revision result import, got ${JSON.stringify(fetched)}`);
+  const directPayload = JSON.parse(directImport.options.body);
+  if (directPayload.filename !== "result.csv" || !directPayload.result_base64) {
+    throw new Error(`Unexpected direct revision payload: ${JSON.stringify(directPayload)}`);
   }
 
   let closeResponse = null;

@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base
 from app.models.domain import EbayListing, EbayRevisionBatch, EbayRevisionBatchStatus, EbayRevisionJob, EbayRevisionJobStatus
 from app.services.ebay_revision_batches import (
+    decode_ebay_revision_result,
     import_ebay_revision_result,
     list_ebay_revision_batches,
     prepare_next_ebay_revision_batch,
@@ -328,6 +329,15 @@ def test_bulk_revision_batch_reconciles_success_and_failure_rows() -> None:
     assert listings[0].price == 25.0
     assert jobs[1].status == EbayRevisionJobStatus.paused.value
     assert "not eligible" in (jobs[1].message or "")
+
+
+def test_revision_result_can_be_decoded_from_extension_base64() -> None:
+    import base64
+
+    result = "Action,Item number,Status\nRevise,800123456789,Success\n"
+    encoded = base64.b64encode(result.encode("utf-8")).decode("ascii")
+
+    assert decode_ebay_revision_result(filename="result.csv", result_base64=encoded) == result
 
 
 def test_bulk_revision_result_pauses_job_missing_from_results() -> None:

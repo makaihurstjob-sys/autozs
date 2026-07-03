@@ -3400,6 +3400,7 @@
           updatedAt: batch.updated_at || batch.created_at,
           productId: null,
           viewStatus: "listed",
+          runnerUrl: batch.runner_url || "",
           revisionBatch: batch,
         };
       }
@@ -3470,7 +3471,7 @@
           <div class="job-activity-meta">${entry.meta.map((item) => `<span>${esc(item)}</span>`).join("")}</div>
           ${entry.message ? `<div class="job-activity-message">${esc(entry.message)}</div>` : ""}
           <div class="job-activity-actions">
-            ${entry.runnerUrl ? `<button class="secondary" onclick="openJobActivityRunner(${jsArg(entry.runnerUrl)}, ${Number(entry.id)})">View</button>` : entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
+            ${entry.runnerUrl ? `<button class="secondary" onclick="openJobActivityRunner(${jsArg(entry.runnerUrl)}, ${Number(entry.id)}, ${jsArg(entry.revisionBatch?.status === "waiting_results" ? "revision result" : "job")})">${entry.revisionBatch?.status === "waiting_results" ? "Retry result" : "View"}</button>` : entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
             ${["needs_review", "paused", "failed"].includes(entry.revisionJob?.status) && entry.revisionJob?.guard_passed ? `<button onclick="approveEbayRevision(${Number(entry.id)})">${entry.revisionJob.status === "failed" ? "Retry" : entry.revisionJob.status === "paused" ? "Resume" : "Approve"}</button>` : ""}
             ${entry.revisionJob && ["needs_review", "queued", "paused", "failed"].includes(entry.revisionJob.status) ? `<button class="danger" onclick="cancelEbayRevision(${Number(entry.id)})">Cancel</button>` : ""}
             ${entry.revisionBatch && ["needs_review", "failed"].includes(entry.revisionBatch.status) ? `<button class="danger" onclick="dismissEbayRevisionBatch(${Number(entry.id)})">Dismiss</button>` : ""}
@@ -3478,14 +3479,14 @@
         </div>`;
       }
 
-      function openJobActivityRunner(runnerUrl, jobId) {
+      function openJobActivityRunner(runnerUrl, jobId, purpose = "source refresh") {
         if (!runnerUrl) return;
         const opened = window.open(runnerUrl, "_blank", "noopener,noreferrer");
         jobActivityOpen = false;
         renderJobActivityButton();
         renderJobActivityDrawer();
         message(opened
-          ? `Opened source refresh #${jobId}. Capture/import there will complete this Job Activity item.`
+          ? `Opened ${purpose} #${jobId}. The worker will report its result back to Job Activity.`
           : "Chrome blocked the source tab. Allow popups, then click View again.");
       }
 

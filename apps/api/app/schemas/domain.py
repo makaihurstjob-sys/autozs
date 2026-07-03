@@ -471,7 +471,8 @@ class EbayRevisionBatchUpdate(BaseModel):
 
 class EbayRevisionBatchResultImport(BaseModel):
     filename: str = ""
-    result_csv: str
+    result_csv: str = ""
+    result_base64: str | None = None
 
 
 class EbayRevisionBatchRead(BaseModel):

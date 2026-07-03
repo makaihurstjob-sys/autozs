@@ -160,6 +160,7 @@ from app.services.ebay_revision_csv import (
     save_ebay_revision_template,
 )
 from app.services.ebay_revision_batches import (
+    decode_ebay_revision_result,
     import_ebay_revision_result,
     list_ebay_revision_batches,
     prepare_next_ebay_revision_batch,
@@ -1331,7 +1332,12 @@ def import_ebay_revision_batch_results(
     if batch is None:
         raise HTTPException(status_code=404, detail="eBay revision batch not found")
     try:
-        batch = import_ebay_revision_result(db, batch, result_csv=payload.result_csv, filename=payload.filename)
+        result_csv = decode_ebay_revision_result(
+            filename=payload.filename,
+            result_csv=payload.result_csv,
+            result_base64=payload.result_base64,
+        )
+        batch = import_ebay_revision_result(db, batch, result_csv=result_csv, filename=payload.filename)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return EbayRevisionBatchRead(**serialize_ebay_revision_batch(batch))
