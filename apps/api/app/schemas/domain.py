@@ -465,7 +465,7 @@ class EbayRevisionTemplateRead(BaseModel):
 
 
 class EbayRevisionBatchUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(prepared|uploading|waiting_results|completed|needs_review|failed)$")
+    status: str | None = Field(default=None, pattern="^(prepared|uploading|waiting_results|completed|needs_review|failed|cancelled)$")
     message: str | None = None
 
 

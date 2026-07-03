@@ -124,6 +124,7 @@ def update_ebay_revision_batch(
             EbayRevisionBatchStatus.completed.value,
             EbayRevisionBatchStatus.needs_review.value,
             EbayRevisionBatchStatus.failed.value,
+            EbayRevisionBatchStatus.cancelled.value,
         }:
             batch.completed_at = datetime.utcnow()
         if status in {EbayRevisionBatchStatus.needs_review.value, EbayRevisionBatchStatus.failed.value}:

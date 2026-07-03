@@ -3400,6 +3400,7 @@
           updatedAt: batch.updated_at || batch.created_at,
           productId: null,
           viewStatus: "listed",
+          revisionBatch: batch,
         };
       }
 
@@ -3408,7 +3409,7 @@
         if (["uploading", "waiting_results"].includes(normalized)) return "running";
         if (normalized === "prepared") return "queued";
         if (["needs_review", "failed"].includes(normalized)) return "attention";
-        if (normalized === "completed") return "done";
+        if (["completed", "cancelled"].includes(normalized)) return "done";
         return "other";
       }
 
@@ -3472,6 +3473,7 @@
             ${entry.runnerUrl ? `<button class="secondary" onclick="openJobActivityRunner(${jsArg(entry.runnerUrl)}, ${Number(entry.id)})">View</button>` : entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
             ${["needs_review", "paused", "failed"].includes(entry.revisionJob?.status) && entry.revisionJob?.guard_passed ? `<button onclick="approveEbayRevision(${Number(entry.id)})">${entry.revisionJob.status === "failed" ? "Retry" : entry.revisionJob.status === "paused" ? "Resume" : "Approve"}</button>` : ""}
             ${entry.revisionJob && ["needs_review", "queued", "paused", "failed"].includes(entry.revisionJob.status) ? `<button class="danger" onclick="cancelEbayRevision(${Number(entry.id)})">Cancel</button>` : ""}
+            ${entry.revisionBatch && ["needs_review", "failed"].includes(entry.revisionBatch.status) ? `<button class="danger" onclick="dismissEbayRevisionBatch(${Number(entry.id)})">Dismiss</button>` : ""}
           </div>
         </div>`;
       }
@@ -3507,6 +3509,20 @@
           await refreshAll({ silent: true });
           renderJobActivityDrawer();
           message(`Cancelled eBay price update ${jobId}.`);
+        } catch (error) {
+          message(error.message);
+        }
+      }
+
+      async function dismissEbayRevisionBatch(batchId) {
+        try {
+          await request(`/ebay/revision-batches/${Number(batchId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "cancelled", message: "Dismissed from Job Activity after manual review." })
+          });
+          await refreshAll({ silent: true });
+          renderJobActivityDrawer();
+          message(`Dismissed stale eBay revision batch ${batchId}.`);
         } catch (error) {
           message(error.message);
         }
