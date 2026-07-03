@@ -1,5 +1,5 @@
-var API = "http://127.0.0.1:8000";
-var DASHBOARD = "http://127.0.0.1:3000";
+var API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
+var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-56u49jf.tailb2892a.ts.net:8443";
 
 function numberOrNull(value) {
   const cleaned = String(value || "").replace(/[^0-9.]/g, "");

@@ -9,7 +9,7 @@ const EBAY_REVISION_BATCH_ALARM = "autozs-ebay-revision-batch-poll";
 const EBAY_REVISION_BATCH_LAST_OPENED_KEY = "autozsEbayRevisionBatchLastOpened";
 const EBAY_REVISION_RESULT_CONTEXT_KEY = "autozsEbayRevisionResultContext";
 const EBAY_REVISION_RESULT_DOWNLOADS_KEY = "autozsEbayRevisionResultDownloads";
-const LOCAL_API = "http://127.0.0.1:8000";
+const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 
 function reportDownloadFilename(context, originalFilename) {
   const extensionMatch = String(originalFilename || "").toLowerCase().match(/\.(csv|tsv|txt|zip)$/);

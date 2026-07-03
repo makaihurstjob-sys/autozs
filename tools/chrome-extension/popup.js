@@ -56,13 +56,13 @@ async function checkApi(showError = false) {
     return online;
   } catch (error) {
     setConnectionState("offline");
-    if (showError) setStatus(`Local API is offline or blocked: ${error.message}`);
+    if (showError) setStatus(`AutoZS API is offline or blocked: ${error.message}`);
     return false;
   }
 }
 
 async function captureCurrentTab() {
-  setStatus("Checking local API...");
+  setStatus("Checking AutoZS API...");
   if (!(await checkApi(true))) return;
   setStatus("Capturing current tab...");
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -100,13 +100,13 @@ async function captureCurrentTab() {
       }\nDownloaded: ${imageStatus}`
     );
   } catch (error) {
-    const hint = error.message === "Failed to fetch" ? "\n\nHint: make sure the local API is running and reload this unpacked extension after updates." : "";
+    const hint = error.message === "Failed to fetch" ? "\n\nHint: make sure the AutoZS API is running and reload this unpacked extension after updates." : "";
     setStatus(`Capture failed: ${error.message}${hint}`);
   }
 }
 
 async function showEbayAssistant() {
-  setStatus("Checking local API...");
+  setStatus("Checking AutoZS API...");
   if (!(await checkApi(true))) return;
 
   const productId = Number(await syncEbayProductIdDisplay());

@@ -17,6 +17,8 @@
     "service_worker": "background.js"
   },
   "host_permissions": [
+    "https://desktop-56u49jf.tailb2892a.ts.net/*",
+    "https://desktop-56u49jf.tailb2892a.ts.net:8443/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*",
     "https://www.homedepot.com/*",

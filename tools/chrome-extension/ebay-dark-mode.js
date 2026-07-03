@@ -1,7 +1,7 @@
 (async () => {
   const STYLE_ID = "autozs-ebay-dark-mode-style";
   const ROOT_CLASS = "autozs-ebay-dark-mode";
-  const LOCAL_API = "http://127.0.0.1:8000";
+  const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
   const DARK_MODE_BUILD = "2026-06-30-seller-hub";
   const existingStyle = document.getElementById(STYLE_ID);
   const existingBuild = existingStyle?.getAttribute?.("data-autozs-build") || "";
