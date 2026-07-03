@@ -8,7 +8,7 @@ async function runNativePcInputTest() {
   const commands = [];
   const closedTabs = [];
   const createdTabs = [];
-  const storage = {};
+  const storage = { autozsWorkerMode: "operations" };
   const fetched = [];
   const context = {
     console,
@@ -162,6 +162,18 @@ async function runNativePcInputTest() {
   }
   await context.openNextEbayRevisionJob();
   if (createdTabs.length !== 1) throw new Error("Expected revision poll throttle to prevent duplicate tabs.");
+
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsWorkerMode = "viewer";
+  storage.autozsEbayRevisionLastOpened = 0;
+  await context.openNextEbayRevisionJob();
+  if (fetched.some((request) => request.url.endsWith("/ebay/revision-jobs/next"))) {
+    throw new Error(`Expected viewer mode to skip revision queue claim, got ${JSON.stringify(fetched)}`);
+  }
+  if (createdTabs.length !== 0) {
+    throw new Error(`Expected viewer mode to avoid opening worker tabs, got ${JSON.stringify(createdTabs)}`);
+  }
 }
 
 runNativePcInputTest()

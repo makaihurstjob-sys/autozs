@@ -10,6 +10,31 @@ const EBAY_REVISION_BATCH_LAST_OPENED_KEY = "autozsEbayRevisionBatchLastOpened";
 const EBAY_REVISION_RESULT_CONTEXT_KEY = "autozsEbayRevisionResultContext";
 const EBAY_REVISION_RESULT_DOWNLOADS_KEY = "autozsEbayRevisionResultDownloads";
 const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
+const AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
+
+function defaultAutozsWorkerMode() {
+  const platform = String(
+    globalThis.navigator?.userAgentData?.platform ||
+    globalThis.navigator?.platform ||
+    globalThis.navigator?.userAgent ||
+    ""
+  );
+  return /\bWin|Windows\b/i.test(platform) ? "operations" : "viewer";
+}
+
+async function readAutozsWorkerMode() {
+  try {
+    const stored = await chrome.storage.local.get(AUTOZS_WORKER_MODE_KEY);
+    const mode = stored?.[AUTOZS_WORKER_MODE_KEY];
+    return mode === "operations" || mode === "viewer" ? mode : defaultAutozsWorkerMode();
+  } catch {
+    return defaultAutozsWorkerMode();
+  }
+}
+
+async function canRunAutozsWorkerJobs() {
+  return (await readAutozsWorkerMode()) === "operations";
+}
 
 function reportDownloadFilename(context, originalFilename) {
   const extensionMatch = String(originalFilename || "").toLowerCase().match(/\.(csv|tsv|txt|zip)$/);
@@ -77,6 +102,7 @@ async function openSourceRefreshRunnerUrl(url) {
 }
 
 async function openNextSourceRefreshJob() {
+  if (!(await canRunAutozsWorkerJobs())) return;
   if (await hasRunningSourceRefreshJob()) return;
   const stored = await chrome.storage.local.get(SOURCE_REFRESH_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[SOURCE_REFRESH_LAST_OPENED_KEY] || 0);
@@ -126,6 +152,7 @@ async function openEbayRevisionRunner(job) {
 }
 
 async function openNextEbayRevisionJob() {
+  if (!(await canRunAutozsWorkerJobs())) return;
   const stored = await chrome.storage.local.get(EBAY_REVISION_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_REVISION_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 30 * 1000) return;
@@ -174,6 +201,7 @@ function isEbayRevisionBatchRunnerUrl(url, batchId = null) {
 }
 
 async function openNextEbayRevisionBatch() {
+  if (!(await canRunAutozsWorkerJobs())) return;
   const stored = await chrome.storage.local.get(EBAY_REVISION_BATCH_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_REVISION_BATCH_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 60 * 1000) return;
@@ -298,6 +326,17 @@ async function clickAt(sendCommand, x, y) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "autozs-worker-mode") {
+    (async () => {
+      sendResponse({
+        ok: true,
+        mode: await readAutozsWorkerMode(),
+        defaultMode: defaultAutozsWorkerMode(),
+        api: LOCAL_API,
+      });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
   if (message?.type === "autozs-ebay-report-sync-context") {
     (async () => {
       const context = {

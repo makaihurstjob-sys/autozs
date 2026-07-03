@@ -9,6 +9,7 @@ function popupElements() {
     status: { textContent: "" },
     "connection-status": { dataset: {} },
     "connection-label": { textContent: "" },
+    "worker-mode": { innerHTML: "" },
     "ebay-product-id": { dataset: {}, textContent: "" },
     capture: {},
     "show-ebay-assistant": { textContent: "Show eBay Assistant" },
@@ -46,6 +47,9 @@ async function runPopupAssistantToggleTest() {
       tabs: {
         query: async () => [{ id: 7, url: "https://www.ebay.com/lstng?draftId=123&mode=AddItem#autozs_popup_product_id=40" }],
         create: async () => {},
+      },
+      runtime: {
+        sendMessage: async () => ({ ok: true, mode: "viewer", defaultMode: "viewer" }),
       },
       scripting: {
         executeScript: async (payload) => {
@@ -116,6 +120,9 @@ async function runPopupAccountFallbackTest() {
       tabs: {
         query: async () => [{ id: 7, url: "https://www.ebay.com/itm/318496463400" }],
         create: async () => {},
+      },
+      runtime: {
+        sendMessage: async () => ({ ok: true, mode: "viewer", defaultMode: "viewer" }),
       },
       scripting: {
         executeScript: async (payload) => {

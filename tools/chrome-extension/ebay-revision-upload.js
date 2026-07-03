@@ -4,6 +4,7 @@
   const batchId = Number(params.get("autozs_revision_batch"));
   const accountKey = params.get("autozs_account_key") || "manual";
   if (!batchId || !/^\/sh\/reports\/uploads/i.test(location.pathname || "")) return;
+  if (typeof readAutozsWorkerMode === "function" && await readAutozsWorkerMode() !== "operations") return;
   window.__autozsEbayRevisionUploadStarted = true;
 
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();

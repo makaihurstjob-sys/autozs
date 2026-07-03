@@ -25,6 +25,19 @@ function setConnectionState(state) {
   if (label) label.textContent = state === "live" ? "Live" : state === "offline" ? "Offline" : "Syncing";
 }
 
+async function syncWorkerModeLabel() {
+  const label = document.getElementById("worker-mode");
+  if (!label) return;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "autozs-worker-mode" });
+    const mode = response?.mode === "operations" ? "operations" : "viewer";
+    label.innerHTML = `Mode: <strong>${mode}</strong>${mode === "viewer" ? " (no background jobs)" : " (runs background jobs)"}`;
+  } catch {
+    const mode = typeof defaultAutozsWorkerMode === "function" ? defaultAutozsWorkerMode() : "viewer";
+    label.innerHTML = `Mode: <strong>${mode}</strong>`;
+  }
+}
+
 function applyTheme(theme) {
   document.body.dataset.theme = theme === "dark" || theme === "light" ? theme : "system";
 }
@@ -226,6 +239,7 @@ applyTheme(fallbackTheme());
 setBuildLabel();
 syncTheme();
 checkApi();
+syncWorkerModeLabel();
 syncEbayProductIdDisplay().catch(() => setEbayProductIdDisplay(""));
 window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", () => {
   syncTheme();

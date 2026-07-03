@@ -1,6 +1,27 @@
 var API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-56u49jf.tailb2892a.ts.net:8443";
-var CAPTURE_BUILD = "2026-07-02-decimal-split-debug";
+var CAPTURE_BUILD = "2026-07-03-worker-mode";
+var AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
+
+function defaultAutozsWorkerMode() {
+  const platform = String(
+    globalThis.navigator?.userAgentData?.platform ||
+    globalThis.navigator?.platform ||
+    globalThis.navigator?.userAgent ||
+    ""
+  );
+  return /\bWin|Windows\b/i.test(platform) ? "operations" : "viewer";
+}
+
+async function readAutozsWorkerMode() {
+  try {
+    const stored = await chrome.storage.local.get(AUTOZS_WORKER_MODE_KEY);
+    const mode = stored?.[AUTOZS_WORKER_MODE_KEY];
+    return mode === "operations" || mode === "viewer" ? mode : defaultAutozsWorkerMode();
+  } catch {
+    return defaultAutozsWorkerMode();
+  }
+}
 
 function numberOrNull(value) {
   const cleaned = String(value || "").replace(/[^0-9.]/g, "");

@@ -134,6 +134,14 @@
       .connection-status[data-state="offline"] .connection-dot {
         background: #d85b48;
       }
+      .worker-mode {
+        color: var(--muted);
+        font-size: 11px;
+        margin: 4px 0 0 44px;
+      }
+      .worker-mode strong {
+        color: var(--accent);
+      }
       .draft-id-row {
         align-items: center;
         display: flex;
@@ -171,6 +179,7 @@
       <span class="connection-dot" aria-hidden="true"></span>
       <span id="connection-label">Syncing</span>
     </div>
+    <div class="worker-mode" id="worker-mode">Mode: checking</div>
     <button id="capture">Capture Into App</button>
     <div class="draft-id-row">
       <span class="draft-id-label">eBay Draft ID</span>
