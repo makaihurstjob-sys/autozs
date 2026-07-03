@@ -628,9 +628,17 @@ function captureSourceProductFromPage() {
     document.querySelector('meta[property="og:description"]')?.content ||
     "";
 
+  const homeDepotSalePrice = detectHomeDepotSalePrice();
+  const withCentsForSameWhole = (price) => {
+    if (price === null || price === undefined || Math.abs(price - Math.round(price)) > 0.001) return price;
+    const decimalMatch = [...visiblePrices, ...domPrices, ...structuredPrices].find(
+      (candidate) => Math.floor(candidate) === Math.floor(price) && Math.abs(candidate - Math.round(candidate)) > 0.001
+    );
+    return decimalMatch || price;
+  };
   const sourcePrice = location.hostname.includes("homedepot.com")
-    ? detectHomeDepotSalePrice() || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
-    : detectHomeDepotSalePrice() || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null;
+    ? withCentsForSameWhole(homeDepotSalePrice) || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
+    : homeDepotSalePrice || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null;
   const standardPriceText = clean(document.querySelector("#standard-price")?.innerText || "");
 
   return {

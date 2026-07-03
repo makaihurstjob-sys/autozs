@@ -14,7 +14,8 @@ function formatCaptureDebug(debug) {
   const visible = Array.isArray(debug.visible_prices) ? debug.visible_prices.join(", ") || "-" : "-";
   const dom = Array.isArray(debug.dom_prices) ? debug.dom_prices.join(", ") || "-" : "-";
   const structured = Array.isArray(debug.structured_prices) ? debug.structured_prices.join(", ") || "-" : "-";
-  return `\nBuild: ${typeof CAPTURE_BUILD === "string" ? CAPTURE_BUILD : "unknown"}\nPrice debug: ${standard}; visible ${visible}; dom ${dom}; structured ${structured}`;
+  const selected = debug.selected_price === null || debug.selected_price === undefined ? "-" : debug.selected_price;
+  return `\nBuild: ${typeof CAPTURE_BUILD === "string" ? CAPTURE_BUILD : "unknown"}\nPrice debug: selected ${selected}; ${standard}; visible ${visible}; dom ${dom}; structured ${structured}`;
 }
 
 function setConnectionState(state) {
