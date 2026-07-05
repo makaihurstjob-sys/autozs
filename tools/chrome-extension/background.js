@@ -13,13 +13,20 @@ const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 const AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
 
 function defaultAutozsWorkerMode() {
-  const platform = String(
+  return isWindowsPlatform() ? "operations" : "viewer";
+}
+
+function workerPlatform() {
+  return String(
     globalThis.navigator?.userAgentData?.platform ||
     globalThis.navigator?.platform ||
     globalThis.navigator?.userAgent ||
     ""
   );
-  return /\bWin|Windows\b/i.test(platform) ? "operations" : "viewer";
+}
+
+function isWindowsPlatform() {
+  return /\bWin|Windows\b/i.test(workerPlatform());
 }
 
 async function readAutozsWorkerMode() {
@@ -33,7 +40,7 @@ async function readAutozsWorkerMode() {
 }
 
 async function canRunAutozsWorkerJobs() {
-  return (await readAutozsWorkerMode()) === "operations";
+  return isWindowsPlatform() && (await readAutozsWorkerMode()) === "operations";
 }
 
 function reportDownloadFilename(context, originalFilename) {
@@ -331,7 +338,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({
         ok: true,
         mode: await readAutozsWorkerMode(),
+        canRunJobs: await canRunAutozsWorkerJobs(),
         defaultMode: defaultAutozsWorkerMode(),
+        platform: workerPlatform(),
         api: LOCAL_API,
       });
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));

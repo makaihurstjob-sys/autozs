@@ -153,6 +153,23 @@ async function runNativePcInputTest() {
     throw new Error(`Expected inserted text after Command+A, got ${JSON.stringify(macInsert)}`);
   }
 
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsWorkerMode = "operations";
+  storage.autozsEbayRevisionLastOpened = 0;
+  await context.openNextEbayRevisionJob();
+  if (fetched.some((request) => request.url.endsWith("/ebay/revision-jobs/next"))) {
+    throw new Error(`Expected Mac platform to skip revision queue claim, got ${JSON.stringify(fetched)}`);
+  }
+  if (createdTabs.length !== 0) {
+    throw new Error(`Expected Mac platform to avoid opening worker tabs, got ${JSON.stringify(createdTabs)}`);
+  }
+
+  context.navigator.platform = "Win32";
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsWorkerMode = "operations";
+  storage.autozsEbayRevisionLastOpened = 0;
   await context.openNextEbayRevisionJob();
   if (!fetched.some((request) => request.url.endsWith("/ebay/revision-jobs/next") && request.options.method === "POST")) {
     throw new Error(`Expected revision queue claim, got ${JSON.stringify(fetched)}`);

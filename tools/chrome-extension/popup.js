@@ -31,7 +31,14 @@ async function syncWorkerModeLabel() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "autozs-worker-mode" });
     const mode = response?.mode === "operations" ? "operations" : "viewer";
-    label.innerHTML = `Mode: <strong>${mode}</strong>${mode === "viewer" ? " (no background jobs)" : " (runs background jobs)"}`;
+    const canRunJobs = response?.canRunJobs === true;
+    const effectiveMode = canRunJobs ? "operations" : "viewer";
+    const detail = canRunJobs
+      ? " (runs background jobs)"
+      : mode === "operations"
+        ? " (background jobs Windows-only)"
+        : " (no background jobs)";
+    label.innerHTML = `Mode: <strong>${effectiveMode}</strong>${detail}`;
   } catch {
     const mode = typeof defaultAutozsWorkerMode === "function" ? defaultAutozsWorkerMode() : "viewer";
     label.innerHTML = `Mode: <strong>${mode}</strong>`;
