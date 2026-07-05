@@ -263,6 +263,18 @@ class EbayListing(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     renews_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     views: Mapped[int] = mapped_column(Integer, default=0)
+    view_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    views_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EbayListingViewSnapshot(Base):
+    __tablename__ = "ebay_listing_view_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ebay_listing_id: Mapped[int] = mapped_column(ForeignKey("ebay_listings.id"), index=True)
+    sync_run_id: Mapped[int | None] = mapped_column(ForeignKey("ebay_sync_runs.id"), nullable=True, index=True)
+    views: Mapped[int] = mapped_column(Integer)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class WorkerNode(Base, TimestampMixin):

@@ -36,6 +36,8 @@ def _ensure_lightweight_columns() -> None:
             "started_at": "DATETIME",
             "renews_at": "DATETIME",
             "views": "INTEGER DEFAULT 0 NOT NULL",
+            "view_delta": "INTEGER",
+            "views_measured_at": "DATETIME",
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME"},
         "ebay_revision_jobs": {

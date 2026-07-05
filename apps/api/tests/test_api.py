@@ -291,9 +291,32 @@ def test_ebay_listing_report_sync_reconciles_one_store(client) -> None:
     assert listings["KNOWN-1"]["product_id"] == product["id"]
     assert listings["KNOWN-1"]["price"] == 29.99
     assert listings["KNOWN-1"]["views"] == 0
+    assert listings["KNOWN-1"]["views_measured_at"] is None
     assert listings["SCHEDULED-UNKNOWN-1"]["status"] == "scheduled"
+    assert listings["SCHEDULED-UNKNOWN-1"]["views_measured_at"] is not None
+    assert listings["SCHEDULED-UNKNOWN-1"]["view_delta"] is None
     assert listings["SCHEDULED-UNKNOWN-1"]["renews_at"].startswith("2026-07-29")
     assert listings["OLD-MISSING-1"]["status"] == "tombstoned"
+
+    captured_views = client.post(
+        "/ebay/sync-runs/listing-views",
+        json={
+            "account_key": account["key"],
+            "run_id": started["id"],
+            "rows": [
+                {
+                    "listing_id": "SCHEDULED-UNKNOWN-1",
+                    "views": "4",
+                }
+            ],
+        },
+    ).json()
+    assert captured_views == {"captured": 1, "unmatched": 0}
+    refreshed = {item["listing_id"]: item for item in client.get("/ebay/listings").json()}
+    assert refreshed["SCHEDULED-UNKNOWN-1"]["views"] == 4
+    assert refreshed["SCHEDULED-UNKNOWN-1"]["view_delta"] == 4
+    history = client.get(f"/ebay/listings/{refreshed['SCHEDULED-UNKNOWN-1']['id']}/view-history").json()
+    assert [snapshot["views"] for snapshot in history] == [4, 0]
 
     stats = client.get(f"/stats/overview?range=all&grain=day&account={account['key']}").json()
     assert stats["totals"]["active_listings"] == 2

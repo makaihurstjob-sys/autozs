@@ -15,6 +15,7 @@ from app.models.domain import (
     CustomerUpdate,
     EbayAccount,
     EbayListing,
+    EbayListingViewSnapshot,
     EbayRevisionBatch,
     EbayRevisionJob,
     EbaySyncRun,
@@ -47,6 +48,9 @@ from app.schemas.domain import (
     EbayListingPackage,
     EbayListingMarkRequest,
     EbayListingRead,
+    EbayListingViewsCapture,
+    EbayListingViewsCaptureResult,
+    EbayListingViewSnapshotRead,
     EbaySyncListingReportImport,
     EbaySyncRunCreate,
     EbaySyncRunProgress,
@@ -168,6 +172,7 @@ from app.services.ebay_revision_batches import (
     update_ebay_revision_batch,
 )
 from app.services.ebay_sync import (
+    capture_listing_views,
     import_listing_report_rows,
     list_ebay_sync_runs,
     serialize_ebay_sync_run,
@@ -844,6 +849,24 @@ def list_ebay_listings(db: Session = Depends(get_db)) -> list[EbayListingRead]:
     return [EbayListingRead(**_serialize_ebay_listing(listing, settings)) for listing in listings]
 
 
+@router.get("/ebay/listings/{listing_id}/view-history", response_model=list[EbayListingViewSnapshotRead])
+def read_ebay_listing_view_history(
+    listing_id: int,
+    limit: int = Query(90, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[EbayListingViewSnapshotRead]:
+    listing = db.get(EbayListing, listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="eBay listing not found")
+    snapshots = db.scalars(
+        select(EbayListingViewSnapshot)
+        .where(EbayListingViewSnapshot.ebay_listing_id == listing_id)
+        .order_by(EbayListingViewSnapshot.captured_at.desc(), EbayListingViewSnapshot.id.desc())
+        .limit(limit)
+    ).all()
+    return [EbayListingViewSnapshotRead.model_validate(item) for item in snapshots]
+
+
 @router.get("/ebay/sync-runs", response_model=list[EbaySyncRunRead])
 def read_ebay_sync_runs(
     account_key: str | None = None,
@@ -867,6 +890,8 @@ def _serialize_ebay_listing(listing: EbayListing, settings: dict) -> dict:
         "started_at": listing.started_at,
         "renews_at": listing.renews_at,
         "views": listing.views or 0,
+        "view_delta": listing.view_delta,
+        "views_measured_at": listing.views_measured_at,
         "days_until_relist": _days_until(listing.renews_at),
         "auto_delist_candidate": _auto_delist_candidate(listing, settings),
         "created_at": listing.created_at,
@@ -879,11 +904,11 @@ def _serialize_listing_queue_renewal(listing: EbayListing, settings: dict) -> di
         "listing_started_at": listing.started_at,
         "listing_renews_at": listing.renews_at,
         "listing_views": listing.views or 0,
+        "listing_view_delta": listing.view_delta,
+        "listing_views_measured_at": listing.views_measured_at,
         "days_until_relist": _days_until(listing.renews_at),
         "auto_delist_candidate": _auto_delist_candidate(listing, settings),
     }
-
-
 def _days_until(value: datetime | None) -> int | None:
     if value is None:
         return None
@@ -919,6 +944,20 @@ def import_ebay_listing_report(payload: EbaySyncListingReportImport, db: Session
         tombstone_missing=payload.tombstone_missing,
     )
     return EbaySyncRunRead(**serialize_ebay_sync_run(run))
+
+
+@router.post("/ebay/sync-runs/listing-views", response_model=EbayListingViewsCaptureResult)
+def import_ebay_listing_views(
+    payload: EbayListingViewsCapture,
+    db: Session = Depends(get_db),
+) -> EbayListingViewsCaptureResult:
+    captured, unmatched = capture_listing_views(
+        db,
+        rows=[row.model_dump(exclude_none=True) for row in payload.rows],
+        account_key=payload.account_key,
+        run_id=payload.run_id,
+    )
+    return EbayListingViewsCaptureResult(captured=captured, unmatched=unmatched)
 
 
 @router.get("/ebay/sync-runs/{run_id}", response_model=EbaySyncRunRead)

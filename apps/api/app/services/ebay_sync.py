@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain import (
     EbayListing,
+    EbayListingViewSnapshot,
     EbaySyncRun,
     EbaySyncRunStatus,
     ListingDraft,
@@ -57,6 +58,46 @@ def list_ebay_sync_runs(db: Session, account_key: str | None = None, limit: int 
     if account_key:
         stmt = stmt.where(EbaySyncRun.account_key == _clean_account_key(account_key))
     return list(db.scalars(stmt).all())
+
+
+def capture_listing_views(
+    db: Session,
+    rows: list[dict[str, Any]],
+    account_key: str,
+    run_id: int | None = None,
+) -> tuple[int, int]:
+    account_key = _clean_account_key(account_key)
+    captured = 0
+    unmatched = 0
+    captured_at = _now()
+    for raw_row in rows:
+        row = _normalize_listing_row(raw_row)
+        if not row["listing_id"] or row["views"] is None:
+            unmatched += 1
+            continue
+        listing = db.scalar(
+            select(EbayListing).where(
+                EbayListing.account_id == account_key,
+                EbayListing.listing_id == row["listing_id"],
+            )
+        )
+        if listing is None:
+            unmatched += 1
+            continue
+        listing.view_delta = row["views"] - listing.views if listing.views_measured_at is not None else None
+        listing.views = row["views"]
+        listing.views_measured_at = captured_at
+        db.add(
+            EbayListingViewSnapshot(
+                ebay_listing_id=listing.id,
+                sync_run_id=run_id,
+                views=row["views"],
+                captured_at=captured_at,
+            )
+        )
+        captured += 1
+    db.commit()
+    return captured, unmatched
 
 
 def import_listing_report_rows(
@@ -117,7 +158,18 @@ def import_listing_report_rows(
         if row["renews_at"] is not None:
             listing.renews_at = row["renews_at"]
         if row["views"] is not None:
+            listing.view_delta = row["views"] - listing.views if listing.views_measured_at is not None else None
             listing.views = row["views"]
+            listing.views_measured_at = _now()
+            db.flush()
+            db.add(
+                EbayListingViewSnapshot(
+                    ebay_listing_id=listing.id,
+                    sync_run_id=run.id,
+                    views=row["views"],
+                    captured_at=listing.views_measured_at,
+                )
+            )
         _sync_local_draft_status(db, product.id, row)
         touched_product_ids.add(product.id)
         upserted += 1
@@ -146,7 +198,7 @@ def import_listing_report_rows(
 
 
 def serialize_ebay_sync_run(run: EbaySyncRun) -> dict:
-    runner_url = "https://www.ebay.com/sh/reports/downloads#" + urlencode(
+    runner_url = "https://www.ebay.com/sh/lst/active#" + urlencode(
         {
             "autozs_sync_run": run.id,
             "autozs_account_key": run.account_key,

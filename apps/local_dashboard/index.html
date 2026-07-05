@@ -5638,7 +5638,7 @@
               ["Start", listingStartHtml(item)],
               ["eBay price", money(item.price)],
               ["Estimated profit", money(item.estimated_profit)],
-              ["Views", item.listing_views ?? 0],
+              ["Views", listingViewsHtml(item)],
               ["Relist", listingRenewalDate(item) ? formatSchedule(listingRenewalDate(item)) : "-"],
             ])}
             ${listingIssuesHtml(item)}
@@ -5721,8 +5721,21 @@
           ${compactFactHtml("Images", imageCountPillHtml(item.local_image_count, item.image_count))}
           ${compactFactHtml("Start", listingStartCompactHtml(item))}
           ${compactFactHtml("Relist", listingRenewalHtml(item), listingRenewalDate(item) ? `Renews ${formatSchedule(listingRenewalDate(item))}` : "")}
-          ${compactFactHtml("Views", esc(item.listing_views ?? 0), item.auto_delist_candidate ? "0-view delist candidate under current settings." : "")}
+          ${compactFactHtml("Views", listingViewsHtml(item), listingViewsTooltip(item))}
         </div>`;
+      }
+
+      function listingViewsHtml(item) {
+        if (!item.listing_views_measured_at) return `<span class="muted">Not measured</span>`;
+        const delta = Number(item.listing_view_delta);
+        const deltaLabel = Number.isFinite(delta) && delta !== 0 ? ` <span class="${delta > 0 ? "positive" : "negative"}">(${delta > 0 ? "+" : ""}${delta})</span>` : "";
+        return `${esc(item.listing_views ?? 0)}${deltaLabel}`;
+      }
+
+      function listingViewsTooltip(item) {
+        if (!item.listing_views_measured_at) return "Run Sync Now and import an Active Listings report to measure views.";
+        const candidate = item.auto_delist_candidate ? " 0-view delist candidate under current settings." : "";
+        return `Measured ${formatSchedule(item.listing_views_measured_at)}.${candidate}`;
       }
 
       function supplierNameFromUrl(url) {

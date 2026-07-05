@@ -15,7 +15,9 @@
   }
 
   const context = syncContext();
-  if (!context || !/^\/sh\/reports\/downloads/i.test(location.pathname || "")) return;
+  const onActiveListings = /^\/sh\/lst\/active/i.test(location.pathname || "");
+  const onReportDownloads = /^\/sh\/reports\/downloads/i.test(location.pathname || "");
+  if (!context || (!onActiveListings && !onReportDownloads)) return;
   window.__autozsEbayReportRunnerStarted = true;
 
   const REPORT_CREATE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -182,8 +184,75 @@
     shadow.querySelector("#progress-percent").textContent = `${safePercent}%`;
   }
 
+  function activeListingViewRows() {
+    return Array.from(document.querySelectorAll("tr,[role='row']")).map((row) => {
+      const titleCell = row.querySelector(".shui-dt-column__title");
+      const viewsCell = row.querySelector(".shui-dt-column__visitCount");
+      const listingId = clean(titleCell?.innerText || titleCell?.textContent).match(/\b\d{12}\b/)?.[0] || "";
+      const viewsText = clean(viewsCell?.innerText || viewsCell?.textContent);
+      const viewsMatch = viewsText.match(/\bViews\s+([\d,]+)/i) || viewsText.match(/^([\d,]+)/);
+      return listingId && viewsMatch ? { listing_id: listingId, views: Number(viewsMatch[1].replace(/,/g, "")) } : null;
+    }).filter(Boolean);
+  }
+
+  function nextActiveListingsButton() {
+    return Array.from(document.querySelectorAll("button,a")).find((element) => {
+      const label = clean(element.getAttribute("aria-label") || element.innerText || element.textContent);
+      const disabled = element.disabled || element.getAttribute("aria-disabled") === "true";
+      return !disabled && /^(next|next page)$/i.test(label) && visible(element);
+    }) || null;
+  }
+
+  async function captureActiveListingViews() {
+    setRunnerStatus("Reading eBay's rolling 30-day listing views...", "working", 10);
+    await waitFor(() => activeListingViewRows().length ? true : null, 30000, 500);
+    const pageSize = Array.from(document.querySelectorAll("select.listbox__native")).find((select) =>
+      Array.from(select.options || []).some((option) => option.value === "200")
+    );
+    if (pageSize && pageSize.value !== "200") {
+      pageSize.value = "200";
+      pageSize.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    const captured = new Map();
+    for (let page = 0; page < 100; page += 1) {
+      const rows = activeListingViewRows();
+      rows.forEach((row) => captured.set(row.listing_id, row));
+      setRunnerStatus(`Captured views for ${captured.size} active listing${captured.size === 1 ? "" : "s"}...`, "working", Math.min(35, 15 + page * 2));
+      const next = nextActiveListingsButton();
+      if (!next) break;
+      const firstListingId = rows[0]?.listing_id || "";
+      next.click();
+      await waitFor(() => {
+        const nextRows = activeListingViewRows();
+        return nextRows.length && nextRows[0]?.listing_id !== firstListingId ? true : null;
+      }, 30000, 500);
+    }
+    const rows = Array.from(captured.values());
+    const response = await fetch(`${API}/ebay/sync-runs/listing-views`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_key: context.accountKey, run_id: context.runId, rows }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    setRunnerStatus(`Saved views for ${result.captured} listing${result.captured === 1 ? "" : "s"}. Opening the full Active Listings report...`, "working", 40);
+    location.href = `https://www.ebay.com/sh/reports/downloads#autozs_sync_run=${encodeURIComponent(context.runId)}&autozs_account_key=${encodeURIComponent(context.accountKey)}&autozs_report_type=${encodeURIComponent(context.reportType)}`;
+  }
+
   function exactButton(text, root = document) {
     return Array.from(root.querySelectorAll("button")).find((button) => visible(button) && clean(button.innerText || button.textContent) === text);
+  }
+
+  if (onActiveListings) {
+    try {
+      await captureActiveListingViews();
+    } catch (error) {
+      const message = error?.message || String(error);
+      setRunnerStatus(`AutoZS view capture needs attention: ${message}`, "error", 100);
+      patchRun({ status: "needs_review", message: `Automatic Seller Hub view capture failed: ${message}` }).catch(() => {});
+    }
+    return;
   }
 
   function selectRadioValue(token) {

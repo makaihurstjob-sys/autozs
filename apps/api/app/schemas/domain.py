@@ -321,10 +321,22 @@ class EbayListingRead(BaseModel):
     started_at: datetime | None = None
     renews_at: datetime | None = None
     views: int = 0
+    view_delta: int | None = None
+    views_measured_at: datetime | None = None
     days_until_relist: int | None = None
     auto_delist_candidate: bool = False
     created_at: datetime
     updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EbayListingViewSnapshotRead(BaseModel):
+    id: int
+    ebay_listing_id: int
+    sync_run_id: int | None = None
+    views: int
+    captured_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -397,6 +409,17 @@ class EbaySyncListingReportImport(BaseModel):
     source: str = Field(default="manual_report", max_length=64)
     tombstone_missing: bool = True
     rows: list[EbaySyncListingReportRow] = Field(min_length=1)
+
+
+class EbayListingViewsCapture(BaseModel):
+    account_key: str = Field(default="manual", min_length=1, max_length=128)
+    run_id: int | None = None
+    rows: list[EbaySyncListingReportRow] = Field(min_length=1)
+
+
+class EbayListingViewsCaptureResult(BaseModel):
+    captured: int
+    unmatched: int
 
 
 class EbaySyncRunRead(BaseModel):
@@ -563,6 +586,8 @@ class ListingQueueItem(BaseModel):
     listing_started_at: datetime | None = None
     listing_renews_at: datetime | None = None
     listing_views: int = 0
+    listing_view_delta: int | None = None
+    listing_views_measured_at: datetime | None = None
     days_until_relist: int | None = None
     auto_delist_candidate: bool = False
 
