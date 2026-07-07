@@ -13,6 +13,7 @@ from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.database import Base, SessionLocal, engine
 from app.services.ebay_report_files import watch_ebay_report_inbox
+from app.services.push_notifications import dispatch_alert_notifications
 from app.services.settings import read_pricing_settings
 from app.services.source_refresh_jobs import create_automatic_source_refresh_batch
 from app.services.workers import heartbeat_current_worker
@@ -40,6 +41,7 @@ def _ensure_lightweight_columns() -> None:
             "views_measured_at": "DATETIME",
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME"},
+        "operational_alerts": {"last_notified_at": "DATETIME"},
         "ebay_revision_jobs": {
             "source_price": "FLOAT",
             "source_shipping": "FLOAT DEFAULT 0 NOT NULL",
@@ -121,17 +123,34 @@ async def _source_refresh_auto_queue_loop() -> None:
         await asyncio.sleep(max(60, int(poll_minutes * 60)))
 
 
+def _dispatch_push_alerts() -> None:
+    with SessionLocal() as db:
+        dispatch_alert_notifications(db)
+
+
+async def _push_alert_loop() -> None:
+    await asyncio.sleep(10)
+    while True:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_dispatch_push_alerts)
+        await asyncio.sleep(max(30, int(settings.autozs_push_alert_loop_seconds or 60)))
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     Base.metadata.create_all(bind=engine)
     _ensure_lightweight_columns()
     watcher = None
     heartbeat = None
+    push_alerts = None
     source_refresh_scheduler = None
     with contextlib.suppress(Exception):
         await asyncio.to_thread(_write_worker_heartbeat, "AutoZS API started.")
     heartbeat = asyncio.create_task(_worker_heartbeat_loop())
     if ":memory:" not in settings.database_url:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_dispatch_push_alerts)
+        push_alerts = asyncio.create_task(_push_alert_loop())
         source_refresh_scheduler = asyncio.create_task(_source_refresh_auto_queue_loop())
     if settings.ebay_report_watch_enabled and ":memory:" not in settings.database_url:
         watcher = asyncio.create_task(watch_ebay_report_inbox())
@@ -146,6 +165,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
+        if push_alerts is not None:
+            push_alerts.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await push_alerts
         if source_refresh_scheduler is not None:
             source_refresh_scheduler.cancel()
             with contextlib.suppress(asyncio.CancelledError):

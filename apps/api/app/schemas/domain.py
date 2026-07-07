@@ -1110,6 +1110,7 @@ class OperationalAlertRead(BaseModel):
     action_url: str | None = None
     first_seen_at: datetime
     last_seen_at: datetime
+    last_notified_at: datetime | None = None
     resolved_at: datetime | None = None
     dismissed_at: datetime | None = None
     created_at: datetime
@@ -1131,6 +1132,49 @@ class OperationalAlertSummary(BaseModel):
     warning: int
     info: int
     active: int
+
+
+class PushConfigRead(BaseModel):
+    enabled: bool
+    public_key: str = ""
+    reason: str = ""
+    subject: str = ""
+
+
+class PushSubscriptionCreate(BaseModel):
+    endpoint: str
+    keys: dict[str, str]
+    label: str | None = None
+    user_agent: str | None = None
+    dashboard_url: str | None = None
+
+
+class PushSubscriptionRead(BaseModel):
+    id: int
+    endpoint: str
+    label: str = ""
+    dashboard_url: str = ""
+    enabled: bool
+    last_seen_at: datetime
+    last_notified_at: datetime | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PushTestRequest(BaseModel):
+    title: str = "AutoZS test alert"
+    body: str = "Push notifications are working."
+
+
+class PushDispatchResult(BaseModel):
+    attempted: int = 0
+    sent: int = 0
+    failed: int = 0
+    notified_alerts: int = 0
+    message: str = ""
 
 
 class EbayAccountRead(BaseModel):

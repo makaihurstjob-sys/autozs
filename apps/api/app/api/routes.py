@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -91,6 +91,11 @@ from app.schemas.domain import (
     OperationalAlertUpdate,
     PriceSnapshotRead,
     PricingSettingsUpdate,
+    PushConfigRead,
+    PushDispatchResult,
+    PushSubscriptionCreate,
+    PushSubscriptionRead,
+    PushTestRequest,
     ProductImageDownloadResult,
     ProductImagePrepResult,
     ProductImportRequest,
@@ -202,6 +207,13 @@ from app.services.source_refresh_jobs import (
 )
 from app.services.workers import heartbeat_current_worker, list_workers, read_current_worker
 from app.services.alerts import list_operational_alerts, summarize_operational_alerts, update_operational_alert_status
+from app.services.push_notifications import (
+    dispatch_alert_notifications,
+    get_push_config,
+    list_push_subscriptions,
+    send_test_push,
+    upsert_push_subscription,
+)
 
 router = APIRouter()
 
@@ -251,6 +263,48 @@ def patch_operational_alert(
     if alert is None:
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
+
+
+@router.get("/push/config", response_model=PushConfigRead)
+def read_push_config_route() -> PushConfigRead:
+    return PushConfigRead(**get_push_config())
+
+
+@router.get("/push/subscriptions", response_model=list[PushSubscriptionRead])
+def read_push_subscriptions_route(db: Session = Depends(get_db)) -> list[PushSubscriptionRead]:
+    return list_push_subscriptions(db)
+
+
+@router.post("/push/subscriptions", response_model=PushSubscriptionRead)
+def create_push_subscription_route(
+    payload: PushSubscriptionCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PushSubscriptionRead:
+    keys = payload.keys or {}
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+    if not payload.endpoint or not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="Push subscription endpoint and keys are required")
+    return upsert_push_subscription(
+        db,
+        endpoint=payload.endpoint,
+        p256dh=p256dh,
+        auth=auth,
+        label=payload.label or "AutoZS iPhone",
+        user_agent=payload.user_agent or request.headers.get("user-agent", ""),
+        dashboard_url=payload.dashboard_url or "",
+    )
+
+
+@router.post("/push/test", response_model=PushDispatchResult)
+def send_push_test_route(payload: PushTestRequest, db: Session = Depends(get_db)) -> PushDispatchResult:
+    return PushDispatchResult(**send_test_push(db, title=payload.title, body=payload.body))
+
+
+@router.post("/push/dispatch-alerts", response_model=PushDispatchResult)
+def dispatch_push_alerts_route(db: Session = Depends(get_db)) -> PushDispatchResult:
+    return PushDispatchResult(**dispatch_alert_notifications(db))
 
 
 @router.get("/settings", response_model=SettingsRead)

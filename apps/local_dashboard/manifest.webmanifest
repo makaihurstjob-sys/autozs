@@ -1,0 +1,17 @@
+{
+  "name": "AutoZS Mobile Alerts",
+  "short_name": "AutoZS",
+  "start_url": "/mobile.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#08110e",
+  "theme_color": "#0d1713",
+  "icons": [
+    {
+      "src": "/autozs-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

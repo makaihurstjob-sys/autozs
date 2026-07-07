@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0d1713" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/autozs-icon.svg" />
   <title>AutoZS Mobile</title>
   <style>
     :root {
@@ -304,6 +306,8 @@
     let selectedFilter = "active";
     let lastAlerts = [];
     let seenAlerts = new Set(JSON.parse(localStorage.getItem(seenKey) || "[]"));
+    let pushConfig = null;
+    let serviceWorkerRegistration = null;
 
     document.getElementById("dashboard-link").href = dashboardUrl;
     document.getElementById("notify-button").addEventListener("click", enableNotifications);
@@ -316,6 +320,7 @@
       });
     });
 
+    initializePushState();
     refresh();
     setInterval(refresh, 30000);
 
@@ -459,9 +464,70 @@
         return;
       }
       const permission = await Notification.requestPermission();
-      document.getElementById("notify-button").textContent = permission === "granted" ? "Alerts Enabled" : "Enable Alerts";
-      if (permission === "granted") {
+      if (permission !== "granted") {
+        document.getElementById("notify-button").textContent = "Enable Alerts";
+        return;
+      }
+
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        document.getElementById("notify-button").textContent = "Local Alerts Enabled";
         maybeNotify(lastAlerts, true);
+        return;
+      }
+
+      try {
+        pushConfig = await api("/push/config");
+        if (!pushConfig.enabled) {
+          setError(`Push not configured: ${pushConfig.reason || "missing server keys"}`);
+          document.getElementById("notify-button").textContent = "Local Alerts Enabled";
+          maybeNotify(lastAlerts, true);
+          return;
+        }
+        serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
+        const existing = await serviceWorkerRegistration.pushManager.getSubscription();
+        const subscription = existing || await serviceWorkerRegistration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(pushConfig.public_key),
+        });
+        const serialized = subscription.toJSON();
+        await api("/push/subscriptions", {
+          method: "POST",
+          body: JSON.stringify({
+            endpoint: serialized.endpoint,
+            keys: serialized.keys || {},
+            label: "iPhone AutoZS",
+            user_agent: navigator.userAgent,
+            dashboard_url: window.location.href,
+          }),
+        });
+        await api("/push/test", {
+          method: "POST",
+          body: JSON.stringify({
+            title: "AutoZS push enabled",
+            body: "Your iPhone will alert you when AutoZS needs attention.",
+          }),
+        });
+        document.getElementById("notify-button").textContent = "Push Alerts Enabled";
+      } catch (error) {
+        setError(error.message || String(error));
+        document.getElementById("notify-button").textContent = "Enable Alerts";
+      }
+    }
+
+    async function initializePushState() {
+      if (!("Notification" in window)) return;
+      if (Notification.permission === "granted") {
+        document.getElementById("notify-button").textContent = "Alerts Enabled";
+      }
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+      try {
+        serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
+        const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+        if (subscription) {
+          document.getElementById("notify-button").textContent = "Push Alerts Enabled";
+        }
+      } catch {
+        // iOS only enables web push for the installed Home Screen PWA.
       }
     }
 
@@ -505,6 +571,17 @@
         '"': "&quot;",
         "'": "&#39;",
       })[char]);
+    }
+
+    function urlBase64ToUint8Array(value) {
+      const padding = "=".repeat((4 - value.length % 4) % 4);
+      const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const raw = window.atob(base64);
+      const output = new Uint8Array(raw.length);
+      for (let index = 0; index < raw.length; index += 1) {
+        output[index] = raw.charCodeAt(index);
+      }
+      return output;
     }
   </script>
 </body>

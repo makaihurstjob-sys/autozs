@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     autozs_chrome_profile_root: str = ""
     autozs_ebay_profile_root: str = ""
     autozs_home_depot_profile_root: str = ""
+    autozs_push_vapid_public_key: str = ""
+    autozs_push_vapid_private_key: str = ""
+    autozs_push_vapid_subject: str = "mailto:alerts@autozs.local"
+    autozs_push_alert_loop_seconds: int = 60
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
