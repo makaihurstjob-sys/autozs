@@ -1095,6 +1095,44 @@ class WorkerRead(BaseModel):
     updated_at: datetime
 
 
+class OperationalAlertRead(BaseModel):
+    id: int
+    key: str
+    severity: str
+    source: str
+    status: str
+    title: str
+    message: str = ""
+    product_id: int | None = None
+    listing_id: int | None = None
+    job_type: str | None = None
+    job_id: int | None = None
+    action_url: str | None = None
+    first_seen_at: datetime
+    last_seen_at: datetime
+    resolved_at: datetime | None = None
+    dismissed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OperationalAlertUpdate(BaseModel):
+    status: str = Field(pattern="^(open|acknowledged|resolved|dismissed)$")
+
+
+class OperationalAlertSummary(BaseModel):
+    open: int
+    acknowledged: int
+    resolved: int
+    dismissed: int
+    critical: int
+    warning: int
+    info: int
+    active: int
+
+
 class EbayAccountRead(BaseModel):
     id: int
     key: str

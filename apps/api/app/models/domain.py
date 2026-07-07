@@ -102,6 +102,19 @@ class WorkerStatus(str, Enum):
     offline = "offline"
 
 
+class OperationalAlertStatus(str, Enum):
+    open = "open"
+    acknowledged = "acknowledged"
+    resolved = "resolved"
+    dismissed = "dismissed"
+
+
+class OperationalAlertSeverity(str, Enum):
+    info = "info"
+    warning = "warning"
+    critical = "critical"
+
+
 class SnapshotSource(str, Enum):
     supplier = "supplier"
     competitor = "competitor"
@@ -319,6 +332,27 @@ class EbaySyncRun(Base, TimestampMixin):
     orders_upserted: Mapped[int] = mapped_column(Integer, default=0)
     revision_jobs_queued: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OperationalAlert(Base, TimestampMixin):
+    __tablename__ = "operational_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(256), unique=True, index=True)
+    severity: Mapped[str] = mapped_column(String(32), default=OperationalAlertSeverity.warning.value, index=True)
+    source: Mapped[str] = mapped_column(String(64), default="system", index=True)
+    status: Mapped[str] = mapped_column(String(32), default=OperationalAlertStatus.open.value, index=True)
+    title: Mapped[str] = mapped_column(String(512))
+    message: Mapped[str] = mapped_column(Text, default="")
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True, index=True)
+    listing_id: Mapped[int | None] = mapped_column(ForeignKey("ebay_listings.id"), nullable=True, index=True)
+    job_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    job_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    action_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class EbayRevisionJob(Base, TimestampMixin):

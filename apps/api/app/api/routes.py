@@ -86,6 +86,9 @@ from app.schemas.domain import (
     ListingReadinessReport,
     OrderUpdateDraftRunRead,
     OrderRead,
+    OperationalAlertRead,
+    OperationalAlertSummary,
+    OperationalAlertUpdate,
     PriceSnapshotRead,
     PricingSettingsUpdate,
     ProductImageDownloadResult,
@@ -198,6 +201,7 @@ from app.services.source_refresh_jobs import (
     source_refresh_has_running_job,
 )
 from app.services.workers import heartbeat_current_worker, list_workers, read_current_worker
+from app.services.alerts import list_operational_alerts, summarize_operational_alerts, update_operational_alert_status
 
 router = APIRouter()
 
@@ -221,6 +225,32 @@ def read_current_worker_route(db: Session = Depends(get_db)) -> WorkerRead:
 def heartbeat_worker_route(db: Session = Depends(get_db)) -> WorkerRead:
     heartbeat_current_worker(db)
     return WorkerRead(**read_current_worker(db))
+
+
+@router.get("/alerts", response_model=list[OperationalAlertRead])
+def read_operational_alerts(
+    status: str = Query("active", pattern="^(active|open|acknowledged|resolved|dismissed|all)$"),
+    limit: int = Query(100, ge=1, le=250),
+    db: Session = Depends(get_db),
+) -> list[OperationalAlertRead]:
+    return list_operational_alerts(db, status=status, limit=limit)
+
+
+@router.get("/alerts/summary", response_model=OperationalAlertSummary)
+def read_operational_alert_summary(db: Session = Depends(get_db)) -> OperationalAlertSummary:
+    return OperationalAlertSummary(**summarize_operational_alerts(db))
+
+
+@router.patch("/alerts/{alert_id}", response_model=OperationalAlertRead)
+def patch_operational_alert(
+    alert_id: int,
+    payload: OperationalAlertUpdate,
+    db: Session = Depends(get_db),
+) -> OperationalAlertRead:
+    alert = update_operational_alert_status(db, alert_id, payload.status)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
 
 
 @router.get("/settings", response_model=SettingsRead)

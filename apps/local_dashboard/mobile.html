@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1713" />
+  <title>AutoZS Mobile</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08110e;
+      --panel: #111b17;
+      --panel-2: #16241f;
+      --line: #2a3a34;
+      --text: #f4fbf7;
+      --muted: #a6b6af;
+      --accent: #55c8b8;
+      --blue: #4aa3ff;
+      --warn: #f2a642;
+      --danger: #ee7b5b;
+      --ok: #36d17d;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    }
+    button, a {
+      font: inherit;
+      color: inherit;
+    }
+    .shell {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 18px 14px 28px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .logo {
+      width: 58px;
+      height: 58px;
+      border-radius: 8px;
+      background: #020403;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      line-height: 0.9;
+      letter-spacing: 0;
+    }
+    .brand { flex: 1; min-width: 0; }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+    .sub {
+      color: var(--muted);
+      margin-top: 4px;
+      font-size: 15px;
+      word-break: break-word;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+      margin-right: 7px;
+      background: var(--danger);
+    }
+    .status-dot.ok { background: var(--ok); }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .btn {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 8px;
+      min-height: 50px;
+      padding: 0 14px;
+      font-weight: 800;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .btn.primary {
+      background: #157969;
+      border-color: #1e9a86;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .metric, .panel, .alert {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+    }
+    .metric {
+      padding: 13px;
+      min-height: 86px;
+    }
+    .metric label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .metric strong {
+      display: block;
+      font-size: 30px;
+      margin-top: 8px;
+      line-height: 1;
+    }
+    .panel {
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .panel-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .worker-name {
+      color: var(--blue);
+      font-size: 20px;
+      font-weight: 900;
+    }
+    .worker-meta {
+      color: var(--muted);
+      margin-top: 4px;
+      font-size: 14px;
+    }
+    .filters {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      margin-bottom: 12px;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 999px;
+      min-height: 38px;
+      padding: 0 13px;
+      white-space: nowrap;
+      font-weight: 800;
+    }
+    .chip.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: #17342d;
+    }
+    .alert-list {
+      display: grid;
+      gap: 10px;
+    }
+    .alert {
+      padding: 14px;
+      border-left: 5px solid var(--accent);
+    }
+    .alert.critical { border-left-color: var(--danger); }
+    .alert.warning { border-left-color: var(--warn); }
+    .alert.info { border-left-color: var(--blue); }
+    .alert-head {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .alert-title {
+      flex: 1;
+      min-width: 0;
+      font-size: 19px;
+      font-weight: 900;
+      line-height: 1.2;
+    }
+    .pill {
+      background: #263b34;
+      color: var(--accent);
+      border-radius: 999px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .pill.critical { color: #ffb39f; background: #4b2017; }
+    .pill.warning { color: #ffd18a; background: #3b2c12; }
+    .message {
+      color: var(--muted);
+      line-height: 1.35;
+      margin: 10px 0;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .alert-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    .small-btn {
+      border: 1px solid var(--line);
+      background: #24352f;
+      border-radius: 8px;
+      min-height: 42px;
+      padding: 0 12px;
+      font-weight: 900;
+    }
+    .small-btn.accent { background: #16796a; border-color: #209a88; }
+    .small-btn.danger { background: #7d3e2d; border-color: #9d4f39; }
+    .empty {
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 28px 18px;
+      text-align: center;
+      color: var(--muted);
+      font-weight: 800;
+    }
+    .error {
+      color: #ffb39f;
+      background: #311913;
+      border: 1px solid #633627;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 14px;
+      display: none;
+    }
+    @media (max-width: 430px) {
+      .grid { grid-template-columns: 1fr; }
+      .actions { grid-template-columns: 1fr; }
+      h1 { font-size: 25px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar">
+      <div class="logo"><span><span style="color:#f34646">AUTO</span><br />ZS</span></div>
+      <div class="brand">
+        <h1>AutoZS Mobile</h1>
+        <div class="sub"><span id="api-dot" class="status-dot"></span><span id="api-status">Checking API</span></div>
+      </div>
+    </section>
+
+    <section class="actions">
+      <a class="btn primary" id="dashboard-link" href="/">Open Dashboard</a>
+      <button class="btn" id="notify-button" type="button">Enable Alerts</button>
+    </section>
+
+    <div class="error" id="error-box"></div>
+
+    <section class="grid">
+      <div class="metric"><label>Active</label><strong id="active-count">0</strong></div>
+      <div class="metric"><label>Critical</label><strong id="critical-count">0</strong></div>
+      <div class="metric"><label>Warning</label><strong id="warning-count">0</strong></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Worker</div>
+      <div class="worker-name" id="worker-name">No worker yet</div>
+      <div class="worker-meta" id="worker-meta">Waiting for heartbeat.</div>
+    </section>
+
+    <section class="filters" aria-label="Alert filters">
+      <button class="chip active" data-filter="active" type="button">Active</button>
+      <button class="chip" data-filter="open" type="button">Open</button>
+      <button class="chip" data-filter="acknowledged" type="button">Ack</button>
+      <button class="chip" data-filter="dismissed" type="button">Dismissed</button>
+      <button class="chip" data-filter="all" type="button">All</button>
+    </section>
+
+    <section class="alert-list" id="alerts"></section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const apiBase = (params.get("api") || defaultApiBase()).replace(/\/$/, "");
+    const dashboardUrl = `${window.location.origin}/?api=${encodeURIComponent(apiBase)}`;
+    const seenKey = `autozs-mobile-seen-alerts:${apiBase}`;
+    let selectedFilter = "active";
+    let lastAlerts = [];
+    let seenAlerts = new Set(JSON.parse(localStorage.getItem(seenKey) || "[]"));
+
+    document.getElementById("dashboard-link").href = dashboardUrl;
+    document.getElementById("notify-button").addEventListener("click", enableNotifications);
+    document.querySelectorAll("[data-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedFilter = button.dataset.filter;
+        document.querySelectorAll("[data-filter]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        refresh();
+      });
+    });
+
+    refresh();
+    setInterval(refresh, 30000);
+
+    function defaultApiBase() {
+      if (window.location.hostname.includes(".ts.net")) {
+        return `${window.location.protocol}//${window.location.hostname}:8443`;
+      }
+      return "http://127.0.0.1:8000";
+    }
+
+    async function refresh() {
+      try {
+        const [health, workers, summary, alerts] = await Promise.all([
+          api("/health"),
+          api("/workers"),
+          api("/alerts/summary"),
+          api(`/alerts?status=${encodeURIComponent(selectedFilter)}&limit=100`),
+        ]);
+        setError("");
+        updateApiStatus(health);
+        updateWorker(workers);
+        updateSummary(summary);
+        updateAlerts(alerts);
+        maybeNotify(alerts);
+      } catch (error) {
+        updateApiStatus(null);
+        setError(error.message || String(error));
+      }
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(`${apiBase}${path}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {}),
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`${path} failed with ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function updateApiStatus(health) {
+      const dot = document.getElementById("api-dot");
+      const label = document.getElementById("api-status");
+      if (health && health.status === "ok") {
+        dot.classList.add("ok");
+        label.textContent = "API online";
+      } else {
+        dot.classList.remove("ok");
+        label.textContent = "API offline";
+      }
+    }
+
+    function updateWorker(workers) {
+      const current = [...workers].sort((a, b) => (a.seconds_since_seen ?? 999999) - (b.seconds_since_seen ?? 999999))[0];
+      const name = document.getElementById("worker-name");
+      const meta = document.getElementById("worker-meta");
+      if (!current) {
+        name.textContent = "No worker online";
+        meta.textContent = "No worker heartbeat has reached AutoZS.";
+        return;
+      }
+      name.textContent = `${current.label || current.worker_id} ${current.status}`;
+      const seconds = current.seconds_since_seen;
+      const lastSeen = seconds == null ? "unknown" : `${Math.round(seconds / 60)} min ago`;
+      meta.textContent = `${current.role || "worker"} on ${current.platform || "unknown"} · last seen ${lastSeen}`;
+    }
+
+    function updateSummary(summary) {
+      document.getElementById("active-count").textContent = summary.active ?? 0;
+      document.getElementById("critical-count").textContent = summary.critical ?? 0;
+      document.getElementById("warning-count").textContent = summary.warning ?? 0;
+    }
+
+    function updateAlerts(alerts) {
+      lastAlerts = alerts;
+      const container = document.getElementById("alerts");
+      if (!alerts.length) {
+        container.innerHTML = `<div class="empty">No ${escapeHtml(selectedFilter)} alerts right now.</div>`;
+        return;
+      }
+      container.innerHTML = alerts.map((alert) => renderAlert(alert)).join("");
+      container.querySelectorAll("[data-alert-action]").forEach((button) => {
+        button.addEventListener("click", () => changeAlertStatus(button.dataset.alertId, button.dataset.alertAction));
+      });
+      container.querySelectorAll("[data-open-alert]").forEach((button) => {
+        button.addEventListener("click", () => openAlert(button.dataset.openAlert));
+      });
+    }
+
+    function renderAlert(alert) {
+      const severity = escapeHtml(alert.severity || "warning");
+      const source = escapeHtml(alert.source || "system");
+      const status = escapeHtml(alert.status || "open");
+      const title = escapeHtml(alert.title || "AutoZS alert");
+      const message = escapeHtml(alert.message || "");
+      const when = formatDate(alert.last_seen_at);
+      const product = alert.product_id ? `Product ${alert.product_id}` : "";
+      const job = alert.job_type ? `${alert.job_type} ${alert.job_id || ""}` : "";
+      const meta = [source, product, job, when].filter(Boolean).join(" · ");
+      return `
+        <article class="alert ${severity}">
+          <div class="alert-head">
+            <div class="alert-title">${title}</div>
+            <span class="pill ${severity}">${status}</span>
+          </div>
+          <div class="message">${message}</div>
+          <div class="meta">${escapeHtml(meta)}</div>
+          <div class="alert-actions">
+            <button class="small-btn" data-open-alert="${alert.id}" type="button">View</button>
+            ${alert.status === "open" ? `<button class="small-btn accent" data-alert-id="${alert.id}" data-alert-action="acknowledged" type="button">Ack</button>` : ""}
+            ${alert.status !== "dismissed" ? `<button class="small-btn danger" data-alert-id="${alert.id}" data-alert-action="dismissed" type="button">Dismiss</button>` : ""}
+          </div>
+        </article>
+      `;
+    }
+
+    async function changeAlertStatus(id, status) {
+      await api(`/alerts/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      await refresh();
+    }
+
+    function openAlert(id) {
+      const alert = lastAlerts.find((item) => String(item.id) === String(id));
+      if (alert && alert.action_url) {
+        window.open(alert.action_url, "_blank", "noopener");
+        return;
+      }
+      window.open(dashboardUrl, "_blank", "noopener");
+    }
+
+    async function enableNotifications() {
+      if (!("Notification" in window)) {
+        setError("This browser does not support notifications.");
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      document.getElementById("notify-button").textContent = permission === "granted" ? "Alerts Enabled" : "Enable Alerts";
+      if (permission === "granted") {
+        maybeNotify(lastAlerts, true);
+      }
+    }
+
+    function maybeNotify(alerts, force = false) {
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+      alerts.forEach((alert) => {
+        if (!["critical", "warning"].includes(alert.severity)) return;
+        if (!force && seenAlerts.has(alert.id)) return;
+        seenAlerts.add(alert.id);
+        new Notification(alert.title || "AutoZS alert", {
+          body: alert.message || `${alert.source || "AutoZS"} needs attention`,
+          tag: `autozs-alert-${alert.id}`,
+        });
+      });
+      localStorage.setItem(seenKey, JSON.stringify([...seenAlerts].slice(-500)));
+    }
+
+    function setError(message) {
+      const box = document.getElementById("error-box");
+      if (!message) {
+        box.style.display = "none";
+        box.textContent = "";
+        return;
+      }
+      box.style.display = "block";
+      box.textContent = message;
+    }
+
+    function formatDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char]);
+    }
+  </script>
+</body>
+</html>
