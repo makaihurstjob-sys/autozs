@@ -512,20 +512,17 @@
     }
 
     async function refresh() {
+      let health;
       try {
-        const [
-          health,
-          workers,
-          summary,
-          alerts,
-          products,
-          listings,
-          orders,
-          stores,
-          stats30,
-          stats7,
-        ] = await Promise.all([
-          api("/health"),
+        health = await api("/health");
+        updateApiStatus(health);
+      } catch (error) {
+        updateApiStatus(null);
+        setError(error.message || String(error));
+        return;
+      }
+
+      const results = await Promise.allSettled([
           api("/workers"),
           api("/alerts/summary"),
           api(`/alerts?status=${encodeURIComponent(selectedFilter)}&limit=100`),
@@ -535,18 +532,32 @@
           api("/ebay/accounts"),
           api(statsPath(30)),
           api(statsPath(7)),
-        ]);
-        setError("");
-        updateApiStatus(health);
-        updateWorker(workers);
-        updateStores(stores);
+      ]);
+      const failures = results.filter((result) => result.status === "rejected");
+      const [
+        workers,
+        summary,
+        alerts,
+        products,
+        listings,
+        orders,
+        stores,
+        stats30,
+        stats7,
+      ] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+
+      setError(failures.length
+        ? `${failures.length} dashboard section${failures.length === 1 ? "" : "s"} could not refresh.`
+        : "");
+      if (workers) updateWorker(workers);
+      if (stores) updateStores(stores);
+      if (products && listings && orders && stats30 && stats7) {
         updateStats({ products, listings, orders, stats30, stats7 });
-        updateQueueSummary(summary);
+      }
+      if (summary) updateQueueSummary(summary);
+      if (alerts) {
         updateAlerts(alerts);
         maybeNotify(alerts);
-      } catch (error) {
-        updateApiStatus(null);
-        setError(error.message || String(error));
       }
     }
 
