@@ -512,9 +512,10 @@
           api("/workers"),
           api("/alerts/summary"),
           api(`/alerts?status=${encodeURIComponent(selectedFilter)}&limit=100`),
-          api("/products"),
-          api("/ebay/listings"),
-          api("/orders"),
+        api("/products"),
+        api("/ebay/listings"),
+        api("/listing-jobs"),
+        api("/orders"),
           api("/ebay/accounts"),
           api(statsPath(30)),
           api(statsPath(7)),
@@ -526,6 +527,7 @@
         alerts,
         products,
         listings,
+        listingJobs,
         orders,
         stores,
         stats30,
@@ -537,8 +539,8 @@
         : "");
       if (workers) updateWorker(workers);
       if (stores) updateStores(stores);
-      if (products && listings && orders && stats30 && stats7) {
-        updateStats({ products, listings, orders, stats30, stats7 });
+      if (products && listings && listingJobs && orders && stats30 && stats7) {
+        updateStats({ products, listings, listingJobs, orders, stats30, stats7 });
       }
       if (summary) updateQueueSummary(summary);
       if (alerts) {
@@ -614,20 +616,47 @@
       picker.value = selectedStore;
     }
 
-    function updateStats({ products, listings, orders, stats30, stats7 }) {
+    function updateStats({ products, listings, listingJobs, orders, stats30, stats7 }) {
       const scopedListings = selectedStore === "all"
         ? listings
         : listings.filter((listing) => listing.account_id === selectedStore);
-      const liveListings = scopedListings.filter((listing) => ["active", "listed", "live"].includes(String(listing.status || "").toLowerCase()));
-      const scheduledListings = scopedListings.filter((listing) => String(listing.status || "").toLowerCase() === "scheduled");
-      const scheduledProducts = products.filter((product) => product.listing_schedule_at);
+      const scopedJobs = selectedStore === "all"
+        ? listingJobs
+        : listingJobs.filter((job) => job.account_key === selectedStore || job.account_id === selectedStore);
+      const latestJobByProduct = new Map();
+      [...scopedJobs]
+        .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
+        .forEach((job) => {
+          const productId = Number(job.product_id);
+          if (productId && !latestJobByProduct.has(productId)) latestJobByProduct.set(productId, job);
+        });
+      const now = Date.now();
+      const listingIsDue = (listing) => {
+        const job = latestJobByProduct.get(Number(listing.product_id));
+        const start = job?.listing_schedule_at ? new Date(job.listing_schedule_at).getTime() : NaN;
+        return Number.isFinite(start) && start <= now && job?.status === "completed";
+      };
+      const liveListings = scopedListings.filter((listing) => {
+        const status = String(listing.status || "").toLowerCase();
+        return ["active", "listed", "live"].includes(status) || (status === "scheduled" && listingIsDue(listing));
+      });
+      const scheduledListings = scopedListings.filter((listing) => {
+        const status = String(listing.status || "").toLowerCase();
+        return status === "scheduled" && !listingIsDue(listing);
+      });
+      const representedProductIds = new Set(scopedListings.map((listing) => Number(listing.product_id)).filter(Boolean));
+      const pendingScheduledJobs = scopedJobs.filter((job) =>
+        job.listing_schedule_at
+        && !representedProductIds.has(Number(job.product_id))
+        && ["queued", "running", "needs_review", "ready_to_save", "saved_draft"].includes(String(job.status || "").toLowerCase())
+      );
       const draftProducts = products.filter((product) => isDraftProduct(product, scopedListings));
       const scopedOrders = selectedStore === "all"
         ? orders
         : orders.filter((order) => order.account_id === selectedStore);
 
       setText("active-count", liveListings.length);
-      setText("scheduled-count", Math.max(scheduledListings.length, scheduledProducts.length));
+      setText("scheduled-count", scheduledListings.length + pendingScheduledJobs.length);
       setText("orders-count", scopedOrders.length);
       setText("drafts-count", draftProducts.length);
       setText("revenue-30d", money(stats30?.totals?.order_revenue));
