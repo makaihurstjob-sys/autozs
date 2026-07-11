@@ -423,7 +423,7 @@
     <div class="error" id="error-box"></div>
 
     <section class="stats-grid" id="stats-view">
-      <div class="stat-card"><label>Active products</label><strong id="active-count">-</strong></div>
+      <div class="stat-card"><label>Listings</label><strong id="active-count">-</strong></div>
       <div class="stat-card money"><label>30D Revenue</label><strong id="revenue-30d">-</strong></div>
       <div class="stat-card"><label>Scheduled</label><strong id="scheduled-count">-</strong></div>
       <div class="stat-card money"><label>1W Revenue</label><strong id="revenue-7d">-</strong></div>
@@ -615,7 +615,6 @@
     }
 
     function updateStats({ products, listings, orders, stats30, stats7 }) {
-      const activeProducts = products.filter((product) => !["deleted", "paused"].includes(String(product.status || "").toLowerCase()));
       const scopedListings = selectedStore === "all"
         ? listings
         : listings.filter((listing) => listing.account_id === selectedStore);
@@ -627,7 +626,7 @@
         ? orders
         : orders.filter((order) => order.account_id === selectedStore);
 
-      setText("active-count", activeProducts.length);
+      setText("active-count", liveListings.length);
       setText("scheduled-count", Math.max(scheduledListings.length, scheduledProducts.length));
       setText("orders-count", scopedOrders.length);
       setText("drafts-count", draftProducts.length);
