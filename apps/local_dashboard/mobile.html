@@ -245,30 +245,6 @@
       letter-spacing: 0;
     }
     .stat-card.money strong { font-size: clamp(27px, 8vw, 36px); }
-    .queue-tools {
-      display: none;
-      gap: 9px;
-      overflow-x: auto;
-      padding-bottom: 4px;
-      margin: 0 -3px 13px;
-    }
-    .queue-tools.visible { display: flex; }
-    .chip {
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--muted);
-      border-radius: 999px;
-      min-height: 40px;
-      padding: 0 15px;
-      white-space: nowrap;
-      font-weight: 950;
-      font-size: 16px;
-    }
-    .chip.active {
-      color: var(--text);
-      border-color: var(--accent);
-      background: #17342d;
-    }
     .queue-summary {
       display: none;
       grid-template-columns: repeat(3, 1fr);
@@ -310,6 +286,10 @@
     .alert.critical { border-left-color: var(--danger); }
     .alert.warning { border-left-color: var(--warn); }
     .alert.info { border-left-color: var(--blue); }
+    .alert.running { border-left-color: var(--blue); }
+    .alert.queued { border-left-color: var(--accent); }
+    .alert.attention { border-left-color: var(--danger); }
+    .alert.done { border-left-color: var(--ok); }
     .alert-head {
       display: flex;
       gap: 10px;
@@ -333,6 +313,10 @@
     }
     .pill.critical { color: #ffb39f; background: #4b2017; }
     .pill.warning { color: #ffd18a; background: #3b2c12; }
+    .pill.running { color: #9ac8ff; background: #17365a; }
+    .pill.queued { color: #9ce8dc; background: #173e35; }
+    .pill.attention { color: #ffb39f; background: #4b2017; }
+    .pill.done { color: #8ce4ae; background: #173b28; }
     .message {
       color: var(--muted);
       line-height: 1.34;
@@ -437,14 +421,6 @@
       <div class="mini-metric"><label>Attention</label><strong id="attention-count">0</strong></div>
     </section>
 
-    <section class="queue-tools" id="queue-tools" aria-label="Queue filters">
-      <button class="chip active" data-filter="active" type="button">Active</button>
-      <button class="chip" data-filter="open" type="button">Open</button>
-      <button class="chip" data-filter="acknowledged" type="button">Ack</button>
-      <button class="chip" data-filter="dismissed" type="button">Dismissed</button>
-      <button class="chip" data-filter="all" type="button">All</button>
-    </section>
-
     <section class="alert-list" id="alerts"></section>
   </main>
 
@@ -452,15 +428,11 @@
     const params = new URLSearchParams(window.location.search);
     const apiBase = (params.get("api") || defaultApiBase()).replace(/\/$/, "");
     const dashboardUrl = `${window.location.origin}/?api=${encodeURIComponent(apiBase)}`;
-    const seenKey = `autozs-mobile-seen-alerts:${apiBase}`;
     const storeKey = `autozs-mobile-store:${apiBase}`;
     const privacyKey = "autozs-mobile-privacy";
-    let selectedFilter = "active";
     let selectedView = "stats";
     let selectedStore = localStorage.getItem(storeKey) || "all";
     let privacyMode = localStorage.getItem(privacyKey) === "true";
-    let lastAlerts = [];
-    let seenAlerts = new Set(JSON.parse(localStorage.getItem(seenKey) || "[]"));
     let pushConfig = null;
     let serviceWorkerRegistration = null;
 
@@ -474,14 +446,6 @@
     });
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => setView(button.dataset.view));
-    });
-    document.querySelectorAll("[data-filter]").forEach((button) => {
-      button.addEventListener("click", () => {
-        selectedFilter = button.dataset.filter;
-        document.querySelectorAll("[data-filter]").forEach((item) => item.classList.remove("active"));
-        button.classList.add("active");
-        refresh();
-      });
     });
 
     applyPrivacy();
@@ -509,25 +473,27 @@
       }
 
       const results = await Promise.allSettled([
-          api("/workers"),
-          api("/alerts/summary"),
-          api(`/alerts?status=${encodeURIComponent(selectedFilter)}&limit=100`),
+        api("/workers"),
         api("/products"),
         api("/ebay/listings"),
         api("/listing-jobs"),
+        api("/source-refresh/jobs"),
+        api("/ebay/revision-jobs"),
+        api("/ebay/revision-batches"),
         api("/orders"),
-          api("/ebay/accounts"),
-          api(statsPath(30)),
-          api(statsPath(7)),
+        api("/ebay/accounts"),
+        api(statsPath(30)),
+        api(statsPath(7)),
       ]);
       const failures = results.filter((result) => result.status === "rejected");
       const [
         workers,
-        summary,
-        alerts,
         products,
         listings,
         listingJobs,
+        sourceRefreshJobs,
+        revisionJobs,
+        revisionBatches,
         orders,
         stores,
         stats30,
@@ -542,10 +508,8 @@
       if (products && listings && listingJobs && orders && stats30 && stats7) {
         updateStats({ products, listings, listingJobs, orders, stats30, stats7 });
       }
-      if (summary) updateQueueSummary(summary);
-      if (alerts) {
-        updateAlerts(alerts);
-        maybeNotify(alerts);
+      if (listingJobs && sourceRefreshJobs && revisionJobs && revisionBatches) {
+        updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches });
       }
     }
 
@@ -572,7 +536,6 @@
         button.classList.toggle("active", button.dataset.view === selectedView);
       });
       document.getElementById("stats-view").style.display = selectedView === "stats" ? "grid" : "none";
-      document.getElementById("queue-tools").classList.toggle("visible", selectedView === "queue");
       document.getElementById("queue-summary").classList.toggle("visible", selectedView === "queue");
       document.getElementById("alerts").classList.toggle("visible", selectedView === "queue");
     }
@@ -670,72 +633,88 @@
       return !scopedListings.some((listing) => Number(listing.product_id) === Number(product.id) && ["active", "listed", "live", "scheduled"].includes(String(listing.status || "").toLowerCase()));
     }
 
-    function updateQueueSummary(summary) {
-      const active = Number(summary?.active ?? 0);
-      const critical = Number(summary?.critical ?? 0);
-      const warning = Number(summary?.warning ?? 0);
-      setText("running-count", active);
-      setText("queued-count", summary?.open ?? 0);
-      setText("attention-count", critical + warning);
-    }
+    function updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches }) {
+      const entries = [
+        ...listingJobs.map((job) => workerQueueEntry("Listing", job, workerQueueGroup(job.status))),
+        ...sourceRefreshJobs.map((job) => workerQueueEntry("Price refresh", job, workerQueueGroup(job.status))),
+        ...revisionJobs.filter((job) => job.status !== "cancelled").map((job) => workerQueueEntry("Revision", job, workerQueueGroup(job.status))),
+        ...revisionBatches.map((job) => workerQueueEntry("Revision batch", job, revisionBatchGroup(job.status))),
+      ].sort((a, b) => {
+        const groupOrder = { running: 0, attention: 1, queued: 2, other: 3, done: 4 };
+        const groupDelta = (groupOrder[a.group] ?? 5) - (groupOrder[b.group] ?? 5);
+        return groupDelta || new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+      }).slice(0, 40);
+      const counts = entries.reduce((result, entry) => {
+        if (entry.group === "running") result.running += 1;
+        if (entry.group === "queued") result.queued += 1;
+        if (entry.group === "attention") result.attention += 1;
+        return result;
+      }, { running: 0, queued: 0, attention: 0 });
+      setText("running-count", counts.running);
+      setText("queued-count", counts.queued);
+      setText("attention-count", counts.attention);
 
-    function updateAlerts(alerts) {
-      lastAlerts = alerts || [];
       const container = document.getElementById("alerts");
-      if (!lastAlerts.length) {
-        container.innerHTML = `<div class="empty">No ${escapeHtml(selectedFilter)} queue items right now.</div>`;
+      if (!entries.length) {
+        container.innerHTML = `<div class="empty">No worker jobs yet.</div>`;
         return;
       }
-      container.innerHTML = lastAlerts.map((alert) => renderAlert(alert)).join("");
-      container.querySelectorAll("[data-alert-action]").forEach((button) => {
-        button.addEventListener("click", () => changeAlertStatus(button.dataset.alertId, button.dataset.alertAction));
-      });
-      container.querySelectorAll("[data-open-alert]").forEach((button) => {
-        button.addEventListener("click", () => openAlert(button.dataset.openAlert));
-      });
+      container.innerHTML = entries.map(renderWorkerQueueEntry).join("");
     }
 
-    function renderAlert(alert) {
-      const severity = escapeHtml(alert.severity || "warning");
-      const status = escapeHtml(alert.status || "open");
-      const title = escapeHtml(alert.title || "AutoZS alert");
-      const message = escapeHtml(alert.message || "");
-      const when = formatDate(alert.last_seen_at);
-      const product = alert.product_id ? `Product ${alert.product_id}` : "";
-      const job = alert.job_type ? `${alert.job_type} ${alert.job_id || ""}` : "";
-      const meta = [alert.source || "AutoZS", product, job, when].filter(Boolean).join(" · ");
+    function workerQueueEntry(kind, job, group) {
+      const title = job.title || job.filename || job.sku || `${kind} #${job.id}`;
+      const subtitle = kind === "Revision batch"
+        ? `${job.account_key || "unknown account"} · ${Number(job.rows_total || 0)} revision${Number(job.rows_total || 0) === 1 ? "" : "s"}`
+        : kind === "Revision"
+          ? `${job.listing_id || "No listing id"} · ${job.ebay_account_key || "manual"}`
+          : `${job.sku || `Product ${job.product_id || "-"}`} · ${job.batch_key || job.ebay_account_key || "worker"}`;
+      return {
+        kind,
+        id: job.id,
+        group,
+        status: job.status || "unknown",
+        title,
+        subtitle,
+        message: job.message || job.guard_reason || "",
+        updatedAt: job.updated_at || job.created_at || job.scheduled_for,
+        attempts: job.attempts || 0,
+      };
+    }
+
+    function workerQueueGroup(status) {
+      const normalized = String(status || "").toLowerCase();
+      if (normalized === "running") return "running";
+      if (normalized === "queued") return "queued";
+      if (["failed", "needs_review", "paused"].includes(normalized)) return "attention";
+      if (["completed", "saved_draft", "ready_to_save", "tombstoned", "cancelled"].includes(normalized)) return "done";
+      return "other";
+    }
+
+    function revisionBatchGroup(status) {
+      const normalized = String(status || "").toLowerCase();
+      if (["uploading", "waiting_results"].includes(normalized)) return "running";
+      if (normalized === "prepared") return "queued";
+      if (["needs_review", "failed"].includes(normalized)) return "attention";
+      if (["completed", "cancelled"].includes(normalized)) return "done";
+      return "other";
+    }
+
+    function renderWorkerQueueEntry(entry) {
+      const meta = [entry.subtitle, entry.updatedAt ? `Updated ${formatDate(entry.updatedAt)}` : "", `${entry.attempts} attempt(s)`].filter(Boolean).join(" · ");
       return `
-        <article class="alert ${severity}">
+        <article class="alert ${escapeHtml(entry.group)}">
           <div class="alert-head">
-            <div class="alert-title">${title}</div>
-            <span class="pill ${severity}">${status}</span>
+            <div class="alert-title">${escapeHtml(entry.kind)} #${escapeHtml(entry.id)} · ${escapeHtml(entry.title)}</div>
+            <span class="pill ${escapeHtml(entry.group)}">${escapeHtml(entry.status)}</span>
           </div>
-          <div class="message">${message}</div>
+          ${entry.message ? `<div class="message">${escapeHtml(entry.message)}</div>` : ""}
           <div class="meta">${escapeHtml(meta)}</div>
           <div class="alert-actions">
-            <button class="small-btn" data-open-alert="${alert.id}" type="button">View</button>
-            ${alert.status === "open" ? `<button class="small-btn accent" data-alert-id="${alert.id}" data-alert-action="acknowledged" type="button">Ack</button>` : ""}
-            ${alert.status !== "dismissed" ? `<button class="small-btn danger" data-alert-id="${alert.id}" data-alert-action="dismissed" type="button">Dismiss</button>` : ""}
+            <a class="small-btn" href="${escAttr(dashboardUrl)}">View</a>
           </div>
         </article>
       `;
-    }
-
-    async function changeAlertStatus(id, status) {
-      await api(`/alerts/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status }),
-      });
-      await refresh();
-    }
-
-    function openAlert(id) {
-      const alert = lastAlerts.find((item) => String(item.id) === String(id));
-      if (alert && alert.action_url) {
-        window.open(alert.action_url, "_blank", "noopener");
-        return;
-      }
-      window.open(dashboardUrl, "_blank", "noopener");
     }
 
     function togglePrivacy() {
@@ -762,7 +741,6 @@
 
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
         markNotifications(true);
-        maybeNotify(lastAlerts, true);
         return;
       }
 
@@ -771,7 +749,6 @@
         if (!pushConfig.enabled) {
           setError(`Push not configured: ${pushConfig.reason || "missing server keys"}`);
           markNotifications(true);
-          maybeNotify(lastAlerts, true);
           return;
         }
         serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
@@ -819,20 +796,6 @@
 
     function markNotifications(enabled) {
       document.getElementById("notify-button").classList.toggle("muted", !enabled);
-    }
-
-    function maybeNotify(alerts, force = false) {
-      if (!("Notification" in window) || Notification.permission !== "granted") return;
-      (alerts || []).forEach((alert) => {
-        if (!["critical", "warning"].includes(alert.severity)) return;
-        if (!force && seenAlerts.has(alert.id)) return;
-        seenAlerts.add(alert.id);
-        new Notification(alert.title || "AutoZS alert", {
-          body: alert.message || `${alert.source || "AutoZS"} needs attention`,
-          tag: `autozs-alert-${alert.id}`,
-        });
-      });
-      localStorage.setItem(seenKey, JSON.stringify([...seenAlerts].slice(-500)));
     }
 
     function setError(message) {

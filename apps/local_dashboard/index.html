@@ -491,7 +491,7 @@
         background: #2f80ed;
         border-radius: 999px;
         color: white;
-        content: "Selected from Job Activity";
+        content: "Selected from Worker Queue";
         font-size: 11px;
         font-weight: 800;
         padding: 5px 8px;
@@ -2424,7 +2424,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="secondary icon-button job-activity-button" onclick="toggleJobActivity()" id="job-activity-toggle" aria-label="Job activity" title="Job activity" data-tooltip="Job activity"></button>
+        <button class="secondary icon-button job-activity-button" onclick="toggleJobActivity()" id="job-activity-toggle" aria-label="Worker Queue" title="Worker Queue" data-tooltip="Worker Queue"></button>
         <button class="secondary icon-button" onclick="toggleTheme()" id="theme-toggle" aria-label="Switch to dark mode" title="Switch to dark mode" data-tooltip="Switch theme"></button>
         <button class="secondary icon-button" onclick="startEbaySyncNow()" aria-label="Sync now" title="Sync now" data-tooltip="Sync now"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
       </div>
@@ -3213,7 +3213,7 @@
         const button = document.getElementById("job-activity-toggle");
         if (!button) return;
         const count = jobActivityImportantCount();
-        const label = count ? `Job activity, ${count} active or blocked` : "Job activity";
+        const label = count ? `Worker Queue, ${count} active or blocked` : "Worker Queue";
         button.classList.toggle("has-active", count > 0);
         button.setAttribute("aria-label", label);
         button.title = label;
@@ -3262,13 +3262,13 @@
           ? "Queued listing, price refresh, and revision jobs will appear here as soon as they start moving."
           : `No ${filterLabel.toLowerCase()} jobs match this filter right now.`;
         return `<div class="job-activity-backdrop" onclick="toggleJobActivity(false)"></div>
-          <aside class="job-activity-panel" role="dialog" aria-modal="true" aria-label="Job activity">
+          <aside class="job-activity-panel" role="dialog" aria-modal="true" aria-label="Worker Queue">
             <div class="job-activity-head">
               <div>
-                <h2>Job Activity</h2>
+                <h2>Worker Queue</h2>
                 <p>${esc(newest)}</p>
               </div>
-              <button class="secondary icon-button" onclick="toggleJobActivity(false)" aria-label="Close job activity" title="Close">${esc("×")}</button>
+              <button class="secondary icon-button" onclick="toggleJobActivity(false)" aria-label="Close Worker Queue" title="Close">${esc("×")}</button>
             </div>
             <div class="job-activity-summary">
               <button class="job-activity-stat ${activeFilter === "running" ? "is-active" : ""}" onclick="setJobActivityFilter('running')" aria-pressed="${activeFilter === "running"}"><span>Running</span><strong>${counts.running}</strong></button>
@@ -3486,7 +3486,7 @@
         renderJobActivityButton();
         renderJobActivityDrawer();
         message(opened
-          ? `Opened ${purpose} #${jobId}. The worker will report its result back to Job Activity.`
+          ? `Opened ${purpose} #${jobId}. The worker will report its result back to Worker Queue.`
           : "Chrome blocked the source tab. Allow popups, then click View again.");
       }
 
@@ -3505,7 +3505,7 @@
         try {
           await request(`/ebay/revision-jobs/${Number(jobId)}`, {
             method: "PATCH",
-            body: JSON.stringify({ status: "cancelled", message: "Cancelled from Job Activity." })
+            body: JSON.stringify({ status: "cancelled", message: "Cancelled from Worker Queue." })
           });
           await refreshAll({ silent: true });
           renderJobActivityDrawer();
@@ -3519,7 +3519,7 @@
         try {
           await request(`/ebay/revision-batches/${Number(batchId)}`, {
             method: "PATCH",
-            body: JSON.stringify({ status: "cancelled", message: "Dismissed from Job Activity after manual review." })
+            body: JSON.stringify({ status: "cancelled", message: "Dismissed from Worker Queue after manual review." })
           });
           await refreshAll({ silent: true });
           renderJobActivityDrawer();
@@ -3549,7 +3549,7 @@
         }
         render();
         scrollFocusedProductIntoView();
-        message(`Showing the selected Job Activity product${status === "all" ? "" : ` in ${status}`} listings.`);
+        message(`Showing the selected Worker Queue product${status === "all" ? "" : ` in ${status}`} listings.`);
       }
 
       function scrollFocusedProductIntoView() {
