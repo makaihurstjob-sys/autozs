@@ -317,6 +317,11 @@ def test_ebay_listing_report_sync_reconciles_one_store(client) -> None:
     assert refreshed["SCHEDULED-UNKNOWN-1"]["view_delta"] == 4
     history = client.get(f"/ebay/listings/{refreshed['SCHEDULED-UNKNOWN-1']['id']}/view-history").json()
     assert [snapshot["views"] for snapshot in history] == [4, 0]
+    view_summary = client.get(f"/ebay/listing-views/summary?account_key={account['key']}").json()
+    assert view_summary["views_30d"] == 4
+    assert view_summary["views_7d"] == 4
+    assert view_summary["listings_measured"] == 1
+    assert view_summary["measured_at"] is not None
 
     stats = client.get(f"/stats/overview?range=all&grain=day&account={account['key']}").json()
     assert stats["totals"]["active_listings"] == 2

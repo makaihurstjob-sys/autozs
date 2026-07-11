@@ -185,10 +185,14 @@
   }
 
   function activeListingViewRows() {
+    const columnHeaders = Array.from(document.querySelectorAll("thead th,[role='columnheader']"));
+    const viewsColumnIndex = columnHeaders.findIndex((header) => /views?(?:\s*\(30\s*days?\))?/i.test(clean(header.innerText || header.textContent)));
     return Array.from(document.querySelectorAll("tr,[role='row']")).map((row) => {
       const titleCell = row.querySelector(".shui-dt-column__title");
-      const viewsCell = row.querySelector(".shui-dt-column__visitCount");
-      const listingId = clean(titleCell?.innerText || titleCell?.textContent).match(/\b\d{12}\b/)?.[0] || "";
+      const cells = Array.from(row.querySelectorAll("td,[role='gridcell']"));
+      const viewsCell = row.querySelector(".shui-dt-column__visitCount,[data-testid*='visitCount'],[data-testid*='views']")
+        || (viewsColumnIndex >= 0 ? cells[viewsColumnIndex] : null);
+      const listingId = clean(titleCell?.innerText || titleCell?.textContent || row.innerText || row.textContent).match(/\b\d{12}\b/)?.[0] || "";
       const viewsText = clean(viewsCell?.innerText || viewsCell?.textContent);
       const viewsMatch = viewsText.match(/\bViews\s+([\d,]+)/i) || viewsText.match(/^([\d,]+)/);
       return listingId && viewsMatch ? { listing_id: listingId, views: Number(viewsMatch[1].replace(/,/g, "")) } : null;

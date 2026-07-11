@@ -341,6 +341,14 @@ class EbayListingViewSnapshotRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EbayListingViewsSummary(BaseModel):
+    account_key: str | None = None
+    views_30d: int = 0
+    views_7d: int = 0
+    listings_measured: int = 0
+    measured_at: datetime | None = None
+
+
 class EbayListingMarkRequest(BaseModel):
     listing_id: str | None = None
     account_id: str = "manual"

@@ -50,6 +50,7 @@ from app.schemas.domain import (
     EbayListingRead,
     EbayListingViewsCapture,
     EbayListingViewsCaptureResult,
+    EbayListingViewsSummary,
     EbayListingViewSnapshotRead,
     EbaySyncListingReportImport,
     EbaySyncRunCreate,
@@ -949,6 +950,61 @@ def read_ebay_listing_view_history(
         .limit(limit)
     ).all()
     return [EbayListingViewSnapshotRead.model_validate(item) for item in snapshots]
+
+
+@router.get("/ebay/listing-views/summary", response_model=EbayListingViewsSummary)
+def read_ebay_listing_views_summary(
+    account_key: str | None = None,
+    db: Session = Depends(get_db),
+) -> EbayListingViewsSummary:
+    listing_stmt = select(EbayListing).where(
+        EbayListing.status.in_({"active", "live", "listed", "scheduled"})
+    )
+    if account_key:
+        listing_stmt = listing_stmt.where(EbayListing.account_id == account_key)
+    listings = list(db.scalars(listing_stmt).all())
+    listing_ids = [listing.id for listing in listings]
+    if not listing_ids:
+        return EbayListingViewsSummary(account_key=account_key)
+
+    cutoff = datetime.utcnow() - timedelta(days=7)
+    snapshots = list(
+        db.scalars(
+            select(EbayListingViewSnapshot)
+            .where(
+                EbayListingViewSnapshot.ebay_listing_id.in_(listing_ids),
+                EbayListingViewSnapshot.captured_at >= cutoff,
+            )
+            .order_by(
+                EbayListingViewSnapshot.ebay_listing_id,
+                EbayListingViewSnapshot.captured_at,
+                EbayListingViewSnapshot.id,
+            )
+        ).all()
+    )
+    snapshots_by_listing: dict[int, list[EbayListingViewSnapshot]] = {}
+    for snapshot in snapshots:
+        snapshots_by_listing.setdefault(snapshot.ebay_listing_id, []).append(snapshot)
+
+    views_7d = 0
+    for listing in listings:
+        history = snapshots_by_listing.get(listing.id, [])
+        if len(history) > 1:
+            views_7d += sum(max(0, current.views - previous.views) for previous, current in zip(history, history[1:]))
+        elif history:
+            tracking_start = listing.started_at or listing.created_at
+            if tracking_start and tracking_start >= cutoff:
+                views_7d += max(0, history[0].views)
+
+    measured = [listing for listing in listings if listing.views_measured_at is not None]
+    measured_at = max((listing.views_measured_at for listing in measured), default=None)
+    return EbayListingViewsSummary(
+        account_key=account_key,
+        views_30d=sum(max(0, listing.views or 0) for listing in listings),
+        views_7d=views_7d,
+        listings_measured=len(measured),
+        measured_at=measured_at,
+    )
 
 
 @router.get("/ebay/sync-runs", response_model=list[EbaySyncRunRead])
