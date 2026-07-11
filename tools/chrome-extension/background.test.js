@@ -8,6 +8,8 @@ async function runNativePcInputTest() {
   const commands = [];
   const closedTabs = [];
   const createdTabs = [];
+  const removedCookies = [];
+  const browsingDataRemovals = [];
   const storage = { autozsWorkerMode: "operations" };
   const fetched = [];
   const context = {
@@ -36,6 +38,17 @@ async function runNativePcInputTest() {
       };
     },
     chrome: {
+      browsingData: {
+        remove: async (options, dataToRemove) => browsingDataRemovals.push({ options, dataToRemove }),
+      },
+      cookies: {
+        getAll: async () => [
+          { name: "_abck", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
+          { name: "bm_sz", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
+          { name: "THD_SESSION", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
+        ],
+        remove: async (details) => removedCookies.push(details),
+      },
       debugger: {
         attach: async () => {},
         detach: async () => {},
@@ -75,6 +88,16 @@ async function runNativePcInputTest() {
   vm.createContext(context);
   vm.runInContext(source, context);
   if (!listener) throw new Error("Expected background message listener to be registered.");
+  const cleanup = await context.clearHomeDepotBatchState();
+  if (cleanup.cleared !== 2 || removedCookies.length !== 2) {
+    throw new Error(`Expected two transient Home Depot cookies removed, got ${JSON.stringify({ cleanup, removedCookies })}`);
+  }
+  if (removedCookies.some((cookie) => cookie.name === "THD_SESSION")) {
+    throw new Error("Expected Home Depot account session cookie to be preserved.");
+  }
+  if (browsingDataRemovals.length !== 1 || !browsingDataRemovals[0].dataToRemove.cache) {
+    throw new Error(`Expected Home Depot cache cleanup, got ${JSON.stringify(browsingDataRemovals)}`);
+  }
   const reportFilename = context.reportDownloadFilename(
     { runId: 42, accountKey: "Main Store", reportType: "active_listings" },
     "eBay-all-active-listings-report.csv"

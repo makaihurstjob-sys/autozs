@@ -95,13 +95,15 @@
       white-space: nowrap;
     }
     .store-picker-wrap::after {
-      content: "⌄";
+      content: "";
       position: absolute;
-      right: 13px;
+      right: 16px;
       top: 50%;
-      transform: translateY(-56%);
-      color: var(--text);
-      font-size: 25px;
+      width: 9px;
+      height: 9px;
+      border-right: 2px solid var(--text);
+      border-bottom: 2px solid var(--text);
+      transform: translateY(-70%) rotate(45deg);
       pointer-events: none;
     }
     .privacy .store-picker {
@@ -698,7 +700,7 @@
       const current = new Set([...picker.options].map((option) => option.value));
       const nextStores = [{ key: "all", label: "All stores" }, ...(stores || []).map((store) => ({
         key: store.key || store.account_id || store.label,
-        label: store.label || store.account_id || store.key || "Store",
+        label: mobileStoreDisplayName(store),
       }))];
       const nextSignature = nextStores.map((store) => `${store.key}:${store.label}`).join("|");
       if (picker.dataset.signature !== nextSignature) {
@@ -711,6 +713,13 @@
       }
       picker.value = selectedStore;
       applyPrivacy();
+    }
+
+    function mobileStoreDisplayName(store) {
+      const label = String(store?.label || store?.key || "Store").trim();
+      const accountId = String(store?.account_id || "").trim();
+      if (!accountId || accountId === label) return label;
+      return `${label} (${accountId})`;
     }
 
     function updateStats({ products, listings, listingJobs, orders, stats30, stats7 }) {

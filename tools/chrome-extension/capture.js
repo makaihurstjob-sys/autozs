@@ -1,6 +1,6 @@
 var API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-56u49jf.tailb2892a.ts.net:8443";
-var CAPTURE_BUILD = "2026-07-03-worker-mode";
+var CAPTURE_BUILD = "2026-07-11-batch-cleanup";
 var AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
 
 function defaultAutozsWorkerMode() {

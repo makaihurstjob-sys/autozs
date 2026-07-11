@@ -4098,10 +4098,11 @@
         if (!bulkScheduleView) return "";
         const count = bulkScheduleTargetCount(bulkScheduleView.context);
         const isProductSchedule = bulkScheduleView.context === "products";
+        const isReschedule = bulkScheduleView.context === "reschedule";
         return `<div class="add-products-dialog bulk-schedule-dialog" role="dialog" aria-modal="true" aria-label="Schedule drafts">
           <button class="add-products-close" onclick="closeBulkSchedule()" aria-label="Close schedule drafts">×</button>
-          <h2>${isProductSchedule ? "Schedule listings" : "Schedule drafts"}</h2>
-          <p class="add-products-subtitle">${esc(count)} selected item${count === 1 ? "" : "s"} will ${isProductSchedule ? "be queued on the Windows worker with this native eBay listing start" : "use this eBay listing start"}.</p>
+          <h2>${isReschedule ? "Reschedule listing" : isProductSchedule ? "Schedule listings" : "Schedule drafts"}</h2>
+          <p class="add-products-subtitle">${esc(count)} selected item${count === 1 ? "" : "s"} will ${isReschedule || isProductSchedule ? "be queued on the Windows worker with this native eBay listing start" : "use this eBay listing start"}.</p>
           <div class="bulk-schedule-fields">
             <label>Select date
               <input id="bulk-schedule-date" type="date" oninput="updateBulkScheduleButton()" />
@@ -4133,6 +4134,10 @@
         openBulkSchedule("products", [productId]);
       }
 
+      function openListingReschedule(productId) {
+        openBulkSchedule("reschedule", [productId]);
+      }
+
       function closeBulkSchedule() {
         bulkScheduleView = null;
         renderBulkScheduleModal();
@@ -4154,20 +4159,32 @@
         if (!bulkScheduleView) return;
         const schedule = selectedBulkScheduleValue();
         if (!schedule) return message("Select a date and time first.");
+        if (new Date(schedule).getTime() <= Date.now()) return message("Choose a future date and time.");
         const context = bulkScheduleView.context;
-        if (context === "listings") {
-          const items = selectedVisibleListingItems();
+        if (context === "listings" || context === "reschedule") {
+          const targetIds = new Set((bulkScheduleView.productIds || []).map(Number));
+          const items = targetIds.size
+            ? ebayListingItems().filter((item) => targetIds.has(Number(item.product_id)))
+            : selectedVisibleListingItems();
           if (!items.length) return message("Select at least one visible eBay listing first.");
           await Promise.all(items.map((item) => {
             if (item.listing_job?.id) {
-              return request(`/listing-jobs/${item.listing_job.id}`, { method: "PATCH", body: JSON.stringify({ listing_schedule_at: schedule }) });
+              return request(`/listing-jobs/${item.listing_job.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({
+                  status: context === "reschedule" ? "queued" : item.listing_job.status,
+                  scheduled_for: context === "reschedule" ? new Date().toISOString() : item.listing_job.scheduled_for,
+                  listing_schedule_at: schedule,
+                  message: context === "reschedule" ? "Queued on the Windows worker for rescheduling" : item.listing_job.message
+                })
+              });
             }
             return request(`/products/${item.product_id}/listing-schedule`, { method: "PATCH", body: JSON.stringify({ listing_schedule_at: schedule }) });
           }));
           listingStatusFilter = "scheduled";
           closeBulkSchedule();
           await refreshAll();
-          message(`Scheduled ${items.length} selected eBay listing draft(s).`);
+          message(`${context === "reschedule" ? "Requeued" : "Scheduled"} ${items.length} eBay listing draft(s) on the Windows worker.`);
         } else {
           const productIds = bulkScheduleView.productIds?.length ? bulkScheduleView.productIds : selectedVisibleProductIds();
           if (!productIds.length) return message("Select at least one visible product first.");
@@ -5751,13 +5768,12 @@
         if (listingIsLive(item) && (item.listing_id || extractListingIdFromJob(job))) {
           return `<button class="secondary" onclick="openEbayListingDraft(${item.product_id})" title="Open this live eBay listing">View Listing</button>`;
         }
-        const canOpen = Boolean(job?.ebay_draft_id || job?.assistant_url);
-        const title = job?.ebay_draft_id
-          ? "Open this eBay draft editor"
-          : job?.assistant_url
-            ? "Open the eBay assistant for this draft"
-            : "No eBay draft link is available yet.";
-        return `<button class="secondary" ${canOpen ? "" : "disabled"} onclick="openEbayListingDraft(${item.product_id})" title="${escAttr(title)}">Go to Draft</button>`;
+        const canOpen = Boolean(job?.ebay_draft_id);
+        const title = canOpen ? "Open this eBay draft without changing it" : "No saved eBay draft ID is available yet.";
+        return `<div class="actions">
+          <button class="secondary" ${canOpen ? "" : "disabled"} onclick="openEbayListingDraft(${item.product_id})" title="${escAttr(title)}">Go to Draft</button>
+          ${canOpen ? `<button onclick="openListingReschedule(${item.product_id})" title="Choose a new future start and queue it on the Windows worker">Reschedule</button>` : ""}
+        </div>`;
       }
 
       function openEbayListingDraft(productId) {
@@ -5773,18 +5789,11 @@
         if (!job) return message("No eBay draft job is available for this listing yet.");
         if (blockIfEbayAccountMismatch(job.ebay_account_key || "manual")) return;
         if (job.ebay_draft_id) {
-          const draftUrl = new URL(`https://www.ebay.com/lstng?draftId=${encodeURIComponent(job.ebay_draft_id)}&mode=AddItem`);
-          const handoff = ebayFillHandoffParams(productId, job);
-          handoff.forEach((value, key) => draftUrl.searchParams.set(key, value));
-          draftUrl.hash = handoff.toString();
-          window.open(draftUrl.href, "_blank", "noopener,noreferrer");
-          return message(`Opened eBay draft ${job.ebay_draft_id}.`);
+          const draftUrl = `https://www.ebay.com/lstng?draftId=${encodeURIComponent(job.ebay_draft_id)}&mode=AddItem`;
+          window.open(draftUrl, "_blank", "noopener,noreferrer");
+          return message(`Opened eBay draft ${job.ebay_draft_id} without running AutoZS.`);
         }
-        if (job.assistant_url) {
-          window.open(job.assistant_url, "_blank", "noopener,noreferrer");
-          return message(`Opened eBay assistant for job ${job.id}.`);
-        }
-        message("No eBay draft link is available yet.");
+        message("No saved eBay draft ID is available yet.");
       }
 
       function ebayFillHandoffParams(productId, job = null) {

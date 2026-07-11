@@ -236,7 +236,7 @@ def serialize_listing_job(db: Session, job: ListingJob) -> dict:
             "local_image_count": 0,
             "image_upload_status": "missing",
             "source_url": None,
-            "assistant_url": _assistant_url(job.product_id, job.id, job.listing_schedule_at, job.ebay_account_key, job.action),
+            "assistant_url": _assistant_url(job.product_id, job.id, job.listing_schedule_at, job.ebay_account_key, job.action, job.ebay_draft_id),
             "created_at": job.created_at,
             "updated_at": job.updated_at,
         }
@@ -267,7 +267,7 @@ def serialize_listing_job(db: Session, job: ListingJob) -> dict:
         "local_image_count": len(package["local_image_paths"]),
         "image_upload_status": package["image_upload_status"],
         "source_url": package["source_url"],
-        "assistant_url": _assistant_url(job.product_id, job.id, job.listing_schedule_at, job.ebay_account_key, job.action),
+        "assistant_url": _assistant_url(job.product_id, job.id, job.listing_schedule_at, job.ebay_account_key, job.action, job.ebay_draft_id),
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
@@ -279,6 +279,7 @@ def _assistant_url(
     listing_schedule_at: datetime | None = None,
     ebay_account_key: str = "manual",
     action: str = "create_draft",
+    ebay_draft_id: str | None = None,
 ) -> str:
     params = {
         "autozs_fill": "1",
@@ -294,6 +295,8 @@ def _assistant_url(
     if action == "publish" and listing_schedule_at is not None:
         params["autozs_autosubmit"] = "1"
     query = urlencode(params)
+    if ebay_draft_id:
+        return f"https://www.ebay.com/lstng?draftId={ebay_draft_id}&mode=AddItem&{query}#{query}"
     return f"https://www.ebay.com/sl/prelist/home?{query}#{query}"
 
 

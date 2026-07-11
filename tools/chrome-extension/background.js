@@ -11,6 +11,7 @@ const EBAY_REVISION_RESULT_CONTEXT_KEY = "autozsEbayRevisionResultContext";
 const EBAY_REVISION_RESULT_DOWNLOADS_KEY = "autozsEbayRevisionResultDownloads";
 const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 const AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
+const HOME_DEPOT_TRANSIENT_COOKIE_PATTERN = /^(?:_abck|ak_bmsc|bm_mi|bm_sv|bm_sz|bm_so|bm_ss)$/i;
 
 function defaultAutozsWorkerMode() {
   return isWindowsPlatform() ? "operations" : "viewer";
@@ -41,6 +42,24 @@ async function readAutozsWorkerMode() {
 
 async function canRunAutozsWorkerJobs() {
   return isWindowsPlatform() && (await readAutozsWorkerMode()) === "operations";
+}
+
+async function clearHomeDepotBatchState() {
+  if (!(await canRunAutozsWorkerJobs())) return { cleared: 0, skipped: true };
+  const cookies = await chrome.cookies.getAll({ domain: ".homedepot.com" });
+  const transient = (cookies || []).filter((cookie) => HOME_DEPOT_TRANSIENT_COOKIE_PATTERN.test(cookie.name || ""));
+  await Promise.all(transient.map((cookie) => {
+    const protocol = cookie.secure ? "https" : "http";
+    const host = String(cookie.domain || "www.homedepot.com").replace(/^\./, "");
+    return chrome.cookies.remove({ url: `${protocol}://${host}${cookie.path || "/"}`, name: cookie.name, storeId: cookie.storeId });
+  }));
+  if (chrome.browsingData?.remove) {
+    await chrome.browsingData.remove(
+      { origins: ["https://www.homedepot.com"] },
+      { cache: true, cacheStorage: true, serviceWorkers: true }
+    );
+  }
+  return { cleared: transient.length, skipped: false };
 }
 
 function reportDownloadFilename(context, originalFilename) {
@@ -344,6 +363,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         api: LOCAL_API,
       });
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (message?.type === "autozs-home-depot-batch-cleanup") {
+    clearHomeDepotBatchState()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
   if (message?.type === "autozs-ebay-report-sync-context") {

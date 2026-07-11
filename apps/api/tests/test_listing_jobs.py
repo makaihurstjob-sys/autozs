@@ -84,6 +84,22 @@ def test_listing_jobs_enqueue_run_and_mark_saved(client) -> None:
     assert saved["message"] == "Saved for later on eBay"
 
 
+def test_existing_draft_assistant_url_reopens_that_draft(client) -> None:
+    product = create_ready_product(client, "Existing Draft Reschedule")
+    job = client.post("/listing-jobs", json={"product_ids": [product["id"]]}).json()[0]
+
+    updated = client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={"status": "queued", "ebay_draft_id": "5123456789001"},
+    ).json()
+
+    assert updated["assistant_url"].startswith(
+        "https://www.ebay.com/lstng?draftId=5123456789001&mode=AddItem&"
+    )
+    assert "autozs_fill=1" in updated["assistant_url"]
+    assert f"autozs_job_id={job['id']}" in updated["assistant_url"]
+
+
 def test_listing_job_draft_verification_tombstones_missing_draft_and_allows_reimport(client) -> None:
     product = create_ready_product(client, "Deleted eBay Draft Product")
     job = client.post("/listing-jobs", json={"product_ids": [product["id"]], "ebay_account_key": "manual"}).json()[0]

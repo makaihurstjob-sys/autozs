@@ -245,7 +245,16 @@
           try {
             const nextJob = await claimNextSourceRefreshJob(refreshContext.batchKey);
             if (nextJob?.runner_url) location.replace(nextJob.runner_url);
-            else setStatus(`Refresh batch complete. Last product: ${product.sku}.`);
+            else {
+              let cleanupMessage = "Home Depot batch state cleaned.";
+              try {
+                const cleanup = await chrome.runtime.sendMessage({ type: "autozs-home-depot-batch-cleanup" });
+                if (!cleanup?.ok) cleanupMessage = "Batch cleanup will retry with the next worker run.";
+              } catch {
+                cleanupMessage = "Batch cleanup will retry with the next worker run.";
+              }
+              setStatus(`Refresh batch complete. Last product: ${product.sku}. ${cleanupMessage}`);
+            }
           } catch (nextError) {
             setStatus(`Refreshed ${product.sku}. Next product will resume on the worker poll.`);
           }
