@@ -108,6 +108,12 @@
       color: transparent;
       text-shadow: 0 0 10px rgba(244, 251, 247, 0.72);
     }
+    .privacy .store-picker:disabled {
+      color: var(--muted);
+      text-shadow: none;
+      opacity: 1;
+      cursor: not-allowed;
+    }
     .icon-btn {
       min-width: 34px;
       height: 34px;
@@ -245,6 +251,105 @@
       letter-spacing: 0;
     }
     .stat-card.money strong { font-size: clamp(27px, 8vw, 36px); }
+    .mobile-calendar {
+      display: none;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    .mobile-calendar.visible { display: block; }
+    .mobile-calendar-toolbar {
+      min-height: 48px;
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) 34px;
+      gap: 8px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+    .mobile-calendar-toolbar strong { text-align: center; font-size: 16px; }
+    .calendar-nav {
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-soft);
+      color: var(--text);
+      font-size: 21px;
+    }
+    .mobile-calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+    }
+    .mobile-calendar-weekday {
+      padding: 8px 2px 6px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 10px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+    .mobile-calendar-day {
+      position: relative;
+      min-width: 0;
+      min-height: 43px;
+      border: 0;
+      border-top: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .mobile-calendar-day:nth-child(7n) { border-right: 0; }
+    .mobile-calendar-day.muted { color: #53625c; }
+    .mobile-calendar-day.selected { background: #173b33; box-shadow: inset 0 0 0 1px var(--accent); }
+    .mobile-calendar-day.today .day-number { color: var(--accent); }
+    .calendar-dots {
+      position: absolute;
+      left: 50%;
+      bottom: 6px;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 3px;
+    }
+    .calendar-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+    .calendar-dot.scheduled { background: var(--blue); }
+    .calendar-dot.listed { background: var(--ok); }
+    .calendar-dot.renewal { background: var(--accent); }
+    .calendar-detail {
+      border-top: 1px solid var(--line);
+      padding: 11px;
+      display: grid;
+      gap: 9px;
+    }
+    .calendar-detail-heading { color: var(--muted); font-size: 12px; font-weight: 850; }
+    .calendar-mini-card {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      border-radius: 7px;
+      background: #0b1813;
+    }
+    .calendar-mini-card.scheduled { border-left-color: var(--blue); }
+    .calendar-mini-card.listed { border-left-color: var(--ok); }
+    .calendar-mini-card.renewal { border-left-color: var(--accent); }
+    .calendar-mini-card img {
+      width: 54px;
+      height: 54px;
+      object-fit: contain;
+      border-radius: 5px;
+      background: #fff;
+    }
+    .calendar-mini-title { font-weight: 900; line-height: 1.2; }
+    .calendar-mini-meta { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.3; }
+    .calendar-empty { color: var(--muted); font-size: 13px; padding: 4px 0; }
     .queue-summary {
       display: none;
       grid-template-columns: repeat(3, 1fr);
@@ -415,6 +520,16 @@
       <div class="stat-card"><label>Drafts</label><strong id="drafts-count">-</strong></div>
     </section>
 
+    <section class="mobile-calendar" id="mobile-calendar" aria-label="Listing calendar">
+      <div class="mobile-calendar-toolbar">
+        <button class="calendar-nav" id="calendar-prev" type="button" aria-label="Previous month">&#8249;</button>
+        <strong id="calendar-month-label">Calendar</strong>
+        <button class="calendar-nav" id="calendar-next" type="button" aria-label="Next month">&#8250;</button>
+      </div>
+      <div class="mobile-calendar-grid" id="calendar-grid"></div>
+      <div class="calendar-detail" id="calendar-detail"></div>
+    </section>
+
     <section class="queue-summary" id="queue-summary">
       <div class="mini-metric"><label>Running</label><strong id="running-count">0</strong></div>
       <div class="mini-metric"><label>Queued</label><strong id="queued-count">0</strong></div>
@@ -435,6 +550,9 @@
     let privacyMode = localStorage.getItem(privacyKey) === "true";
     let pushConfig = null;
     let serviceWorkerRegistration = null;
+    let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    let calendarSelectedDate = localDateKey(new Date());
+    let calendarEvents = [];
 
     document.getElementById("dashboard-link").href = dashboardUrl;
     document.getElementById("notify-button").addEventListener("click", enableNotifications);
@@ -444,6 +562,8 @@
       localStorage.setItem(storeKey, selectedStore);
       refresh();
     });
+    document.getElementById("calendar-prev").addEventListener("click", () => shiftCalendarMonth(-1));
+    document.getElementById("calendar-next").addEventListener("click", () => shiftCalendarMonth(1));
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => setView(button.dataset.view));
     });
@@ -507,6 +627,7 @@
       if (stores) updateStores(stores);
       if (products && listings && listingJobs && orders && stats30 && stats7) {
         updateStats({ products, listings, listingJobs, orders, stats30, stats7 });
+        updateMobileCalendar({ products, listings, listingJobs });
       }
       if (listingJobs && sourceRefreshJobs && revisionJobs && revisionBatches) {
         updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches });
@@ -536,6 +657,7 @@
         button.classList.toggle("active", button.dataset.view === selectedView);
       });
       document.getElementById("stats-view").style.display = selectedView === "stats" ? "grid" : "none";
+      document.getElementById("mobile-calendar").classList.toggle("visible", selectedView === "stats");
       document.getElementById("queue-summary").classList.toggle("visible", selectedView === "queue");
       document.getElementById("alerts").classList.toggle("visible", selectedView === "queue");
     }
@@ -569,7 +691,7 @@
       }))];
       const nextSignature = nextStores.map((store) => `${store.key}:${store.label}`).join("|");
       if (picker.dataset.signature !== nextSignature) {
-        picker.innerHTML = nextStores.map((store) => `<option value="${escAttr(store.key)}">${escapeHtml(store.label)}</option>`).join("");
+        picker.innerHTML = nextStores.map((store) => `<option value="${escAttr(store.key)}" data-label="${escAttr(store.label)}">${escapeHtml(store.label)}</option>`).join("");
         picker.dataset.signature = nextSignature;
       }
       if (!current.has(selectedStore) && !nextStores.some((store) => store.key === selectedStore)) {
@@ -577,6 +699,7 @@
         localStorage.setItem(storeKey, selectedStore);
       }
       picker.value = selectedStore;
+      applyPrivacy();
     }
 
     function updateStats({ products, listings, listingJobs, orders, stats30, stats7 }) {
@@ -585,7 +708,7 @@
         : listings.filter((listing) => listing.account_id === selectedStore);
       const scopedJobs = selectedStore === "all"
         ? listingJobs
-        : listingJobs.filter((job) => job.account_key === selectedStore || job.account_id === selectedStore);
+        : listingJobs.filter((job) => job.ebay_account_key === selectedStore || job.account_key === selectedStore || job.account_id === selectedStore);
       const latestJobByProduct = new Map();
       [...scopedJobs]
         .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
@@ -726,6 +849,119 @@
     function applyPrivacy() {
       document.getElementById("hero").classList.toggle("privacy", privacyMode);
       document.getElementById("privacy-button").classList.toggle("muted", !privacyMode);
+      const picker = document.getElementById("store-picker");
+      picker.disabled = privacyMode;
+      picker.setAttribute("aria-label", privacyMode ? "Store hidden. Turn off privacy to change stores." : "Store");
+      [...picker.options].forEach((option) => {
+        const original = option.dataset.label || option.textContent;
+        option.dataset.label = original;
+        option.textContent = privacyMode
+          ? (option.value === "all" ? "All stores" : "Store hidden")
+          : original;
+      });
+    }
+
+    function updateMobileCalendar({ products, listings, listingJobs }) {
+      const productById = new Map(products.map((product) => [Number(product.id), product]));
+      const scopedListings = selectedStore === "all"
+        ? listings
+        : listings.filter((listing) => listing.account_id === selectedStore);
+      const scopedJobs = selectedStore === "all"
+        ? listingJobs
+        : listingJobs.filter((job) => job.ebay_account_key === selectedStore || job.account_key === selectedStore || job.account_id === selectedStore);
+      const latestJobByProduct = new Map();
+      [...scopedJobs].sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0)).forEach((job) => {
+        const productId = Number(job.product_id);
+        if (productId && !latestJobByProduct.has(productId)) latestJobByProduct.set(productId, job);
+      });
+      const listingByProduct = new Map(scopedListings.map((listing) => [Number(listing.product_id), listing]));
+      const now = Date.now();
+      const events = [];
+      latestJobByProduct.forEach((job, productId) => {
+        if (!job.listing_schedule_at || ["cancelled", "tombstoned"].includes(String(job.status || "").toLowerCase())) return;
+        const instant = new Date(job.listing_schedule_at);
+        if (Number.isNaN(instant.getTime())) return;
+        const listing = listingByProduct.get(productId);
+        const product = productById.get(productId);
+        const isListed = String(job.status || "").toLowerCase() === "completed" && instant.getTime() <= now;
+        events.push(mobileCalendarEvent(isListed ? "listed" : "scheduled", instant, product, listing, job));
+      });
+      scopedListings.forEach((listing) => {
+        if (!listing.renews_at) return;
+        const instant = new Date(listing.renews_at);
+        if (Number.isNaN(instant.getTime())) return;
+        const product = productById.get(Number(listing.product_id));
+        events.push(mobileCalendarEvent("renewal", instant, product, listing, null));
+      });
+      calendarEvents = events.sort((a, b) => a.date - b.date);
+      renderMobileCalendar();
+    }
+
+    function mobileCalendarEvent(type, date, product, listing, job) {
+      const image = product?.images?.slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))[0]?.image_url || "";
+      const price = listing?.price ?? job?.price ?? product?.listing_drafts?.[0]?.price ?? null;
+      return {
+        type,
+        date,
+        dateKey: localDateKey(date),
+        title: job?.title || product?.listing_drafts?.[0]?.title || product?.title || `Product ${listing?.product_id || job?.product_id || ""}`,
+        image,
+        price,
+      };
+    }
+
+    function shiftCalendarMonth(delta) {
+      calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + delta, 1);
+      calendarSelectedDate = localDateKey(calendarMonth);
+      renderMobileCalendar();
+    }
+
+    function renderMobileCalendar() {
+      const label = document.getElementById("calendar-month-label");
+      const grid = document.getElementById("calendar-grid");
+      const detail = document.getElementById("calendar-detail");
+      if (!label || !grid || !detail) return;
+      label.textContent = calendarMonth.toLocaleDateString([], { month: "long", year: "numeric" });
+      const grouped = new Map();
+      calendarEvents.forEach((event) => {
+        if (!grouped.has(event.dateKey)) grouped.set(event.dateKey, []);
+        grouped.get(event.dateKey).push(event);
+      });
+      const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+      const start = new Date(first);
+      start.setDate(first.getDate() - first.getDay());
+      const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
+      const cells = weekdays.map((day) => `<div class="mobile-calendar-weekday">${day}</div>`);
+      const today = localDateKey(new Date());
+      for (let index = 0; index < 42; index += 1) {
+        const date = new Date(start);
+        date.setDate(start.getDate() + index);
+        const key = localDateKey(date);
+        const events = grouped.get(key) || [];
+        const types = [...new Set(events.map((event) => event.type))];
+        const classes = ["mobile-calendar-day", date.getMonth() === calendarMonth.getMonth() ? "" : "muted", key === today ? "today" : "", key === calendarSelectedDate ? "selected" : ""].filter(Boolean).join(" ");
+        cells.push(`<button class="${classes}" type="button" data-calendar-date="${key}" aria-label="${escAttr(date.toLocaleDateString([], { month: "long", day: "numeric" }))}, ${events.length} item${events.length === 1 ? "" : "s"}"><span class="day-number">${date.getDate()}</span><span class="calendar-dots">${types.slice(0, 3).map((type) => `<span class="calendar-dot ${type}"></span>`).join("")}</span></button>`);
+      }
+      grid.innerHTML = cells.join("");
+      grid.querySelectorAll("[data-calendar-date]").forEach((button) => button.addEventListener("click", () => {
+        calendarSelectedDate = button.dataset.calendarDate;
+        renderMobileCalendar();
+      }));
+      const selected = grouped.get(calendarSelectedDate) || [];
+      const selectedDate = new Date(`${calendarSelectedDate}T12:00:00`);
+      detail.innerHTML = `<div class="calendar-detail-heading">${escapeHtml(selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }))}</div>${selected.length ? selected.map(renderMobileCalendarCard).join("") : `<div class="calendar-empty">Nothing scheduled, listed, or renewing on this day.</div>`}`;
+    }
+
+    function renderMobileCalendarCard(event) {
+      const typeLabel = event.type === "renewal" ? "Renews" : event.type === "listed" ? "Listed" : "Scheduled";
+      const meta = [typeLabel, event.date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), event.price === null ? "" : money(event.price)].filter(Boolean).join(" · ");
+      return `<article class="calendar-mini-card ${event.type}">${event.image ? `<img src="${escAttr(event.image)}" alt="" />` : `<div></div>`}<div><div class="calendar-mini-title">${escapeHtml(event.title)}</div><div class="calendar-mini-meta">${escapeHtml(meta)}</div></div></article>`;
+    }
+
+    function localDateKey(value) {
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
     }
 
     async function enableNotifications() {
