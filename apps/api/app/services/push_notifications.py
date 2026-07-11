@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime
+from functools import lru_cache
 import json
+import os
+from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import or_, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import PROJECT_ROOT, get_settings
 from app.models.domain import (
     OperationalAlert,
     OperationalAlertSeverity,
@@ -26,6 +33,24 @@ except Exception:  # pragma: no cover - dependency may be absent in local dev
 settings = get_settings()
 
 
+@lru_cache(maxsize=1)
+def get_vapid_keys() -> tuple[str, str]:
+    """Return the public key and private key/path used by Web Push."""
+    if settings.autozs_push_vapid_public_key and settings.autozs_push_vapid_private_key:
+        return settings.autozs_push_vapid_public_key, settings.autozs_push_vapid_private_key
+
+    key_path = _vapid_key_path()
+    if key_path is None:
+        return "", ""
+    private_key = _load_or_create_vapid_private_key(key_path)
+    public_bytes = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    public_key = base64.urlsafe_b64encode(public_bytes).decode("ascii").rstrip("=")
+    return public_key, str(key_path)
+
+
 def get_push_config() -> dict[str, Any]:
     if webpush is None:
         return {
@@ -34,7 +59,16 @@ def get_push_config() -> dict[str, Any]:
             "subject": settings.autozs_push_vapid_subject,
             "reason": "pywebpush is not installed.",
         }
-    if not settings.autozs_push_vapid_public_key or not settings.autozs_push_vapid_private_key:
+    try:
+        public_key, private_key = get_vapid_keys()
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "public_key": "",
+            "subject": settings.autozs_push_vapid_subject,
+            "reason": f"VAPID key setup failed: {exc}",
+        }
+    if not public_key or not private_key:
         return {
             "enabled": False,
             "public_key": "",
@@ -43,7 +77,7 @@ def get_push_config() -> dict[str, Any]:
         }
     return {
         "enabled": True,
-        "public_key": settings.autozs_push_vapid_public_key,
+        "public_key": public_key,
         "subject": settings.autozs_push_vapid_subject,
         "reason": "",
     }
@@ -204,15 +238,57 @@ def _send_to_subscriptions(
 def _send_payload(subscription: PushSubscription, payload: dict[str, Any]) -> None:
     if webpush is None:
         raise RuntimeError("pywebpush is not installed.")
+    _, private_key = get_vapid_keys()
+    if not private_key:
+        raise RuntimeError("VAPID keys are not configured.")
     webpush(
         subscription_info={
             "endpoint": subscription.endpoint,
             "keys": {"p256dh": subscription.p256dh, "auth": subscription.auth},
         },
         data=json.dumps(payload),
-        vapid_private_key=settings.autozs_push_vapid_private_key,
+        vapid_private_key=private_key,
         vapid_claims={"sub": settings.autozs_push_vapid_subject},
     )
+
+
+def _vapid_key_path() -> Path | None:
+    if settings.autozs_push_vapid_key_file:
+        return Path(settings.autozs_push_vapid_key_file).expanduser()
+
+    url = make_url(settings.database_url)
+    if url.drivername.startswith("sqlite"):
+        database = url.database or ""
+        if database == ":memory:":
+            return None
+        database_path = Path(database).expanduser()
+        if not database_path.is_absolute():
+            database_path = PROJECT_ROOT / database_path
+        return database_path.parent / "autozs-vapid-private.pem"
+    return PROJECT_ROOT / "data" / "autozs-vapid-private.pem"
+
+
+def _load_or_create_vapid_private_key(key_path: Path) -> ec.EllipticCurvePrivateKey:
+    if key_path.exists():
+        loaded = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+        if not isinstance(loaded, ec.EllipticCurvePrivateKey) or not isinstance(loaded.curve, ec.SECP256R1):
+            raise ValueError("stored VAPID key is not a P-256 private key")
+        return loaded
+
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    try:
+        descriptor = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _load_or_create_vapid_private_key(key_path)
+    with os.fdopen(descriptor, "wb") as key_file:
+        key_file.write(pem)
+    return private_key
 
 
 def _result(

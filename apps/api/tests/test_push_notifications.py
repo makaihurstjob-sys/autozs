@@ -1,8 +1,27 @@
+from cryptography.hazmat.primitives import serialization
+
+from app.services.push_notifications import _load_or_create_vapid_private_key
+
+
 def test_push_config_disabled_without_vapid_keys(client):
     config = client.get("/push/config").json()
 
     assert config["enabled"] is False
     assert "reason" in config
+
+
+def test_generated_vapid_private_key_is_persisted_and_reused(tmp_path):
+    key_path = tmp_path / "autozs-vapid-private.pem"
+
+    first = _load_or_create_vapid_private_key(key_path)
+    second = _load_or_create_vapid_private_key(key_path)
+
+    assert key_path.exists()
+    assert first.private_numbers() == second.private_numbers()
+    assert isinstance(
+        serialization.load_pem_private_key(key_path.read_bytes(), password=None),
+        type(first),
+    )
 
 
 def test_push_subscription_can_be_registered_and_updated(client):

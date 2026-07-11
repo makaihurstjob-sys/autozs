@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     autozs_home_depot_profile_root: str = ""
     autozs_push_vapid_public_key: str = ""
     autozs_push_vapid_private_key: str = ""
+    autozs_push_vapid_key_file: str = ""
     autozs_push_vapid_subject: str = "mailto:alerts@autozs.local"
     autozs_push_alert_loop_seconds: int = 60
 

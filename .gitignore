@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 .browser-profile/
 dev.db
+autozs-vapid-private.pem
 downloads/
 test-recordings/
 exports/
