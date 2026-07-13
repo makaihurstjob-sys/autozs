@@ -807,6 +807,37 @@ def test_captured_import_preserves_unknown_shipping(client) -> None:
     assert queue_item["reason"] == "Missing source shipping"
 
 
+def test_product_images_can_be_reordered_for_ebay(client) -> None:
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Reorder-Images/123",
+            "title": "Reorder Images Product",
+            "source_price": 20.0,
+            "source_shipping": 0.0,
+            "description": "Image ordering test",
+            "image_urls": "https://example.com/front.jpg\nhttps://example.com/blueprint.jpg\nhttps://example.com/side.jpg",
+        },
+    ).json()
+    reversed_ids = [image["id"] for image in reversed(product["images"])]
+
+    reordered = client.patch(
+        f"/products/{product['id']}/images/order",
+        json={"image_ids": reversed_ids},
+    )
+
+    assert reordered.status_code == 200
+    assert [image["id"] for image in reordered.json()["images"]] == reversed_ids
+    assert [image["sort_order"] for image in reordered.json()["images"]] == [0, 1, 2]
+    package = client.get(f"/products/{product['id']}/ebay-package")
+    assert package.status_code == 200
+    assert package.json()["image_urls"] == [
+        "https://example.com/side.jpg",
+        "https://example.com/blueprint.jpg",
+        "https://example.com/front.jpg",
+    ]
+
+
 def test_captured_import_stores_subscription_discount_separate_from_shipping(client) -> None:
     product = client.post(
         "/products/import-captured",

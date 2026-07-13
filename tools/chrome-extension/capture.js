@@ -560,11 +560,6 @@ function captureSourceProductFromPage() {
     const isSubscriptionContext = (text) => subscriptionPattern.test(text);
     const freeShippingRegex = /free\s+(standard\s+)?(shipping|delivery)|(?:shipping|delivery)\s+(is\s+)?free|ship(?:s|ping)?\s+free/i;
 
-    for (let index = 0; index < lines.length; index += 1) {
-      const context = contextAround(index, 2);
-      if (freeShippingRegex.test(context) && !isSubscriptionContext(context)) return 0;
-    }
-
     const blocks = [];
     lines.forEach((line, index) => {
       if (/ship|shipping|deliver|delivery|fulfillment/i.test(line)) {
@@ -585,9 +580,10 @@ function captureSourceProductFromPage() {
     const pagePaid = pagePaidMatch ? parsePrice(pagePaidMatch[0]) : null;
     if (pagePaid !== null && !isSubscriptionContext(pagePaidMatch[0]) && !isSubscriptionPrice(pagePaid)) return pagePaid;
 
-    const freeRelevant = relevant.some((line) =>
-      freeShippingRegex.test(line)
-    );
+    const freeRelevant = relevant.some((line) => freeShippingRegex.test(line)) || lines.some((line, index) => {
+      const context = contextAround(index, 2);
+      return freeShippingRegex.test(context) && !isSubscriptionContext(context);
+    });
     return freeRelevant ? 0 : null;
   };
 

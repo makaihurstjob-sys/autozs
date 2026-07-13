@@ -95,6 +95,19 @@ if (paidShipping.detected_shipping !== 55) {
   throw new Error(`Expected paid shipping 55, got ${paidShipping.detected_shipping}`);
 }
 
+const paidDeliveryBeatsGenericFreeShipping = runCapture(`
+Everbilt replacement hardware
+$10.96
+Free shipping available on qualifying items
+Delivery
+$2.99
+Get it by Tuesday
+`);
+
+if (paidDeliveryBeatsGenericFreeShipping.detected_shipping !== 2.99) {
+  throw new Error(`Expected paid delivery 2.99 to beat generic free shipping, got ${paidDeliveryBeatsGenericFreeShipping.detected_shipping}`);
+}
+
 const specialBuy = runCapture(`
 DEWALT Atomic 20V Max Lithium-Ion Brushless Cordless Compact 1/4 in. Impact Driver Kit
 4th of July Sale

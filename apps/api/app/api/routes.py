@@ -98,6 +98,7 @@ from app.schemas.domain import (
     PushSubscriptionRead,
     PushTestRequest,
     ProductImageDownloadResult,
+    ProductImageOrderUpdate,
     ProductImagePrepResult,
     ProductImportRequest,
     ProductListingScheduleUpdate,
@@ -821,6 +822,30 @@ def download_images(product_id: int, db: Session = Depends(get_db)) -> ProductIm
         raise HTTPException(status_code=404, detail="Product not found")
     attempted, downloaded, images = result
     return ProductImageDownloadResult(product_id=product_id, attempted=attempted, downloaded=downloaded, images=images)
+
+
+@router.patch("/products/{product_id}/images/order", response_model=ProductRead)
+def reorder_product_images(product_id: int, payload: ProductImageOrderUpdate, db: Session = Depends(get_db)) -> Product:
+    product = db.scalar(
+        select(Product)
+        .options(selectinload(Product.supplier_products), selectinload(Product.images), selectinload(Product.listing_drafts))
+        .where(Product.id == product_id)
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    current_ids = {image.id for image in product.images}
+    requested_ids = payload.image_ids
+    if len(requested_ids) != len(set(requested_ids)) or set(requested_ids) != current_ids:
+        raise HTTPException(status_code=400, detail="Image order must include every product image exactly once")
+    images_by_id = {image.id: image for image in product.images}
+    for sort_order, image_id in enumerate(requested_ids):
+        images_by_id[image_id].sort_order = sort_order
+    db.commit()
+    return db.scalar(
+        select(Product)
+        .options(selectinload(Product.supplier_products), selectinload(Product.images), selectinload(Product.listing_drafts))
+        .where(Product.id == product_id)
+    )
 
 
 @router.post("/products/{product_id}/prepare-images", response_model=ProductImagePrepResult)

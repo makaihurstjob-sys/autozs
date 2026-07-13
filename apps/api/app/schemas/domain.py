@@ -85,6 +85,10 @@ class ProductImageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProductImageOrderUpdate(BaseModel):
+    image_ids: list[int] = Field(min_length=1)
+
+
 class ListingDraftRead(BaseModel):
     id: int
     marketplace: str

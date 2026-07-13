@@ -177,7 +177,7 @@ class Product(Base, TimestampMixin):
     listing_schedule_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     supplier_products: Mapped[list["SupplierProduct"]] = relationship(back_populates="product")
-    images: Mapped[list["ProductImage"]] = relationship(back_populates="product")
+    images: Mapped[list["ProductImage"]] = relationship(back_populates="product", order_by="ProductImage.sort_order")
     listing_drafts: Mapped[list["ListingDraft"]] = relationship(back_populates="product")
     listing_jobs: Mapped[list["ListingJob"]] = relationship(back_populates="product")
 

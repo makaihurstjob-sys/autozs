@@ -391,6 +391,39 @@
         max-height: 260px;
         overflow: auto;
       }
+      .image-sort-grid {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+        margin-bottom: 10px;
+      }
+      .image-sort-item {
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: grab;
+        min-width: 0;
+        padding: 6px;
+        position: relative;
+      }
+      .image-sort-item:active { cursor: grabbing; }
+      .image-sort-item:hover { border-color: var(--accent); }
+      .image-sort-item img {
+        aspect-ratio: 1;
+        background: #fff;
+        border-radius: 4px;
+        display: block;
+        object-fit: contain;
+        width: 100%;
+      }
+      .image-sort-number {
+        color: var(--muted);
+        display: block;
+        font-size: 11px;
+        font-weight: 800;
+        margin-top: 5px;
+      }
+      .image-sort-item:first-child .image-sort-number { color: var(--accent); }
       .thumbs img {
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -2477,6 +2510,7 @@
       let focusedProductId = null;
       let productDetailsOpenState = new Map();
       let productDrawerTabState = new Map();
+      let draggedProductImageId = null;
       let listingDetailsOpenState = new Map();
       let listingStatusFilter = "listed";
       let listingSortMode = "updated";
@@ -6420,16 +6454,23 @@
         if (!product.images || !product.images.length) {
           return `<button class="secondary" onclick="downloadImages(${product.id})">Download + Prep Images</button>`;
         }
+        const images = product.images.slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
         const counts = imageDownloadCountsForProduct(product);
-        const preview = product.images.slice(0, 8).map((img) => `<img src="${esc(imageSrc(img))}" alt="" title="${esc(img.image_url)}" onerror="this.style.display='none'" />`).join("");
-        const gallery = product.images.map((img, index) => `
+        const sortable = images.map((img, index) => `
+          <div class="image-sort-item" draggable="true" ondragstart="startProductImageDrag(event, ${img.id})" ondragend="finishProductImageDrag()" ondragover="event.preventDefault()" ondrop="dropProductImage(event, ${product.id}, ${img.id})">
+            <img src="${esc(imageSrc(img))}" alt="Image ${index + 1}" title="${esc(img.image_url)}" draggable="false" onerror="this.style.display='none'" />
+            <span class="image-sort-number">${index === 0 ? "1 - Main image" : `${index + 1}`}</span>
+          </div>
+        `).join("");
+        const gallery = images.map((img, index) => `
           <div>
             <img src="${esc(imageSrc(img))}" alt="" title="${esc(img.image_url)}" onerror="this.style.display='none'" />
             <div class="image-url">${index + 1}. ${img.local_path ? "downloaded" : "url only"} - ${esc(img.image_url)}</div>
           </div>
         `).join("");
         return `
-          <div class="thumbs">${preview}</div>
+          <div class="muted">Drag images to set their eBay order.</div>
+          <div class="image-sort-grid">${sortable}</div>
           <div class="${counts.missing ? "needs-data" : "draft"}">${counts.downloaded}/${counts.total} image(s) downloaded${counts.missing ? `; ${counts.missing} still need local files` : ""}</div>
           <div class="actions">
             <button class="secondary" onclick="downloadImages(${product.id})">Download + Prep Images</button>
@@ -6441,6 +6482,49 @@
             <summary>All images</summary>
             <div class="thumbs gallery">${gallery}</div>
           </details>`;
+      }
+
+      function startProductImageDrag(event, imageId) {
+        draggedProductImageId = Number(imageId);
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", String(imageId));
+        }
+      }
+
+      function finishProductImageDrag() {
+        draggedProductImageId = null;
+      }
+
+      async function dropProductImage(event, productId, targetImageId) {
+        event.preventDefault();
+        const transferredId = event.dataTransfer ? event.dataTransfer.getData("text/plain") : "";
+        const draggedId = Number(draggedProductImageId || transferredId);
+        const targetId = Number(targetImageId);
+        draggedProductImageId = null;
+        if (!draggedId || draggedId === targetId) return;
+        const product = state.products.find((item) => Number(item.id) === Number(productId));
+        if (!product) return;
+        const imageIds = (product.images || [])
+          .slice()
+          .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+          .map((image) => Number(image.id));
+        const fromIndex = imageIds.indexOf(draggedId);
+        const targetIndex = imageIds.indexOf(targetId);
+        if (fromIndex < 0 || targetIndex < 0) return;
+        imageIds.splice(fromIndex, 1);
+        imageIds.splice(targetIndex, 0, draggedId);
+        try {
+          await request(`/products/${productId}/images/order`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image_ids: imageIds }),
+          });
+          message("Image order saved");
+          await refreshAll();
+        } catch (error) {
+          message(error.message);
+        }
       }
 
       function productPriceHistoryGraphHtml(product) {
