@@ -3,7 +3,7 @@ const vm = require("vm");
 
 const source = fs.readFileSync(`${__dirname}/capture.js`, "utf8");
 
-function runCapture(visibleText, { offerPrice = "17.97", productName = "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count" } = {}) {
+function runCapture(visibleText, { offerPrice = "17.97", productName = "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count", standardPrice = null } = {}) {
   const context = {
     console,
     URL,
@@ -19,7 +19,9 @@ function runCapture(visibleText, { offerPrice = "17.97", productName = "HDX 13 G
       body: { innerText: visibleText },
       documentElement: { innerHTML: "" },
       images: [],
-      querySelector: () => null,
+      querySelector: (selector) => selector === "#standard-price" && standardPrice !== null
+        ? { innerText: standardPrice }
+        : null,
       querySelectorAll: (selector) => {
         if (selector === 'script[type="application/ld+json"]') {
           return [
@@ -84,6 +86,16 @@ if (!rejectedHomeDepotErrorPage) {
   throw new Error("Expected Home Depot error pages to be rejected before import.");
 }
 
+const normalPageWithRefreshCopy = runCapture(`
+HDX replacement hardware
+$17.97
+Please refresh page details after choosing a delivery location.
+Free Delivery
+`);
+if (normalPageWithRefreshCopy.source_price !== 17.97) {
+  throw new Error("Expected refresh wording without the Home Depot Oops screen to remain importable.");
+}
+
 const paidShipping = runCapture(`
 Project panel
 $49.33
@@ -106,6 +118,23 @@ Get it by Tuesday
 
 if (paidDeliveryBeatsGenericFreeShipping.detected_shipping !== 2.99) {
   throw new Error(`Expected paid delivery 2.99 to beat generic free shipping, got ${paidDeliveryBeatsGenericFreeShipping.detected_shipping}`);
+}
+
+const freeStandardDeliveryBeatsOrderThreshold = runCapture(`
+Everbilt 1 in. MPT x 1 in. Barb Brass Adapter Fitting
+$22.98
+Delivery
+Tomorrow
+16 available
+FREE
+Get It Faster
+FREE Delivery Today with $25+ of eligible items
+Today by 8pm
+$2.99
+`);
+
+if (freeStandardDeliveryBeatsOrderThreshold.detected_shipping !== 0) {
+  throw new Error(`Expected normal free delivery instead of the $25 order threshold, got ${freeStandardDeliveryBeatsOrderThreshold.detected_shipping}`);
 }
 
 const specialBuy = runCapture(`
@@ -246,6 +275,23 @@ if (structuredPriceWithoutDollar.source_price !== 15.29) {
   throw new Error(`Expected structured offer price 15.29, got ${structuredPriceWithoutDollar.source_price}`);
 }
 
+const globalSavingsFiveDollarOffer = runCapture(
+  `
+Summer Savings
+ROBERTS 7350 Flooring Adhesive
+Get $5 off when you sign up for emails
+$169.00
+Free Delivery
+`,
+  { offerPrice: "169.00", productName: "ROBERTS 7350 Flooring Adhesive", standardPrice: "$169.00" }
+);
+if (globalSavingsFiveDollarOffer.source_price !== 169) {
+  throw new Error(`Expected the corroborated product price 169 instead of the global $5 offer, got ${globalSavingsFiveDollarOffer.source_price}`);
+}
+if (globalSavingsFiveDollarOffer.capture_debug.detected_sale_price !== 5 || globalSavingsFiveDollarOffer.capture_debug.sale_price_corroborated) {
+  throw new Error(`Expected the uncorroborated $5 sale candidate to be rejected, got ${JSON.stringify(globalSavingsFiveDollarOffer.capture_debug)}`);
+}
+
 function runHomeDepotModelImageFilterTest() {
   const actual100 = "https://images.thdstatic.com/productImages/a/svn/milwaukee-power-tool-batteries-48-11-1850-64_100.jpg";
   const actual1000 = "https://images.thdstatic.com/productImages/a/svn/milwaukee-power-tool-batteries-48-11-1850-64_1000.jpg";
@@ -353,6 +399,44 @@ function runEbayUsernameDetectionTest() {
     throw new Error(`Expected closed eBay greeting to be ignored, got ${closedMenuContext.result}`);
   }
 
+  const genericUserLabelContext = {
+    console,
+    URL,
+    window: {
+      matchMedia: () => ({ matches: false }),
+    },
+    location: {
+      href: "https://www.ebay.com/itm/5313646448913",
+      hostname: "www.ebay.com",
+      pathname: "/itm/5313646448913",
+      search: "",
+      hash: "",
+    },
+    document: {
+      body: { innerText: "Product details\nStand\nShipping and returns" },
+      querySelectorAll: () => [{
+        id: "",
+        textContent: "Stand",
+        getAttribute: (name) => (name === "aria-label" ? "Stand" : ""),
+      }],
+    },
+  };
+  vm.createContext(genericUserLabelContext);
+  vm.runInContext(`${source}; result = detectEbaySignedInUsernameFromPage();`, genericUserLabelContext);
+  if (genericUserLabelContext.result !== "") {
+    throw new Error(`Expected generic eBay page label Stand to be ignored, got ${genericUserLabelContext.result}`);
+  }
+  genericUserLabelContext.document.body.innerText = "Package weight\nkg\nItem details";
+  genericUserLabelContext.document.querySelectorAll = () => [{
+    id: "gh-ug",
+    textContent: "kg",
+    getAttribute: (name) => name === "id" ? "gh-ug" : name === "aria-label" ? "kg" : "",
+  }];
+  vm.runInContext(`result = detectEbaySignedInUsernameFromPage();`, genericUserLabelContext);
+  if (genericUserLabelContext.result !== "") {
+    throw new Error(`Expected eBay weight unit kg to be ignored as a username, got ${genericUserLabelContext.result}`);
+  }
+
   const footerContext = {
     console,
     URL,
@@ -441,7 +525,8 @@ async function runEbayMissingDraftVerificationTest() {
     fetch: async (url, options = {}) => {
       calls.push({ url: String(url), method: options.method || "GET", body: options.body || "" });
       if (String(url).includes("/listing-jobs/7/verify-draft")) {
-        return { ok: true, json: async () => ({ id: 7, status: "tombstoned" }) };
+        const body = JSON.parse(options.body || "{}");
+        return { ok: true, json: async () => ({ id: 7, status: body.exists ? "saved_draft" : "tombstoned" }) };
       }
       if (String(url).includes("/ebay/browser-account")) {
         return { ok: true, json: async () => ({ can_list: true }) };
@@ -484,6 +569,19 @@ async function runEbayMissingDraftVerificationTest() {
   const body = JSON.parse(verifyCall.body);
   if (body.exists !== false || body.ebay_draft_id !== "5121504565001") {
     throw new Error(`Expected missing draft payload, got ${verifyCall.body}`);
+  }
+
+  context.location.href = "https://www.ebay.com/lstng?draftId=5121504565001&mode=AddItem&autozs_reconcile_listing=1&autozs_job_id=7";
+  context.location.search = "?draftId=5121504565001&mode=AddItem&autozs_reconcile_listing=1&autozs_job_id=7";
+  context.document.body.innerText = "Complete your listing Photos Title Item specifics Pricing Shipping Save for later List it";
+  const reconciled = await vm.runInContext("reportEbayDraftPresence()", context);
+  if (reconciled.status !== "saved_draft") {
+    throw new Error(`Expected an opened tracked draft to reconcile as saved_draft, got ${JSON.stringify(reconciled)}`);
+  }
+  const reconcileCall = calls.filter((call) => call.url.includes("/listing-jobs/7/verify-draft")).at(-1);
+  const reconcileBody = JSON.parse(reconcileCall.body);
+  if (reconcileBody.exists !== true || !reconcileBody.message.includes("reconciled eBay draft")) {
+    throw new Error(`Expected existing-draft reconciliation payload, got ${reconcileCall.body}`);
   }
 }
 

@@ -18,10 +18,17 @@ BROWSER_ACCOUNT_SETTING_KEYS = {
 
 IGNORED_DETECTED_USERNAMES = {
     "accessibility",
+    "account",
     "adchoice",
     "agreement",
     "cookies",
+    "kg",
+    "lb",
+    "lbs",
+    "oz",
     "privacy",
+    "stand",
+    "user",
     "user agreement",
 }
 

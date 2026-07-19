@@ -183,6 +183,20 @@ def _source_refresh_alert_specs(db: Session, now: datetime) -> list[dict[str, An
         .order_by(SourceRefreshJob.updated_at.desc())
         .limit(50)
     ).all()
+    failed = [
+        job
+        for job in failed
+        if db.scalar(
+            select(SourceRefreshJob.id)
+            .where(
+                SourceRefreshJob.product_id == job.product_id,
+                SourceRefreshJob.id > job.id,
+                SourceRefreshJob.status == SourceRefreshJobStatus.completed.value,
+            )
+            .limit(1)
+        )
+        is None
+    ]
     stale = db.scalars(
         select(SourceRefreshJob).where(
             SourceRefreshJob.status == SourceRefreshJobStatus.running.value,

@@ -791,10 +791,12 @@
       .calendar-event-pill.listed { background: #e6f6ec; color: #126c35; }
       .calendar-event-pill.renewal { background: #ecf5f2; color: #137162; }
       .calendar-event-pill.sold { background: #fff4df; color: #8d4b12; }
+      .calendar-event-pill.attention { background: #ffece5; color: #a64022; }
       body[data-theme="dark"] .calendar-event-pill.scheduled { background: #172a45; color: #9ec4ff; }
       body[data-theme="dark"] .calendar-event-pill.listed { background: #193524; color: #7fe0a0; }
       body[data-theme="dark"] .calendar-event-pill.renewal { background: #16362f; color: #69d8c5; }
       body[data-theme="dark"] .calendar-event-pill.sold { background: #3c2c13; color: #ffc777; }
+      body[data-theme="dark"] .calendar-event-pill.attention { background: #3a1f17; color: #ff9d7f; }
       .calendar-detail {
         align-self: start;
         background: var(--capture-bg);
@@ -825,6 +827,16 @@
       .calendar-event-card.listed { border-left-color: #28a957; }
       .calendar-event-card.renewal { border-left-color: #4ec5b1; }
       .calendar-event-card.sold { border-left-color: #d99a28; }
+      .calendar-event-card.needs-attention { border-left-color: var(--danger); }
+      .calendar-event-attention {
+        background: color-mix(in srgb, var(--danger) 10%, var(--capture-bg));
+        border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--line));
+        border-radius: 6px;
+        color: var(--ink);
+        font-size: 11px;
+        line-height: 1.4;
+        padding: 8px;
+      }
       .calendar-event-title {
         font-size: 13px;
         font-weight: 800;
@@ -1934,13 +1946,32 @@
         font-size: 13px;
         gap: 12px;
         justify-content: space-between;
-        padding: 0 22px 12px;
+        line-height: 1.45;
+        min-height: 48px;
+        padding: 12px 22px;
       }
       .job-activity-filter-row strong {
         color: var(--ink);
       }
       .job-activity-filter-row button {
         padding: 6px 10px;
+      }
+      .job-activity-workloads {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 0;
+      }
+      .job-activity-workloads > span {
+        align-items: baseline;
+        display: inline-flex;
+        gap: 4px;
+        white-space: nowrap;
+      }
+      .job-activity-workloads > span + span::before {
+        color: var(--muted);
+        content: "\00b7";
+        margin: 0 10px;
       }
       .job-activity-list {
         display: grid;
@@ -2744,25 +2775,11 @@
         renderEbaySyncModal();
         try {
           updatePollStatus("Syncing", "syncing");
-          const intervalHours = Number(state.settings.source_refresh_interval_hours || state.refreshQueue?.stale_after_hours || 6);
-          const [run, refreshBatch] = await Promise.all([
-            request("/ebay/sync-runs", {
-              method: "POST",
-              body: JSON.stringify({ account_key: accountKey, source: "seller_hub_report" })
-            }),
-            request("/source-refresh/batches", {
-              method: "POST",
-              body: JSON.stringify({
-                limit: 150,
-                interval_hours: intervalHours,
-                force: false,
-                auto_claim: false
-              })
-            })
-          ]);
-          const refreshMessage = refreshBatch.queued
-            ? `${refreshBatch.queued} supplier price refresh job(s) queued.`
-            : `No supplier prices are due inside the ${intervalHours}-hour window.`;
+          const run = await request("/ebay/sync-runs", {
+            method: "POST",
+            body: JSON.stringify({ account_key: accountKey, source: "seller_hub_report" })
+          });
+          const refreshMessage = "Supplier price checks continue separately on their background schedule.";
           if (run.status === "needs_review") {
             if (reportsWindow) reportsWindow.close();
             ebaySyncView = { status: "needs_review", accountKey, run, refreshMessage, error: run.message || "The selected eBay account needs review." };
@@ -3246,8 +3263,9 @@
       function renderJobActivityButton() {
         const button = document.getElementById("job-activity-toggle");
         if (!button) return;
-        const count = jobActivityImportantCount();
-        const label = count ? `Worker Queue, ${count} active or blocked` : "Worker Queue";
+        const counts = jobActivityCounts();
+        const count = counts.running + counts.attention;
+        const label = `Worker Queue: ${counts.running} running, ${counts.queued} queued, ${counts.attention} need attention`;
         button.classList.toggle("has-active", count > 0);
         button.setAttribute("aria-label", label);
         button.title = label;
@@ -3287,6 +3305,7 @@
       function jobActivityDrawerHtml() {
         const allEntries = jobActivityEntries();
         const counts = jobActivityCounts(allEntries);
+        const workloads = jobActivityWorkloadCounts(allEntries);
         const activeFilter = ["running", "queued", "attention"].includes(jobActivityFilter) ? jobActivityFilter : "all";
         const entries = activeFilter === "all" ? allEntries : allEntries.filter((entry) => entry.group === activeFilter);
         const newest = allEntries[0]?.updatedAt ? `Newest update ${formatDateTime(allEntries[0].updatedAt)}` : "No job updates yet";
@@ -3309,6 +3328,13 @@
               <button class="job-activity-stat ${activeFilter === "queued" ? "is-active" : ""}" onclick="setJobActivityFilter('queued')" aria-pressed="${activeFilter === "queued"}"><span>Queued</span><strong>${counts.queued}</strong></button>
               <button class="job-activity-stat ${activeFilter === "attention" ? "is-active" : ""}" onclick="setJobActivityFilter('attention')" aria-pressed="${activeFilter === "attention"}"><span>Attention</span><strong>${counts.attention}</strong></button>
             </div>
+            <div class="job-activity-filter-row">
+              <div class="job-activity-workloads" aria-label="Job workload totals">
+                <span><strong>${workloads.listings}</strong> listing jobs</span>
+                <span><strong>${workloads.prices}</strong> source-price checks</span>
+                <span><strong>${workloads.revisions}</strong> eBay revisions</span>
+              </div>
+            </div>
             ${activeFilter === "all" ? "" : `<div class="job-activity-filter-row"><span>Showing <strong>${esc(filterLabel)}</strong> jobs</span><button class="secondary" onclick="setJobActivityFilter('all')">Show all</button></div>`}
             <div class="job-activity-list">
               ${entries.length ? entries.map(jobActivityCardHtml).join("") : `<div class="settings-empty"><strong>${esc(emptyTitle)}</strong><span>${esc(emptyBody)}</span></div>`}
@@ -3319,7 +3345,7 @@
       function jobActivityEntries() {
         const entries = [
           ...(state.listingJobs || []).map(listingJobActivityEntry),
-          ...(state.sourceRefreshJobs || []).map(sourceRefreshJobActivityEntry),
+          ...latestSourceRefreshJobs(state.sourceRefreshJobs || []).map(sourceRefreshJobActivityEntry),
           ...(state.ebayRevisionJobs || []).map(ebayRevisionJobActivityEntry),
           ...(state.ebayRevisionBatches || []).map(ebayRevisionBatchActivityEntry),
         ].filter(Boolean);
@@ -3330,6 +3356,17 @@
             return jobActivityTimeValue(b.updatedAt) - jobActivityTimeValue(a.updatedAt);
           })
           .slice(0, 40);
+      }
+
+      function latestSourceRefreshJobs(jobs = []) {
+        const latestByProduct = new Map();
+        [...jobs]
+          .sort((a, b) => jobActivityTimeValue(b.updated_at || b.created_at) - jobActivityTimeValue(a.updated_at || a.created_at) || Number(b.id || 0) - Number(a.id || 0))
+          .forEach((job) => {
+            const key = job.product_id === null || job.product_id === undefined ? `job-${job.id}` : `product-${job.product_id}`;
+            if (!latestByProduct.has(key)) latestByProduct.set(key, job);
+          });
+        return [...latestByProduct.values()];
       }
 
       function listingJobActivityEntry(job) {
@@ -3398,7 +3435,9 @@
           subtitle: `${job.listing_id || "No listing id"} · ${job.ebay_account_key || "manual"}`,
           meta: [
             `eBay ${money(job.old_price)} → ${money(job.target_price)}`,
-            job.source_price !== null && job.source_price !== undefined ? `Source ${money(job.source_price)}${Number(job.source_shipping || 0) > 0 ? ` + ${money(job.source_shipping)} shipping` : ""}` : "Source price missing",
+            job.source_price !== null && job.source_price !== undefined
+              ? `${sourceRefreshPriceDelta(job.old_source_price, job.source_price)}${Number(job.source_shipping || 0) > 0 ? ` + ${money(job.source_shipping)} shipping` : ""}`
+              : "Source price missing",
             job.projected_profit !== null && job.projected_profit !== undefined ? `Projected profit ${money(job.projected_profit)}` : "Profit unavailable",
             job.minimum_profit !== null && job.minimum_profit !== undefined ? `Minimum ${money(job.minimum_profit)}` : "",
             job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "",
@@ -3480,9 +3519,19 @@
         }, { running: 0, queued: 0, attention: 0 });
       }
 
+      function jobActivityWorkloadCounts(entries = jobActivityEntries()) {
+        return entries.reduce((counts, entry) => {
+          if (!["running", "queued", "attention"].includes(entry.group)) return counts;
+          if (entry.kind === "Listing") counts.listings += 1;
+          else if (entry.kind === "Price refresh") counts.prices += 1;
+          else counts.revisions += 1;
+          return counts;
+        }, { listings: 0, prices: 0, revisions: 0 });
+      }
+
       function jobActivityImportantCount() {
         const counts = jobActivityCounts();
-        return counts.running + counts.queued + counts.attention;
+        return counts.running + counts.attention;
       }
 
       function jobActivityCardHtml(entry) {
@@ -4146,7 +4195,7 @@
             </label>
           </div>
           <div class="bulk-schedule-actions">
-            <button id="bulk-schedule-submit" onclick="applyBulkSchedule()" disabled>Schedule</button>
+            <button id="bulk-schedule-submit" onclick="applyBulkSchedule()" disabled>${isReschedule ? "Reschedule" : "Schedule"}</button>
           </div>
         </div>`;
       }
@@ -4228,22 +4277,29 @@
           if (accountKeys.length !== 1) return message("Select products assigned to one eBay store at a time.");
           const accountKey = accountKeys[0];
           if (blockIfEbayAccountMismatch(accountKey)) return;
-          message(`Preparing images for ${productIds.length} scheduled product(s)...`);
-          await Promise.all(productIds.map(async (id) => {
-            await request(`/products/${id}/download-images`, { method: "POST" });
-            await request(`/products/${id}/prepare-images?size=1000`, { method: "POST" });
-          }));
-          await Promise.all(productIds.map((id) => request(`/products/${id}/listing-schedule`, { method: "PATCH", body: JSON.stringify({ listing_schedule_at: schedule }) })));
-          const jobs = await request("/listing-jobs", {
-            method: "POST",
-            body: JSON.stringify(queuePayload(productIds, schedule, accountKey))
-          });
+          // Scheduling continues asynchronously, so dismiss the dialog and
+          // leave the user on Drafts as soon as the request is accepted.
           productIds.forEach((id) => selectedProductIds.delete(id));
-          active = "eBay Listings";
-          listingStatusFilter = "scheduled";
           closeBulkSchedule();
-          await refreshAll();
-          message(`Scheduled ${jobs.length} product(s). Windows worker will handle the eBay flow.`);
+          render();
+          message(`Queuing ${productIds.length} scheduled product(s) in the background...`);
+          try {
+            await Promise.all(productIds.map(async (id) => {
+              await request(`/products/${id}/download-images`, { method: "POST" });
+              await request(`/products/${id}/prepare-images?size=1000`, { method: "POST" });
+            }));
+            await Promise.all(productIds.map((id) => request(`/products/${id}/listing-schedule`, { method: "PATCH", body: JSON.stringify({ listing_schedule_at: schedule }) })));
+            const jobs = await request("/listing-jobs", {
+              method: "POST",
+              body: JSON.stringify(queuePayload(productIds, schedule, accountKey))
+            });
+            await refreshAll();
+            message(`Scheduled ${jobs.length} product(s). Windows worker will handle the eBay flow.`);
+          } catch (error) {
+            productIds.forEach((id) => selectedProductIds.add(id));
+            await refreshAll().catch(() => null);
+            message(`Could not schedule the selected products: ${error?.message || "Unknown scheduling error"}`);
+          }
         }
       }
 
@@ -5724,7 +5780,9 @@
       function listingJobProgressOverlayHtml(item) {
         const job = item.listing_job || {};
         const percent = listingJobProgressPercent(item);
-        const label = job.status === "running" ? "Scheduling on Windows" : "Queued for Windows worker";
+        const startDate = job.listing_schedule_at ? appDate(job.listing_schedule_at) : null;
+        const pastDue = Boolean(startDate && startDate.getTime() <= Date.now());
+        const label = pastDue ? "Past-due worker job" : job.status === "running" ? "Scheduling on Windows" : "Queued for Windows worker";
         const start = job.listing_schedule_at ? formatDateTime(job.listing_schedule_at) : "Start time selected";
         return `<div class="product-card-progress-overlay" aria-live="polite">
           <div class="product-card-progress-box">
@@ -5733,6 +5791,9 @@
             <small>${esc(start)} · ${esc(job.message || "AutoZS is preparing this listing in the Windows queue.")}</small>
             <div class="product-card-progress-track" aria-label="${escAttr(`${percent}% complete`)}">
               <div class="product-card-progress-fill" style="width: ${percent}%"></div>
+            </div>
+            <div class="actions">
+              <button type="button" onclick="event.stopPropagation(); openListingReschedule(${item.product_id})">Reschedule</button>
             </div>
           </div>
         </div>`;
@@ -5799,14 +5860,18 @@
         if (listingIsTombstoned(item)) {
           return `<button onclick="importProductToEbay(${item.product_id})" title="Create a fresh eBay draft because the previous draft was tombstoned">Reimport</button>`;
         }
-        if (listingIsLive(item) && (item.listing_id || extractListingIdFromJob(job))) {
-          return `<button class="secondary" onclick="openEbayListingDraft(${item.product_id})" title="Open this live eBay listing">View Listing</button>`;
+        if ((listingIsLive(item) || listingIsScheduled(item)) && (item.listing_id || extractListingIdFromJob(job))) {
+          return `<button class="secondary" onclick="openEbayListingDraft(${item.product_id})" title="Open this confirmed eBay listing">View Listing</button>`;
+        }
+        if (job && listingNeedsReview(item) && !job.ebay_draft_id) {
+          return `<button onclick="retryFreshEbayDraft(${item.product_id})" title="Clear stale browser state and open a fresh eBay listing flow">Retry Fresh Draft</button>`;
         }
         const canOpen = Boolean(job?.ebay_draft_id);
+        const canReschedule = Boolean(job?.listing_schedule_at && !["cancelled", "completed", "tombstoned", "failed"].includes(job.status));
         const title = canOpen ? "Open this eBay draft without changing it" : "No saved eBay draft ID is available yet.";
         return `<div class="actions">
           <button class="secondary" ${canOpen ? "" : "disabled"} onclick="openEbayListingDraft(${item.product_id})" title="${escAttr(title)}">Go to Draft</button>
-          ${canOpen ? `<button onclick="openListingReschedule(${item.product_id})" title="Choose a new future start and queue it on the Windows worker">Reschedule</button>` : ""}
+          ${canReschedule ? `<button onclick="openListingReschedule(${item.product_id})" title="Choose a new future start and queue it on the Windows worker">Reschedule</button>` : ""}
         </div>`;
       }
 
@@ -5815,7 +5880,7 @@
         if (!item) return message("eBay listing record not found.");
         if (listingIsTombstoned(item)) return message("This eBay draft was tombstoned. Use Reimport to create a fresh draft.");
         const listingId = item.listing_id || extractListingIdFromJob(item.listing_job);
-        if (listingIsLive(item) && listingId) {
+        if ((listingIsLive(item) || listingIsScheduled(item)) && listingId) {
           window.open(`https://www.ebay.com/itm/${encodeURIComponent(listingId)}`, "_blank", "noopener,noreferrer");
           return message(`Opened eBay listing ${listingId}.`);
         }
@@ -5823,11 +5888,52 @@
         if (!job) return message("No eBay draft job is available for this listing yet.");
         if (blockIfEbayAccountMismatch(job.ebay_account_key || "manual")) return;
         if (job.ebay_draft_id) {
-          const draftUrl = `https://www.ebay.com/lstng?draftId=${encodeURIComponent(job.ebay_draft_id)}&mode=AddItem`;
-          window.open(draftUrl, "_blank", "noopener,noreferrer");
-          return message(`Opened eBay draft ${job.ebay_draft_id} without running AutoZS.`);
+          const draftUrl = new URL("https://www.ebay.com/lstng");
+          draftUrl.searchParams.set("draftId", job.ebay_draft_id);
+          draftUrl.searchParams.set("mode", "AddItem");
+          const reconciliation = new URLSearchParams({
+            autozs_reconcile_listing: "1",
+            autozs_verify_draft: "1",
+            autozs_product_id: String(item.product_id),
+            autozs_job_id: String(job.id),
+            autozs_account_key: job.ebay_account_key || "manual",
+          });
+          reconciliation.forEach((value, key) => draftUrl.searchParams.set(key, value));
+          draftUrl.hash = reconciliation.toString();
+          window.open(draftUrl.href, "_blank", "noopener,noreferrer");
+          return message(`Opened eBay draft ${job.ebay_draft_id}. AutoZS will reconcile whether it is still a draft or has already been listed.`);
         }
         message("No saved eBay draft ID is available yet.");
+      }
+
+      async function retryFreshEbayDraft(productId) {
+        const item = ebayListingItems().find((listing) => Number(listing.product_id) === Number(productId));
+        const job = item?.listing_job;
+        if (!job) return message("No eBay listing job is available to retry.");
+        if (blockIfEbayAccountMismatch(job.ebay_account_key || "manual")) return;
+        const assistantWindow = window.open("about:blank", "_blank");
+        try {
+          await request(`/listing-jobs/${job.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              status: "queued",
+              ebay_draft_id: "",
+              message: "Queued to create a fresh eBay draft after stale draft cleanup",
+            }),
+          });
+          const result = await request(`/listing-jobs/${job.id}/run`, { method: "POST" });
+          await refreshAll();
+          if (result.package && result.job?.assistant_url) {
+            assistantWindow.location.href = result.job.assistant_url;
+            message(`Retrying product ${productId} in a fresh eBay listing flow.`);
+          } else {
+            assistantWindow.close();
+            message(`Job ${job.id} still needs review before eBay can open it.`);
+          }
+        } catch (error) {
+          assistantWindow.close();
+          message(error.message || String(error));
+        }
       }
 
       function ebayFillHandoffParams(productId, job = null) {
@@ -6365,7 +6471,11 @@
       }
 
       function listingNeedsReview(item) {
-        return ["needs_review", "failed", "paused"].includes(item.listing_job?.status);
+        return listingJobNeedsAttention(item.listing_job);
+      }
+
+      function listingJobNeedsAttention(job) {
+        return ["needs_review", "failed", "paused"].includes(String(job?.status || "").toLowerCase());
       }
 
       function listingIsTombstoned(item) {
@@ -7478,6 +7588,7 @@
           </div>
           <div class="metrics">
             <div class="metric"><span>Scheduled this month</span><strong>${monthEvents.filter((event) => event.type === "scheduled").length}</strong></div>
+            <div class="metric"><span>Needs attention</span><strong>${monthEvents.filter((event) => event.needsAttention).length}</strong></div>
             <div class="metric"><span>Listed this month</span><strong>${monthEvents.filter((event) => event.type === "listed").length}</strong></div>
             <div class="metric"><span>Renewals this month</span><strong>${monthEvents.filter((event) => event.type === "renewal").length}</strong></div>
             <div class="metric"><span>Sold this month</span><strong>${monthEvents.filter((event) => event.type === "sold").length}</strong></div>
@@ -7553,12 +7664,14 @@
       function calendarDayLabel(date, events) {
         const label = date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
         if (!events.length) return `${label}. No events.`;
-        return `${label}. ${events.length} event${events.length === 1 ? "" : "s"}.`;
+        const attentionCount = events.filter((event) => event.needsAttention).length;
+        return `${label}. ${events.length} event${events.length === 1 ? "" : "s"}.${attentionCount ? ` ${attentionCount} need${attentionCount === 1 ? "s" : ""} attention.` : ""}`;
       }
 
       function calendarDayPillsHtml(events) {
         const counts = calendarEventCounts(events);
         return [
+          counts.attention ? `<span class="calendar-event-pill attention">Attention ${counts.attention}</span>` : "",
           counts.scheduled ? `<span class="calendar-event-pill scheduled">Scheduled ${counts.scheduled}</span>` : "",
           counts.listed ? `<span class="calendar-event-pill listed">Listed ${counts.listed}</span>` : "",
           counts.renewal ? `<span class="calendar-event-pill renewal">Renewal ${counts.renewal}</span>` : "",
@@ -7569,8 +7682,9 @@
       function calendarEventCounts(events) {
         return events.reduce((counts, event) => {
           counts[event.type] = (counts[event.type] || 0) + 1;
+          if (event.needsAttention) counts.attention += 1;
           return counts;
-        }, { scheduled: 0, listed: 0, renewal: 0, sold: 0 });
+        }, { attention: 0, scheduled: 0, listed: 0, renewal: 0, sold: 0 });
       }
 
       function calendarDetailHtml(events) {
@@ -7592,10 +7706,11 @@
       }
 
       function calendarEventCardHtml(event) {
-        return `<div class="calendar-event-card ${event.type}">
+        return `<div class="calendar-event-card ${event.type}${event.needsAttention ? " needs-attention" : ""}">
           <div class="calendar-event-title">${esc(event.title)}</div>
           <div class="calendar-event-meta">${esc(event.timeLabel)} · ${esc(event.subtitle)}</div>
           <div>${calendarEventBadgeHtml(event)}</div>
+          ${event.needsAttention ? `<div class="calendar-event-attention"><strong>Needs attention.</strong> ${esc(event.attentionMessage || "Open this listing to review the job.")}</div>` : ""}
           ${calendarEventFactsHtml(event)}
           <div class="actions">${calendarEventActionHtml(event)}</div>
         </div>`;
@@ -7612,7 +7727,7 @@
       function calendarEventBadgeHtml(event) {
         const label = event.plannedOnly ? "Planned" : event.type === "scheduled" ? "Scheduled" : event.type === "listed" ? "Listed" : event.type === "renewal" ? "Renewal" : "Sold";
         const className = event.type === "scheduled" ? "stage-images" : event.type === "listed" ? "stage-ready" : event.type === "renewal" ? "stage-ready" : "order-status-pending";
-        return `<span class="status ${className}">${label}</span>`;
+        return `${event.needsAttention ? `<span class="status stage-source">Needs attention</span> ` : ""}<span class="status ${className}">${label}</span>`;
       }
 
       function calendarEventActionHtml(event) {
@@ -7625,8 +7740,9 @@
           ${event.previewSrc ? `<img src="${esc(event.previewSrc)}" alt="" onerror="this.classList.add('is-missing')" />` : ""}
         </button>`;
         }
-        const label = event.type === "listed" || event.type === "renewal" ? "Open Listing" : "Open Scheduled";
-        return `<button class="calendar-event-preview-button" onclick="openCalendarListing(${event.productId}, '${event.type}')" aria-label="${escAttr(label)}" title="${escAttr(label)}">
+        const label = event.needsAttention ? "Review Listing" : event.type === "listed" || event.type === "renewal" ? "Open Listing" : "Open Scheduled";
+        const destination = event.needsAttention ? "attention" : event.type;
+        return `<button class="calendar-event-preview-button" onclick="openCalendarListing(${event.productId}, '${destination}')" aria-label="${escAttr(label)}" title="${escAttr(label)}">
           <span class="calendar-event-preview-fallback">${event.previewFallback || sourceLogoSvg()}</span>
           ${event.previewSrc ? `<img src="${esc(event.previewSrc)}" alt="" onerror="this.classList.add('is-missing')" />` : ""}
         </button>`;
@@ -7648,9 +7764,11 @@
         const listingItems = ebayListingItems();
         const listingItemsByProduct = new Map(listingItems.map((item) => [Number(item.product_id), item]));
         const liveProductIds = new Set(listingItems.filter(listingIsLive).map((item) => Number(item.product_id)));
+        const tombstonedProductIds = new Set(listingItems.filter(listingIsTombstoned).map((item) => Number(item.product_id)));
         (state.listingJobs || []).forEach((job) => {
           if (!job.listing_schedule_at || ["cancelled", "tombstoned"].includes(job.status)) return;
           if (liveProductIds.has(Number(job.product_id))) return;
+          if (tombstonedProductIds.has(Number(job.product_id))) return;
           const product = productsById.get(Number(job.product_id));
           const listingItem = listingItemsByProduct.get(Number(job.product_id));
           events.push(calendarEventFromDate({
@@ -7659,6 +7777,8 @@
             title: listingItem?.title || product?.title || `Product ${job.product_id}`,
             subtitle: `eBay start · ${job.ebay_draft_id ? `Draft ${job.ebay_draft_id}` : job.status}`,
             productId: job.product_id,
+            needsAttention: listingJobNeedsAttention(job),
+            attentionMessage: job.message || listingJobIssuesText(job),
             price: calendarEventPrice(product, listingItem),
             previewSrc: productPreviewImageSrc(product),
             previewFallback: product ? (supplierLogoHtml(product) || sourceLogoSvg()) : sourceLogoSvg()
@@ -7667,6 +7787,7 @@
         (state.products || []).forEach((product) => {
           if (!product.listing_schedule_at) return;
           if (liveProductIds.has(Number(product.id))) return;
+          if (tombstonedProductIds.has(Number(product.id))) return;
           const hasListingJobSchedule = (state.listingJobs || []).some((job) =>
             Number(job.product_id) === Number(product.id) && job.listing_schedule_at && !["cancelled", "tombstoned"].includes(job.status)
           );
@@ -7695,6 +7816,8 @@
             title: listingItem.title || product?.title || `eBay listing ${listingId || listingItem.product_id}`,
             subtitle: `${listingId ? `Item ${listingId}` : "eBay listing"} · ${listingDaysUntilRelist(listingItem) ?? "-"} days to relist`,
             productId: listingItem.product_id,
+            needsAttention: listingNeedsReview(listingItem),
+            attentionMessage: listingItem.listing_job?.message || listingJobIssuesText(listingItem.listing_job || {}),
             price: calendarEventPrice(product, listingItem),
             previewSrc: productPreviewImageSrc(product),
             previewFallback: product ? (supplierLogoHtml(product) || sourceLogoSvg()) : sourceLogoSvg()
@@ -7707,6 +7830,8 @@
               title: listingItem.title || product?.title || `eBay listing ${listingId || listingItem.product_id}`,
               subtitle: `Renews · ${listingId ? `Item ${listingId}` : "eBay listing"} · ${Number(listingItem.listing_views || 0)} views`,
               productId: listingItem.product_id,
+              needsAttention: listingNeedsReview(listingItem),
+              attentionMessage: listingItem.listing_job?.message || listingJobIssuesText(listingItem.listing_job || {}),
               price: calendarEventPrice(product, listingItem),
               previewSrc: productPreviewImageSrc(product),
               previewFallback: product ? (supplierLogoHtml(product) || sourceLogoSvg()) : sourceLogoSvg()
@@ -7782,7 +7907,7 @@
         selectedProductIds.clear();
         selectedProductIds.add(Number(productId));
         active = "eBay Listings";
-        listingStatusFilter = ["listed", "renewal"].includes(type) ? "listed" : "scheduled";
+        listingStatusFilter = type === "attention" ? "review" : ["listed", "renewal"].includes(type) ? "listed" : "scheduled";
         listingDetailsOpenState.set(Number(productId), true);
         render();
       }

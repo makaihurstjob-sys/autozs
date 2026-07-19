@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoZS Source Capture",
-  "version": "0.2.1",
+  "version": "0.2.26",
   "description": "Capture product data from supplier pages into AutoZS.",
   "action": {
     "default_popup": "popup.html",

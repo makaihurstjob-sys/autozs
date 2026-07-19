@@ -13,7 +13,7 @@
   const UPLOAD_CONTROL_TIMEOUT_MS = 2 * 60 * 1000;
   const RESULT_TIMEOUT_MS = 5 * 60 * 1000;
   const logoUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
-    ? chrome.runtime.getURL("icons/icon128.png")
+    ? chrome.runtime.getURL("assets/autozs-logo.png")
     : "";
 
   function ensureRevisionProgressOverlay() {

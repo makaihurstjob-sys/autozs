@@ -18,6 +18,29 @@ TERMINAL_STATUSES = {
     ListingJobStatus.failed.value,
     ListingJobStatus.cancelled.value,
 }
+STALE_RUNNING_MINUTES = 30
+
+
+def flag_stale_listing_jobs(db: Session, now: datetime | None = None) -> int:
+    checked_at = _naive_utc(now) or _now_utc_naive()
+    cutoff = checked_at - timedelta(minutes=STALE_RUNNING_MINUTES)
+    stale_jobs = list(
+        db.scalars(
+            select(ListingJob)
+            .where(ListingJob.status == ListingJobStatus.running.value)
+            .where(ListingJob.updated_at < cutoff)
+        ).all()
+    )
+    for job in stale_jobs:
+        job.status = ListingJobStatus.needs_review.value
+        job.message = (
+            "Windows worker stopped reporting. Verify the existing eBay draft, then reschedule or retry."
+            if job.ebay_draft_id
+            else "Windows worker stopped reporting. Review this listing, then reschedule or retry."
+        )
+    if stale_jobs:
+        db.commit()
+    return len(stale_jobs)
 
 
 def enqueue_listing_jobs(
@@ -148,6 +171,18 @@ def update_listing_job(
 ) -> ListingJob:
     scheduled_for = _naive_utc(scheduled_for)
     listing_schedule_at = _naive_utc(listing_schedule_at)
+    conflicting_job = _conflicting_draft_job(db, job, ebay_draft_id)
+    if conflicting_job is not None:
+        job.status = ListingJobStatus.needs_review.value
+        job.ebay_draft_id = None
+        job.completed_at = _now_utc_naive()
+        job.message = (
+            f"Rejected eBay draft {ebay_draft_id}: it belongs to product {conflicting_job.product_id} "
+            f"(listing job {conflicting_job.id}). Open a fresh eBay draft for this product."
+        )
+        db.commit()
+        db.refresh(job)
+        return job
     if status is not None:
         job.status = status
         if status in {
@@ -161,10 +196,16 @@ def update_listing_job(
         if status == ListingJobStatus.queued.value:
             job.started_at = None
             job.completed_at = None
+        if status == ListingJobStatus.tombstoned.value:
+            job.listing_schedule_at = None
+            _tombstone_missing_draft_records(db, job)
     if scheduled_for is not None:
         job.scheduled_for = scheduled_for
     if listing_schedule_at is not None:
         job.listing_schedule_at = listing_schedule_at
+        product = db.get(Product, job.product_id)
+        if product is not None:
+            product.listing_schedule_at = listing_schedule_at
     if ebay_draft_id is not None:
         job.ebay_draft_id = ebay_draft_id
     if message is not None:
@@ -184,6 +225,18 @@ def verify_listing_job_draft(
     url: str | None = None,
     message: str | None = None,
 ) -> ListingJob:
+    conflicting_job = _conflicting_draft_job(db, job, ebay_draft_id)
+    if conflicting_job is not None:
+        job.status = ListingJobStatus.needs_review.value
+        job.ebay_draft_id = None
+        job.completed_at = _now_utc_naive()
+        job.message = (
+            f"Could not verify eBay draft {ebay_draft_id} for this product because it belongs to "
+            f"product {conflicting_job.product_id} (listing job {conflicting_job.id})."
+        )
+        db.commit()
+        db.refresh(job)
+        return job
     if ebay_draft_id is not None:
         job.ebay_draft_id = ebay_draft_id
     draft_label = job.ebay_draft_id or ebay_draft_id or "unknown"
@@ -312,6 +365,18 @@ def _now_utc_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _conflicting_draft_job(db: Session, job: ListingJob, ebay_draft_id: str | None) -> ListingJob | None:
+    clean_draft_id = str(ebay_draft_id or "").strip()
+    if not clean_draft_id:
+        return None
+    return db.scalar(
+        select(ListingJob)
+        .where(ListingJob.ebay_draft_id == clean_draft_id)
+        .where(ListingJob.product_id != job.product_id)
+        .order_by(ListingJob.updated_at.desc(), ListingJob.id.desc())
+    )
+
+
 def _upsert_listing_from_completed_job(db: Session, job: ListingJob, listing_id: str) -> None:
     clean_listing_id = str(listing_id).strip()[:128]
     if not clean_listing_id:
@@ -319,13 +384,15 @@ def _upsert_listing_from_completed_job(db: Session, job: ListingJob, listing_id:
     package = build_ebay_listing_package(db, job.product_id)
     now = _now_utc_naive()
     start = _naive_utc(job.listing_schedule_at) or now
-    is_live = start <= now
     listing = db.scalar(
         select(EbayListing).where(
             EbayListing.account_id == job.ebay_account_key,
             EbayListing.listing_id == clean_listing_id,
         )
     )
+    confirmed_live = listing is not None and listing.status == "active"
+    is_live = confirmed_live or start <= now
+    actual_start = now if confirmed_live and start > now else start
     if listing is None:
         listing = EbayListing(product_id=job.product_id, listing_id=clean_listing_id, account_id=job.ebay_account_key)
         db.add(listing)
@@ -334,8 +401,11 @@ def _upsert_listing_from_completed_job(db: Session, job: ListingJob, listing_id:
     listing.price = package["price"] if package else listing.price
     listing.quantity = max(1, int(listing.quantity or 1))
     listing.status = "active" if is_live else "scheduled"
-    listing.started_at = start if is_live else None
-    listing.renews_at = (start + timedelta(days=30)) if is_live and listing.renews_at is None else listing.renews_at
+    listing.started_at = actual_start if is_live else None
+    if is_live and (listing.renews_at is None or (confirmed_live and start > now)):
+        listing.renews_at = actual_start + timedelta(days=30)
+    elif not is_live:
+        listing.renews_at = None
 
 
 def _tombstone_missing_draft_records(db: Session, job: ListingJob) -> None:
@@ -358,6 +428,7 @@ def _tombstone_missing_draft_records(db: Session, job: ListingJob) -> None:
         )
     if product is None:
         return
+    product.listing_schedule_at = None
     for listing_draft in product.listing_drafts:
         if listing_draft.marketplace == "ebay":
             listing_draft.status = "tombstoned"

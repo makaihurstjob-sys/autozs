@@ -30,7 +30,7 @@ def prepare_product_images_for_ebay(db: Session, product_id: int, size: int = 10
         attempted += 1
         output_path = output_dir / f"{image.sort_order + 1:02d}.jpg"
         if _prepare_square_image(source_path, output_path, size=size):
-            image.local_path = str(relative_output_dir / output_path.name)
+            image.local_path = (relative_output_dir / output_path.name).as_posix()
             prepared += 1
     db.commit()
     refreshed = db.scalar(

@@ -10,11 +10,13 @@ async function runNativePcInputTest() {
   const createdTabs = [];
   const removedCookies = [];
   const browsingDataRemovals = [];
+  let tabQueryResults = [];
   const storage = { autozsWorkerMode: "operations" };
   const fetched = [];
   const context = {
     console,
     URL,
+    URLSearchParams,
     Uint8Array,
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     fetch: async (url, options = {}) => {
@@ -25,6 +27,23 @@ async function runNativePcInputTest() {
           ok: true,
           status: 200,
           arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      }
+      if (url.endsWith("/listing-jobs?status=running&limit=1")) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      if (url.endsWith("/listing-jobs/next")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            job: {
+              id: 92,
+              status: "running",
+              assistant_url: "https://www.ebay.com/sl/prelist/home?autozs_job_id=92#autozs_job_id=92",
+            },
+            package: { title: "Test listing" },
+          }),
         };
       }
       return {
@@ -45,9 +64,14 @@ async function runNativePcInputTest() {
         getAll: async () => [
           { name: "_abck", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
           { name: "bm_sz", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
+          { name: "bm_future_token", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
+          { name: "sec_cpt", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
           { name: "THD_SESSION", domain: ".homedepot.com", path: "/", secure: true, storeId: "0" },
         ],
-        remove: async (details) => removedCookies.push(details),
+        remove: async (details) => {
+          removedCookies.push(details);
+          return details;
+        },
       },
       debugger: {
         attach: async () => {},
@@ -70,7 +94,7 @@ async function runNativePcInputTest() {
         },
       },
       tabs: {
-        query: async () => [],
+        query: async () => tabQueryResults,
         create: async (options) => {
           createdTabs.push(options);
           return { id: 23, ...options };
@@ -89,14 +113,30 @@ async function runNativePcInputTest() {
   vm.runInContext(source, context);
   if (!listener) throw new Error("Expected background message listener to be registered.");
   const cleanup = await context.clearHomeDepotBatchState();
-  if (cleanup.cleared !== 2 || removedCookies.length !== 2) {
-    throw new Error(`Expected two transient Home Depot cookies removed, got ${JSON.stringify({ cleanup, removedCookies })}`);
+  if (cleanup.cleared !== 5 || removedCookies.length !== 5) {
+    throw new Error(`Expected every Home Depot cookie to be removed, got ${JSON.stringify({ cleanup, removedCookies })}`);
   }
-  if (removedCookies.some((cookie) => cookie.name === "THD_SESSION")) {
-    throw new Error("Expected Home Depot account session cookie to be preserved.");
+  if (!removedCookies.some((cookie) => cookie.name === "THD_SESSION")) {
+    throw new Error("Expected the Home Depot session cookie to be cleared with the blocked site state.");
   }
-  if (browsingDataRemovals.length !== 1 || !browsingDataRemovals[0].dataToRemove.cache) {
+  if (
+    browsingDataRemovals.length !== 1 ||
+    !browsingDataRemovals[0].dataToRemove.cache ||
+    !browsingDataRemovals[0].dataToRemove.cookies ||
+    !browsingDataRemovals[0].dataToRemove.localStorage ||
+    !browsingDataRemovals[0].dataToRemove.indexedDB
+  ) {
     throw new Error(`Expected Home Depot cache cleanup, got ${JSON.stringify(browsingDataRemovals)}`);
+  }
+  const removalsBeforeBatchGuard = removedCookies.length;
+  await context.ensureHomeDepotBatchState("refresh-batch-one");
+  await context.ensureHomeDepotBatchState("refresh-batch-one");
+  if (removedCookies.length !== removalsBeforeBatchGuard + 5) {
+    throw new Error("Expected Home Depot cleanup exactly once for the same refresh batch.");
+  }
+  await context.ensureHomeDepotBatchState("refresh-batch-two");
+  if (removedCookies.length !== removalsBeforeBatchGuard + 10) {
+    throw new Error("Expected a fresh Home Depot cleanup when the refresh batch changes.");
   }
   const reportFilename = context.reportDownloadFilename(
     { runId: 42, accountKey: "Main Store", reportType: "active_listings" },
@@ -128,6 +168,19 @@ async function runNativePcInputTest() {
   if (closeReturned !== true) throw new Error("Expected async close response marker.");
   if (closedTabs[0] !== 11 || !closeResponse?.ok) {
     throw new Error(`Expected report runner tab close, got tabs=${JSON.stringify(closedTabs)} response=${JSON.stringify(closeResponse)}`);
+  }
+
+  let sourceCloseResponse = null;
+  const sourceCloseReturned = listener(
+    { type: "autozs-close-source-refresh-tab", jobId: 756 },
+    { tab: { id: 12, url: "https://www.homedepot.com/p/Test/123?ea_auto_import=1&autozs_refresh_job=756" } },
+    (payload) => {
+      sourceCloseResponse = payload;
+    }
+  );
+  if (sourceCloseReturned !== true) throw new Error("Expected async source refresh close response marker.");
+  if (!closedTabs.includes(12) || !sourceCloseResponse?.ok) {
+    throw new Error(`Expected completed source refresh runner tab close, got tabs=${JSON.stringify(closedTabs)} response=${JSON.stringify(sourceCloseResponse)}`);
   }
 
   let response = null;
@@ -189,6 +242,38 @@ async function runNativePcInputTest() {
   }
 
   context.navigator.platform = "Win32";
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsWorkerMode = "operations";
+  storage.autozsListingJobLastOpened = 0;
+  await context.openNextListingJob();
+  if (!fetched.some((request) => request.url.endsWith("/listing-jobs/next") && request.options.method === "POST")) {
+    throw new Error(`Expected listing queue claim, got ${JSON.stringify(fetched)}`);
+  }
+  if (createdTabs.length !== 1 || !context.isListingJobRunnerUrl(createdTabs[0].url, 92)) {
+    throw new Error(`Expected one background eBay listing tab, got ${JSON.stringify(createdTabs)}`);
+  }
+  await context.openNextListingJob();
+  if (createdTabs.length !== 1) throw new Error("Expected listing poll throttle to prevent duplicate tabs.");
+
+  const closedBeforeFreshListingRunner = closedTabs.length;
+  createdTabs.length = 0;
+  tabQueryResults = [{
+    id: 44,
+    url: "https://www.ebay.com/lstng?draftId=old&autozs_job_id=91",
+  }];
+  await context.openListingJobRunner({
+    job: {
+      id: 92,
+      assistant_url: "https://www.ebay.com/sl/prelist/home?autozs_job_id=92#autozs_job_id=92",
+    },
+    package: { title: "Fresh listing" },
+  });
+  if (closedTabs[closedBeforeFreshListingRunner] !== 44 || createdTabs.length !== 1) {
+    throw new Error(`Expected a stale listing runner to close before opening a fresh tab, got ${JSON.stringify({ closedTabs, createdTabs })}`);
+  }
+  tabQueryResults = [];
+
   createdTabs.length = 0;
   fetched.length = 0;
   storage.autozsWorkerMode = "operations";

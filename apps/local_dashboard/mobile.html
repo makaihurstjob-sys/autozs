@@ -436,6 +436,31 @@
       word-break: break-word;
       margin-top: 9px;
     }
+    .revision-prices {
+      background: #0b1813;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 11px 12px;
+    }
+    .revision-price-row {
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+    }
+    .revision-price-row span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .revision-price-row strong {
+      color: var(--text);
+      font-size: 15px;
+      text-align: right;
+    }
     .alert-actions {
       display: flex;
       justify-content: flex-end;
@@ -456,6 +481,7 @@
     }
     .small-btn.accent { background: #16796a; border-color: #209a88; }
     .small-btn.danger { background: #7d3e2d; border-color: #9d4f39; }
+    .small-btn:disabled { cursor: wait; opacity: .55; }
     .empty {
       border: 1px dashed var(--line);
       border-radius: 8px;
@@ -463,6 +489,84 @@
       text-align: center;
       color: var(--muted);
       font-weight: 850;
+    }
+    .notification-modal[hidden] { display: none; }
+    .notification-modal {
+      align-items: flex-end;
+      background: rgba(3, 8, 6, .72);
+      display: flex;
+      inset: 0;
+      justify-content: center;
+      position: fixed;
+      z-index: 1000;
+    }
+    .notification-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px 16px 0 0;
+      box-shadow: 0 -18px 60px rgba(0,0,0,.4);
+      max-height: 92vh;
+      max-width: 620px;
+      overflow: auto;
+      padding: 18px 16px calc(24px + env(safe-area-inset-bottom));
+      width: 100%;
+    }
+    .notification-head, .notification-actions, .notification-setting {
+      align-items: center;
+      display: flex;
+      gap: 10px;
+      justify-content: space-between;
+    }
+    .notification-head h2 { margin: 0; }
+    .notification-head p { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+    .notification-status-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin: 16px 0;
+    }
+    .notification-status {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      gap: 5px;
+      min-height: 68px;
+      padding: 10px;
+    }
+    .notification-status span, .notification-group small { color: var(--muted); font-size: 11px; }
+    .notification-status strong { font-size: 13px; overflow-wrap: anywhere; }
+    .notification-status.bad strong { color: #ff9d7f; }
+    .notification-status.good strong { color: #70d9c8; }
+    .notification-error {
+      background: #3a1f17;
+      border: 1px solid #6e3427;
+      border-radius: 8px;
+      color: #ffb39f;
+      display: none;
+      font-size: 12px;
+      line-height: 1.4;
+      margin-bottom: 12px;
+      padding: 10px;
+    }
+    .notification-actions { flex-wrap: wrap; justify-content: flex-start; margin-bottom: 16px; }
+    .notification-actions button { flex: 1 1 120px; }
+    .notification-group {
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+      padding: 14px 0;
+    }
+    .notification-group h3 { font-size: 15px; margin: 0; }
+    .notification-setting { font-size: 13px; min-height: 32px; }
+    .notification-setting input[type="checkbox"] { height: 22px; width: 22px; }
+    .notification-setting select, .notification-setting input[type="time"] {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--ink);
+      min-height: 36px;
+      padding: 6px 8px;
     }
     @media (max-width: 380px) {
       .shell { padding-left: 10px; padding-right: 10px; }
@@ -543,23 +647,56 @@
     <section class="alert-list" id="alerts"></section>
   </main>
 
+  <div class="notification-modal" id="notification-modal" hidden>
+    <div class="notification-panel" role="dialog" aria-modal="true" aria-labelledby="notification-title">
+      <div class="notification-head">
+        <div><h2 id="notification-title">Notifications</h2><p>Delivery health and alerts for this iPhone</p></div>
+        <button class="icon-btn" id="notification-close" type="button" aria-label="Close notification settings">&times;</button>
+      </div>
+      <div class="notification-status-grid">
+        <div class="notification-status" id="notification-permission-status"><span>iPhone</span><strong>Checking</strong></div>
+        <div class="notification-status" id="notification-subscription-status"><span>Subscription</span><strong>Checking</strong></div>
+        <div class="notification-status" id="notification-delivery-status"><span>Delivery</span><strong>Checking</strong></div>
+      </div>
+      <div class="notification-error" id="notification-error"></div>
+      <div class="notification-actions">
+        <button class="small-btn accent" id="notification-setup" type="button">Set up</button>
+        <button class="small-btn" id="notification-repair" type="button">Repair</button>
+        <button class="small-btn" id="notification-test" type="button">Send test</button>
+      </div>
+      <div id="notification-preferences"></div>
+      <button class="small-btn accent" id="notification-save" type="button" style="width:100%;margin-top:8px">Save notification settings</button>
+    </div>
+  </div>
+
   <script>
     const params = new URLSearchParams(window.location.search);
     const apiBase = (params.get("api") || defaultApiBase()).replace(/\/$/, "");
     const dashboardUrl = `${window.location.origin}/?api=${encodeURIComponent(apiBase)}`;
+    const businessTimeZone = "America/New_York";
     const storeKey = `autozs-mobile-store:${apiBase}`;
     const privacyKey = "autozs-mobile-privacy";
-    let selectedView = "stats";
+    let selectedView = params.get("view") === "queue" ? "queue" : "stats";
     let selectedStore = localStorage.getItem(storeKey) || "all";
     let privacyMode = localStorage.getItem(privacyKey) === "true";
     let pushConfig = null;
     let serviceWorkerRegistration = null;
+    let browserPushSubscription = null;
+    let currentPushSubscription = null;
     let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     let calendarSelectedDate = localDateKey(new Date());
     let calendarEvents = [];
 
     document.getElementById("dashboard-link").href = dashboardUrl;
-    document.getElementById("notify-button").addEventListener("click", enableNotifications);
+    document.getElementById("notify-button").addEventListener("click", openNotificationSettings);
+    document.getElementById("notification-close").addEventListener("click", closeNotificationSettings);
+    document.getElementById("notification-modal").addEventListener("click", (event) => {
+      if (event.target.id === "notification-modal") closeNotificationSettings();
+    });
+    document.getElementById("notification-setup").addEventListener("click", () => enableNotifications(false));
+    document.getElementById("notification-repair").addEventListener("click", () => enableNotifications(true));
+    document.getElementById("notification-test").addEventListener("click", sendNotificationTest);
+    document.getElementById("notification-save").addEventListener("click", saveNotificationSettings);
     document.getElementById("privacy-button").addEventListener("click", togglePrivacy);
     document.getElementById("store-picker").addEventListener("change", (event) => {
       selectedStore = event.target.value || "all";
@@ -649,7 +786,16 @@
           ...(options.headers || {}),
         },
       });
-      if (!response.ok) throw new Error(`${path} failed with ${response.status}`);
+      if (!response.ok) {
+        let detail = "";
+        try {
+          const payload = await response.json();
+          detail = payload.detail || payload.message || "";
+        } catch {
+          detail = await response.text().catch(() => "");
+        }
+        throw new Error(detail || `${path} failed with ${response.status}`);
+      }
       return response.json();
     }
 
@@ -731,7 +877,7 @@
         : listingJobs.filter((job) => job.ebay_account_key === selectedStore || job.account_key === selectedStore || job.account_id === selectedStore);
       const latestJobByProduct = new Map();
       [...scopedJobs]
-        .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
+        .sort((a, b) => apiDateMs(b.updated_at) - apiDateMs(a.updated_at))
         .forEach((job) => {
           const productId = Number(job.product_id);
           if (productId && !latestJobByProduct.has(productId)) latestJobByProduct.set(productId, job);
@@ -739,7 +885,7 @@
       const now = Date.now();
       const listingIsDue = (listing) => {
         const job = latestJobByProduct.get(Number(listing.product_id));
-        const start = job?.listing_schedule_at ? new Date(job.listing_schedule_at).getTime() : NaN;
+        const start = apiDateMs(job?.listing_schedule_at, NaN);
         return Number.isFinite(start) && start <= now && job?.status === "completed";
       };
       const liveListings = scopedListings.filter((listing) => {
@@ -784,13 +930,13 @@
     function updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches }) {
       const entries = [
         ...listingJobs.map((job) => workerQueueEntry("Listing", job, workerQueueGroup(job.status))),
-        ...sourceRefreshJobs.map((job) => workerQueueEntry("Price refresh", job, workerQueueGroup(job.status))),
+        ...latestSourceRefreshJobs(sourceRefreshJobs).map((job) => workerQueueEntry("Price refresh", job, workerQueueGroup(job.status))),
         ...revisionJobs.filter((job) => job.status !== "cancelled").map((job) => workerQueueEntry("Revision", job, workerQueueGroup(job.status))),
         ...revisionBatches.map((job) => workerQueueEntry("Revision batch", job, revisionBatchGroup(job.status))),
       ].sort((a, b) => {
         const groupOrder = { running: 0, attention: 1, queued: 2, other: 3, done: 4 };
         const groupDelta = (groupOrder[a.group] ?? 5) - (groupOrder[b.group] ?? 5);
-        return groupDelta || new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+        return groupDelta || apiDateMs(b.updatedAt) - apiDateMs(a.updatedAt);
       }).slice(0, 40);
       const counts = entries.reduce((result, entry) => {
         if (entry.group === "running") result.running += 1;
@@ -808,6 +954,18 @@
         return;
       }
       container.innerHTML = entries.map(renderWorkerQueueEntry).join("");
+      wireRevisionReviewActions(container);
+    }
+
+    function latestSourceRefreshJobs(jobs = []) {
+      const latestByProduct = new Map();
+      [...jobs]
+        .sort((a, b) => apiDateMs(b.updated_at || b.created_at) - apiDateMs(a.updated_at || a.created_at) || Number(b.id || 0) - Number(a.id || 0))
+        .forEach((job) => {
+          const key = job.product_id === null || job.product_id === undefined ? `job-${job.id}` : `product-${job.product_id}`;
+          if (!latestByProduct.has(key)) latestByProduct.set(key, job);
+        });
+      return [...latestByProduct.values()];
     }
 
     function workerQueueEntry(kind, job, group) {
@@ -827,6 +985,7 @@
         message: job.message || job.guard_reason || "",
         updatedAt: job.updated_at || job.created_at || job.scheduled_for,
         attempts: job.attempts || 0,
+        revisionJob: kind === "Revision" ? job : null,
       };
     }
 
@@ -850,6 +1009,8 @@
 
     function renderWorkerQueueEntry(entry) {
       const meta = [entry.subtitle, entry.updatedAt ? `Updated ${formatDate(entry.updatedAt)}` : "", `${entry.attempts} attempt(s)`].filter(Boolean).join(" · ");
+      const revision = entry.revisionJob;
+      const canReviewRevision = revision && ["needs_review", "failed", "paused"].includes(String(revision.status || "").toLowerCase());
       return `
         <article class="alert ${escapeHtml(entry.group)}">
           <div class="alert-head">
@@ -857,12 +1018,64 @@
             <span class="pill ${escapeHtml(entry.group)}">${escapeHtml(entry.status)}</span>
           </div>
           ${entry.message ? `<div class="message">${escapeHtml(entry.message)}</div>` : ""}
+          ${revision ? renderRevisionPrices(revision) : ""}
           <div class="meta">${escapeHtml(meta)}</div>
           <div class="alert-actions">
+            ${revision?.source_url ? `<a class="small-btn" href="${escAttr(revision.source_url)}" target="_blank" rel="noopener noreferrer">Open source</a>` : ""}
+            ${canReviewRevision ? `<button class="small-btn accent" type="button" data-revision-approve="${escapeHtml(revision.id)}">Approve</button><button class="small-btn danger" type="button" data-revision-disapprove="${escapeHtml(revision.id)}">Disapprove</button>` : ""}
             <a class="small-btn" href="${escAttr(dashboardUrl)}">View</a>
           </div>
         </article>
       `;
+    }
+
+    function renderRevisionPrices(job) {
+      const ebayDelta = `${moneyExact(job.old_price)} → ${moneyExact(job.target_price)}`;
+      const sourceDelta = job.source_price === null || job.source_price === undefined
+        ? "Price unavailable"
+        : `${moneyExact(job.old_source_price ?? job.source_price)} → ${moneyExact(job.source_price)}`;
+      const shipping = Number(job.source_shipping || 0) > 0 ? ` + ${moneyExact(job.source_shipping)} shipping` : "";
+      return `
+        <div class="revision-prices">
+          <div class="revision-price-row"><span>Source price</span><strong>${escapeHtml(sourceDelta + shipping)}</strong></div>
+          <div class="revision-price-row"><span>eBay price</span><strong>${escapeHtml(ebayDelta)}</strong></div>
+        </div>
+      `;
+    }
+
+    function wireRevisionReviewActions(container) {
+      container.querySelectorAll("[data-revision-approve]").forEach((button) => {
+        button.addEventListener("click", () => reviewRevisionFromCard(button, "approve"));
+      });
+      container.querySelectorAll("[data-revision-disapprove]").forEach((button) => {
+        button.addEventListener("click", () => reviewRevisionFromCard(button, "disapprove"));
+      });
+    }
+
+    async function reviewRevisionFromCard(button, action) {
+      const jobId = button.dataset.revisionApprove || button.dataset.revisionDisapprove;
+      const approving = action === "approve";
+      const promptText = approving
+        ? "Approve this guarded eBay price revision? AutoZS will add it to the worker queue."
+        : "Disapprove and cancel this proposed eBay price revision?";
+      if (!window.confirm(promptText)) return;
+      const card = button.closest(".alert");
+      card?.querySelectorAll("button").forEach((control) => { control.disabled = true; });
+      try {
+        if (approving) {
+          await api(`/ebay/revision-jobs/${jobId}/approve`, { method: "POST" });
+        } else {
+          await api(`/ebay/revision-jobs/${jobId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: "cancelled", message: "Disapproved from the AutoZS mobile review queue." }),
+          });
+        }
+        setError("");
+        await refresh();
+      } catch (error) {
+        setError(error.message || String(error));
+        card?.querySelectorAll("button").forEach((control) => { control.disabled = false; });
+      }
     }
 
     function togglePrivacy() {
@@ -895,7 +1108,7 @@
         ? listingJobs
         : listingJobs.filter((job) => job.ebay_account_key === selectedStore || job.account_key === selectedStore || job.account_id === selectedStore);
       const latestJobByProduct = new Map();
-      [...scopedJobs].sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0)).forEach((job) => {
+      [...scopedJobs].sort((a, b) => apiDateMs(b.updated_at) - apiDateMs(a.updated_at)).forEach((job) => {
         const productId = Number(job.product_id);
         if (productId && !latestJobByProduct.has(productId)) latestJobByProduct.set(productId, job);
       });
@@ -904,7 +1117,7 @@
       const events = [];
       latestJobByProduct.forEach((job, productId) => {
         if (!job.listing_schedule_at || ["cancelled", "tombstoned"].includes(String(job.status || "").toLowerCase())) return;
-        const instant = new Date(job.listing_schedule_at);
+        const instant = apiDate(job.listing_schedule_at);
         if (Number.isNaN(instant.getTime())) return;
         const listing = listingByProduct.get(productId);
         const product = productById.get(productId);
@@ -913,7 +1126,7 @@
       });
       scopedListings.forEach((listing) => {
         if (!listing.renews_at) return;
-        const instant = new Date(listing.renews_at);
+        const instant = apiDate(listing.renews_at);
         if (Number.isNaN(instant.getTime())) return;
         const product = productById.get(Number(listing.product_id));
         events.push(mobileCalendarEvent("renewal", instant, product, listing, null));
@@ -979,7 +1192,8 @@
 
     function renderMobileCalendarCard(event) {
       const typeLabel = event.type === "renewal" ? "Renews" : event.type === "listed" ? "Listed" : "Scheduled";
-      const meta = [typeLabel, event.date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), event.price === null ? "" : money(event.price)].filter(Boolean).join(" · ");
+      const scheduleTime = event.date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: businessTimeZone, timeZoneName: "short" });
+      const meta = [typeLabel, scheduleTime, event.price === null ? "" : money(event.price)].filter(Boolean).join(" · ");
       return `<article class="calendar-mini-card ${event.type}">${event.image ? `<img src="${escAttr(event.image)}" alt="" />` : `<div></div>`}<div><div class="calendar-mini-title">${escapeHtml(event.title)}</div><div class="calendar-mini-meta">${escapeHtml(meta)}</div></div></article>`;
     }
 
@@ -989,37 +1203,82 @@
       return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
     }
 
-    async function enableNotifications() {
+    const defaultPushPreferences = {
+      listing_queued: true,
+      listing_running: true,
+      listing_attention: true,
+      listing_completed: false,
+      source_queued: true,
+      source_running: true,
+      source_attention: true,
+      source_completed: false,
+      revision_queued: true,
+      revision_running: true,
+      revision_attention: true,
+      revision_completed: false,
+      worker_attention: true,
+      delivery_mode: "individual",
+    };
+
+    function openNotificationSettings() {
+      document.getElementById("notification-modal").hidden = false;
+      document.body.style.overflow = "hidden";
+      renderNotificationPreferences(currentPushSubscription);
+      initializePushState();
+    }
+
+    function closeNotificationSettings() {
+      document.getElementById("notification-modal").hidden = true;
+      document.body.style.overflow = "";
+    }
+
+    async function enableNotifications(forceRepair = false) {
+      setNotificationError("");
       if (!("Notification" in window)) {
-        setError("For iPhone notifications, add AutoZS to your Home Screen first, then open it from the new icon.");
+        setNotificationError("For iPhone notifications, add AutoZS to your Home Screen first, then open it from the new icon.");
         return;
       }
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
         markNotifications(false);
+        await initializePushState();
         return;
       }
 
       if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-        markNotifications(true);
+        setNotificationError("This browser does not expose Web Push. Open the installed AutoZS Home Screen app and try again.");
+        markNotifications(false);
         return;
       }
 
+      const button = document.getElementById(forceRepair ? "notification-repair" : "notification-setup");
+      const originalLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = forceRepair ? "Repairing..." : "Setting up...";
       try {
         pushConfig = await api("/push/config");
         if (!pushConfig.enabled) {
-          setError(`Push not configured: ${pushConfig.reason || "missing server keys"}`);
-          markNotifications(true);
-          return;
+          throw new Error(`Push not configured: ${pushConfig.reason || "missing server keys"}`);
         }
         serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
-        const existing = await serviceWorkerRegistration.pushManager.getSubscription();
-        const subscription = existing || await serviceWorkerRegistration.pushManager.subscribe({
+        let existing = await serviceWorkerRegistration.pushManager.getSubscription();
+        if (forceRepair && existing) {
+          if (currentPushSubscription) {
+            await api(`/push/subscriptions/${currentPushSubscription.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ enabled: false }),
+            }).catch(() => null);
+          }
+          await existing.unsubscribe();
+          existing = null;
+        }
+        browserPushSubscription = existing || await serviceWorkerRegistration.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(pushConfig.public_key),
         });
-        const serialized = subscription.toJSON();
-        await api("/push/subscriptions", {
+        const serialized = browserPushSubscription.toJSON();
+        const notificationSettings = collectNotificationSettings();
+        currentPushSubscription = await api("/push/subscriptions", {
           method: "POST",
           body: JSON.stringify({
             endpoint: serialized.endpoint,
@@ -1027,32 +1286,202 @@
             label: "iPhone AutoZS",
             user_agent: navigator.userAgent,
             dashboard_url: window.location.href,
+            vapid_public_key: pushConfig.public_key,
+            preferences: {
+              ...notificationSettings.preferences,
+              timezone: notificationSettings.timezone,
+              weekly_summary_day: notificationSettings.weekly_summary_day,
+              weekly_summary_time: notificationSettings.weekly_summary_time,
+              weekly_summary_enabled: notificationSettings.weekly_summary_enabled,
+            },
           }),
         });
-        await api("/push/test", {
+        const result = await api("/push/test", {
           method: "POST",
           body: JSON.stringify({
             title: "AutoZS push enabled",
             body: "Your iPhone will alert you when AutoZS needs attention.",
+            subscription_id: currentPushSubscription.id,
           }),
         });
+        if (Number(result.sent || 0) < 1 || Number(result.failed || 0) > 0) {
+          await initializePushState();
+          throw new Error(currentPushSubscription?.last_error || result.message || "The test notification was not delivered.");
+        }
+        await initializePushState();
         markNotifications(true);
       } catch (error) {
-        setError(error.message || String(error));
+        setNotificationError(error.message || String(error));
         markNotifications(false);
+        await initializePushState();
+      } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
       }
     }
 
     async function initializePushState() {
-      if ("Notification" in window && Notification.permission === "granted") markNotifications(true);
-      if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
-      try {
-        serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
-        const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
-        if (subscription) markNotifications(true);
-      } catch {
-        // iOS only enables web push for the installed Home Screen PWA.
+      updateNotificationStatusCard("notification-permission-status", "Permission", !("Notification" in window) ? "Home Screen required" : Notification.permission, "Notification" in window && Notification.permission === "granted");
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        updateNotificationStatusCard("notification-subscription-status", "Subscription", "Unavailable", false);
+        updateNotificationStatusCard("notification-delivery-status", "Delivery", "Not configured", false);
+        markNotifications(false);
+        return;
       }
+      try {
+        pushConfig = await api("/push/config");
+        serviceWorkerRegistration = await navigator.serviceWorker.register("/sw.js");
+        browserPushSubscription = await serviceWorkerRegistration.pushManager.getSubscription();
+        const subscriptions = await api("/push/subscriptions");
+        currentPushSubscription = browserPushSubscription
+          ? subscriptions.find((subscription) => subscription.endpoint === browserPushSubscription.endpoint) || null
+          : null;
+        const keyCurrent = Boolean(currentPushSubscription?.vapid_public_key && currentPushSubscription.vapid_public_key === pushConfig.public_key);
+        updateNotificationStatusCard(
+          "notification-subscription-status",
+          "Subscription",
+          browserPushSubscription && currentPushSubscription?.enabled && keyCurrent ? "Active" : browserPushSubscription && currentPushSubscription?.enabled ? "Repair required" : browserPushSubscription ? "Not registered" : "Missing",
+          Boolean(browserPushSubscription && currentPushSubscription?.enabled && keyCurrent),
+        );
+        const deliveryGood = Boolean(currentPushSubscription?.last_notified_at && !currentPushSubscription?.last_error);
+        const deliveryLabel = currentPushSubscription?.last_error
+          ? "Failed"
+          : currentPushSubscription?.last_notified_at
+            ? `Delivered ${formatDate(currentPushSubscription.last_notified_at)}`
+            : "Not tested";
+        updateNotificationStatusCard("notification-delivery-status", "Delivery", deliveryLabel, deliveryGood);
+        setNotificationError(currentPushSubscription?.last_error || (currentPushSubscription?.enabled && !keyCurrent ? "Tap Repair once to activate queue updates and weekly summaries on this iPhone." : ""));
+        renderNotificationPreferences(currentPushSubscription);
+        markNotifications(Notification.permission === "granted" && Boolean(browserPushSubscription) && Boolean(currentPushSubscription?.enabled) && keyCurrent && !currentPushSubscription?.last_error);
+      } catch (error) {
+        updateNotificationStatusCard("notification-subscription-status", "Subscription", "Check failed", false);
+        updateNotificationStatusCard("notification-delivery-status", "Delivery", "Unknown", false);
+        setNotificationError(error.message || String(error));
+        markNotifications(false);
+      }
+    }
+
+    async function sendNotificationTest() {
+      if (!currentPushSubscription) {
+        setNotificationError("Set up this iPhone before sending a test.");
+        return;
+      }
+      const button = document.getElementById("notification-test");
+      button.disabled = true;
+      button.textContent = "Sending...";
+      setNotificationError("");
+      try {
+        const result = await api("/push/test", {
+          method: "POST",
+          body: JSON.stringify({
+            title: "AutoZS test alert",
+            body: "Notification delivery is working on this iPhone.",
+            subscription_id: currentPushSubscription.id,
+          }),
+        });
+        await initializePushState();
+        if (Number(result.sent || 0) < 1 || Number(result.failed || 0) > 0) {
+          throw new Error(currentPushSubscription?.last_error || result.message || "The test notification was not delivered.");
+        }
+      } catch (error) {
+        setNotificationError(error.message || String(error));
+      } finally {
+        button.disabled = false;
+        button.textContent = "Send test";
+      }
+    }
+
+    async function saveNotificationSettings() {
+      if (!currentPushSubscription) {
+        setNotificationError("Set up this iPhone before saving notification settings.");
+        return;
+      }
+      const button = document.getElementById("notification-save");
+      button.disabled = true;
+      button.textContent = "Saving...";
+      setNotificationError("");
+      try {
+        const settings = collectNotificationSettings();
+        currentPushSubscription = await api(`/push/subscriptions/${currentPushSubscription.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(settings),
+        });
+        renderNotificationPreferences(currentPushSubscription);
+      } catch (error) {
+        setNotificationError(error.message || String(error));
+      } finally {
+        button.disabled = false;
+        button.textContent = "Save notification settings";
+      }
+    }
+
+    function renderNotificationPreferences(subscription) {
+      const preferences = { ...defaultPushPreferences, ...(subscription?.preferences || {}) };
+      const weeklyDay = Number(subscription?.weekly_summary_day ?? 5);
+      const weeklyTime = subscription?.weekly_summary_time || "18:00";
+      const weeklyEnabled = subscription?.weekly_summary_enabled ?? true;
+      const groups = [
+        ["Listing jobs", "Draft creation and scheduled publishing", "listing"],
+        ["Source prices", "Supplier price checks", "source"],
+        ["eBay revisions", "Active-listing updates", "revision"],
+      ];
+      document.getElementById("notification-preferences").innerHTML = `
+        ${groups.map(([title, note, prefix]) => `
+          <section class="notification-group">
+            <div><h3>${title}</h3><small>${note}</small></div>
+            ${preferenceToggle(`${prefix}_queued`, "Queued", preferences)}
+            ${preferenceToggle(`${prefix}_running`, "Running", preferences)}
+            ${preferenceToggle(`${prefix}_attention`, "Needs attention", preferences)}
+            ${preferenceToggle(`${prefix}_completed`, "Completed", preferences)}
+          </section>
+        `).join("")}
+        <section class="notification-group">
+          <div><h3>Worker health</h3><small>Windows worker availability</small></div>
+          ${preferenceToggle("worker_attention", "Offline or stale", preferences)}
+        </section>
+        <section class="notification-group">
+          <div><h3>Delivery</h3><small>Choose one alert per job or a compact status update</small></div>
+          <label class="notification-setting"><span>Job updates</span><select id="notification-delivery-mode"><option value="individual" ${preferences.delivery_mode === "individual" ? "selected" : ""}>Each job</option><option value="grouped" ${preferences.delivery_mode === "grouped" ? "selected" : ""}>Grouped</option></select></label>
+        </section>
+        <section class="notification-group">
+          <div><h3>Weekly summary</h3><small>Views, listings, scheduled items, orders, and attention</small></div>
+          <label class="notification-setting"><span>Enable summary</span><input id="notification-weekly-enabled" type="checkbox" ${weeklyEnabled ? "checked" : ""}></label>
+          <label class="notification-setting"><span>Day</span><select id="notification-weekly-day">${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day, index) => `<option value="${index}" ${weeklyDay === index ? "selected" : ""}>${day}</option>`).join("")}</select></label>
+          <label class="notification-setting"><span>Time</span><input id="notification-weekly-time" type="time" value="${escAttr(weeklyTime)}"></label>
+        </section>
+      `;
+    }
+
+    function preferenceToggle(key, label, preferences) {
+      return `<label class="notification-setting"><span>${label}</span><input type="checkbox" data-push-preference="${key}" ${preferences[key] ? "checked" : ""}></label>`;
+    }
+
+    function collectNotificationSettings() {
+      const preferences = { ...defaultPushPreferences };
+      document.querySelectorAll("[data-push-preference]").forEach((input) => {
+        preferences[input.dataset.pushPreference] = input.checked;
+      });
+      preferences.delivery_mode = document.getElementById("notification-delivery-mode")?.value === "grouped" ? "grouped" : "individual";
+      return {
+        preferences,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/New_York",
+        weekly_summary_day: Number(document.getElementById("notification-weekly-day")?.value ?? 5),
+        weekly_summary_time: document.getElementById("notification-weekly-time")?.value || "18:00",
+        weekly_summary_enabled: Boolean(document.getElementById("notification-weekly-enabled")?.checked),
+      };
+    }
+
+    function updateNotificationStatusCard(id, label, value, good) {
+      const card = document.getElementById(id);
+      card.classList.toggle("good", Boolean(good));
+      card.classList.toggle("bad", !good);
+      card.innerHTML = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`;
+    }
+
+    function setNotificationError(message) {
+      const box = document.getElementById("notification-error");
+      box.style.display = message ? "block" : "none";
+      box.textContent = message || "";
     }
 
     function markNotifications(enabled) {
@@ -1079,11 +1508,30 @@
       return Number(value).toLocaleString([], { style: "currency", currency: "USD", maximumFractionDigits: 0 });
     }
 
+    function moneyExact(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toLocaleString([], { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function apiDate(value) {
+      if (value instanceof Date) return value;
+      if (value === null || value === undefined || value === "") return new Date(NaN);
+      const text = String(value).trim();
+      const hasTime = /T\d{2}:\d{2}/.test(text);
+      const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+      return new Date(hasTime && !hasZone ? `${text}Z` : text);
+    }
+
+    function apiDateMs(value, fallback = 0) {
+      const time = apiDate(value).getTime();
+      return Number.isFinite(time) ? time : fallback;
+    }
+
     function formatDate(value) {
       if (!value) return "";
-      const date = new Date(value);
+      const date = apiDate(value);
       if (Number.isNaN(date.getTime())) return "";
-      return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: businessTimeZone, timeZoneName: "short" });
     }
 
     function escapeHtml(value) {

@@ -10,18 +10,26 @@ class FakeElement {
     this.parentNode = null;
     this.previousElementSibling = null;
     this.style = { cssText: "", setProperty: (key, value) => { this.style[key] = value; } };
+    this.attributes = {};
   }
 
   attachShadow() {
+    const nodes = {
+      button: { disabled: false, addEventListener: () => {} },
+      ".status": { textContent: "", title: "" },
+      "#progress-label": { textContent: "" },
+      "#progress-fill": { style: { width: "0%" } },
+      "#progress-percent": { textContent: "0%" },
+    };
     this.shadowRoot = {
       innerHTML: "",
-      querySelector: (selector) => {
-        if (selector === "button") return { disabled: false, addEventListener: () => {} };
-        if (selector === ".status") return { textContent: "", title: "" };
-        return null;
-      },
+      querySelector: (selector) => nodes[selector] || null,
     };
     return this.shadowRoot;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
   }
 
   insertAdjacentElement(position, element) {
@@ -36,6 +44,11 @@ class FakeElement {
     element.previousElementSibling = this.children[this.children.length - 1] || null;
     this.children.push(element);
     this.hosted = element;
+  }
+
+  appendChild(element) {
+    this.append(element);
+    return element;
   }
 }
 
@@ -205,6 +218,9 @@ async function runDelayedCaptureTest() {
     checkLocalApi: async () => ({ status: "ok" }),
     captureSourceProductFromPage: () => {
       captureCalls += 1;
+      if (captureCalls === 1) {
+        throw new Error("Home Depot showed an error page; refresh this source page and try again.");
+      }
       if (captureCalls < 3) {
         return { source_url: "https://www.homedepot.com/p/Test/123", title: "Home Depot", source_price: null, image_urls: "" };
       }
@@ -240,6 +256,7 @@ async function runDelayedCaptureTest() {
 async function runSourceRefreshPacingTest() {
   const body = new FakeElement("body");
   const delays = [];
+  const runtimeMessages = [];
   let imageDownloads = 0;
   let nextClaims = 0;
 
@@ -261,6 +278,14 @@ async function runSourceRefreshPacingTest() {
     MutationObserver: class {
       observe() {}
       disconnect() {}
+    },
+    chrome: {
+      runtime: {
+        sendMessage: async (message) => {
+          runtimeMessages.push(message);
+          return { ok: true };
+        },
+      },
     },
     window: {
       __ebayAutomationImportButton: false,
@@ -304,8 +329,25 @@ async function runSourceRefreshPacingTest() {
   await new Promise((resolve) => setImmediate(resolve));
 
   if (imageDownloads !== 0) throw new Error(`Expected price refresh to skip image downloads, got ${imageDownloads}`);
-  if (!delays.includes(45 * 1000)) throw new Error(`Expected a 45 second cooldown, got ${JSON.stringify(delays)}`);
-  if (nextClaims !== 0) throw new Error("Expected the next refresh job to wait for the cooldown.");
+  if (delays.includes(45 * 1000)) throw new Error(`Expected the page to leave pacing to the background worker, got ${JSON.stringify(delays)}`);
+  if (!runtimeMessages.some((message) => message.type === "autozs-source-refresh-cooldown")) {
+    throw new Error(`Expected the background cooldown to be recorded, got ${JSON.stringify(runtimeMessages)}`);
+  }
+  const closeMessage = runtimeMessages.find((message) => message.type === "autozs-close-source-refresh-tab");
+  if (!closeMessage || closeMessage.jobId !== 7) {
+    throw new Error(`Expected the completed automatic source refresh tab to request closure, got ${JSON.stringify(runtimeMessages)}`);
+  }
+  const progressHost = body.hosted;
+  if (progressHost?.id !== "autozs-source-import-progress-host") {
+    throw new Error(`Expected scheduled import progress overlay, got ${progressHost?.id || "none"}`);
+  }
+  if (progressHost.shadowRoot.querySelector("#progress-percent")?.textContent !== "100%") {
+    throw new Error("Expected scheduled source import progress to reach 100%.");
+  }
+  if (!/Source price imported/i.test(progressHost.shadowRoot.querySelector("#progress-label")?.textContent || "")) {
+    throw new Error("Expected the completed scheduled source-import label.");
+  }
+  if (nextClaims !== 0) throw new Error("Expected the page not to claim the next refresh job directly.");
 }
 
 Promise.all([runContentTest(), runAutoImportTest(), runDelayedCaptureTest(), runSourceRefreshPacingTest()])

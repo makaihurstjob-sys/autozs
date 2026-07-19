@@ -100,9 +100,61 @@ def test_existing_draft_assistant_url_reopens_that_draft(client) -> None:
     assert f"autozs_job_id={job['id']}" in updated["assistant_url"]
 
 
+def test_listing_job_rejects_draft_id_owned_by_another_product(client) -> None:
+    first_product = create_ready_product(client, "First Draft Owner", "draft-owner-1")
+    second_product = create_ready_product(client, "Second Draft Owner", "draft-owner-2")
+    first_job = client.post("/listing-jobs", json={"product_ids": [first_product["id"]]}).json()[0]
+    second_job = client.post("/listing-jobs", json={"product_ids": [second_product["id"]]}).json()[0]
+    draft_id = "5313646448913"
+
+    first_saved = client.patch(
+        f"/listing-jobs/{first_job['id']}",
+        json={"status": "saved_draft", "ebay_draft_id": draft_id},
+    ).json()
+    assert first_saved["ebay_draft_id"] == draft_id
+
+    collision = client.patch(
+        f"/listing-jobs/{second_job['id']}",
+        json={"status": "ready_to_save", "ebay_draft_id": draft_id},
+    ).json()
+
+    assert collision["status"] == "needs_review"
+    assert collision["ebay_draft_id"] is None
+    assert f"product {first_product['id']}" in collision["message"]
+    assert collision["assistant_url"].startswith("https://www.ebay.com/sl/prelist/home?")
+
+
+def test_draft_verification_rejects_another_products_draft_id(client) -> None:
+    first_product = create_ready_product(client, "Verified Draft Owner", "draft-verify-owner-1")
+    second_product = create_ready_product(client, "Wrong Draft Verification", "draft-verify-owner-2")
+    first_job = client.post("/listing-jobs", json={"product_ids": [first_product["id"]]}).json()[0]
+    second_job = client.post("/listing-jobs", json={"product_ids": [second_product["id"]]}).json()[0]
+    draft_id = "5264142176412"
+    client.patch(
+        f"/listing-jobs/{first_job['id']}",
+        json={"status": "saved_draft", "ebay_draft_id": draft_id},
+    )
+
+    collision = client.post(
+        f"/listing-jobs/{second_job['id']}/verify-draft",
+        json={"exists": True, "ebay_draft_id": draft_id, "url": f"https://www.ebay.com/lstng?draftId={draft_id}"},
+    ).json()
+
+    assert collision["status"] == "needs_review"
+    assert collision["ebay_draft_id"] is None
+    assert f"product {first_product['id']}" in collision["message"]
+
+
 def test_listing_job_draft_verification_tombstones_missing_draft_and_allows_reimport(client) -> None:
     product = create_ready_product(client, "Deleted eBay Draft Product")
-    job = client.post("/listing-jobs", json={"product_ids": [product["id"]], "ebay_account_key": "manual"}).json()[0]
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "manual",
+            "listing_schedule_at": "2026-07-25T19:00:00",
+        },
+    ).json()[0]
     saved = client.patch(
         f"/listing-jobs/{job['id']}",
         json={"status": "saved_draft", "ebay_draft_id": "5121504565001", "message": "Saved for later on eBay"},
@@ -128,10 +180,40 @@ def test_listing_job_draft_verification_tombstones_missing_draft_and_allows_reim
     assert "no longer exists" in tombstoned["message"]
     listing = next(item for item in client.get("/ebay/listings").json() if item["product_id"] == product["id"])
     assert listing["status"] == "tombstoned"
+    saved_product = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert saved_product["listing_schedule_at"] is None
 
     reimport = client.post("/listing-jobs", json={"product_ids": [product["id"]], "ebay_account_key": "manual"}).json()[0]
     assert reimport["id"] != job["id"]
     assert reimport["status"] == "queued"
+
+
+def test_manual_tombstone_clears_listing_and_product_schedule(client) -> None:
+    product = create_ready_product(client, "Manually Deleted Scheduled Draft")
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "manual",
+            "listing_schedule_at": "2026-07-24T19:00:00",
+        },
+    ).json()[0]
+    client.post(
+        f"/products/{product['id']}/mark-listed",
+        json={"listing_id": "800241899129", "account_id": "manual", "status": "scheduled"},
+    )
+
+    tombstoned = client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={"status": "tombstoned", "message": "Deleted from eBay Listings bulk action"},
+    ).json()
+
+    assert tombstoned["status"] == "tombstoned"
+    assert tombstoned["listing_schedule_at"] is None
+    listing = next(item for item in client.get("/ebay/listings").json() if item["product_id"] == product["id"])
+    assert listing["status"] == "tombstoned"
+    saved_product = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert saved_product["listing_schedule_at"] is None
 
 
 def test_listing_jobs_next_only_starts_due_jobs(client) -> None:
@@ -204,6 +286,23 @@ def test_browser_account_ignores_ebay_footer_user_agreement(client) -> None:
             "url": "https://www.ebay.com/sl/prelist/home",
             "marketplace": "EBAY_US",
             "source": "test",
+        },
+    ).json()
+
+    assert status["detected_username"] == "a.m.anim-59"
+    assert status["can_list"] is True
+
+
+def test_browser_account_ignores_listing_weight_unit_as_username(client) -> None:
+    configure_matching_browser_account(client, username="a.m.anim-59")
+
+    status = client.post(
+        "/ebay/browser-account",
+        json={
+            "detected_username": "kg",
+            "url": "https://www.ebay.com/lstng?draftId=123&mode=AddItem",
+            "marketplace": "EBAY_US",
+            "source": "chrome-extension",
         },
     ).json()
 
@@ -316,6 +415,63 @@ def test_listing_job_uses_selected_ebay_schedule_time(client) -> None:
     assert run["package"]["listing_schedule_at"] == schedule_at
 
 
+def test_rescheduling_listing_job_requeues_it_and_updates_product_calendar(client) -> None:
+    product = create_ready_product(client, "Past Due Scheduled Product")
+    past_schedule = "2026-07-14T19:00:00"
+    future_schedule = "2026-07-20T19:45:00"
+
+    job = client.post(
+        "/listing-jobs",
+        json={"product_ids": [product["id"]], "action": "publish", "listing_schedule_at": past_schedule},
+    ).json()[0]
+    client.post(f"/listing-jobs/{job['id']}/run").raise_for_status()
+
+    rescheduled = client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "queued",
+            "scheduled_for": "2026-07-18T04:30:00",
+            "listing_schedule_at": future_schedule,
+            "message": "Queued on the Windows worker for rescheduling",
+        },
+    )
+
+    assert rescheduled.status_code == 200
+    assert rescheduled.json()["status"] == "queued"
+    assert rescheduled.json()["listing_schedule_at"] == future_schedule
+    saved_product = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert saved_product["listing_schedule_at"] == future_schedule
+
+
+def test_stale_running_listing_job_moves_to_needs_review(client) -> None:
+    from app.core.database import get_db
+    from app.main import app
+    from app.models.domain import ListingJob
+    from app.services.listing_jobs import flag_stale_listing_jobs
+
+    product = create_ready_product(client, "Abandoned Worker Product")
+    job = client.post(
+        "/listing-jobs",
+        json={"product_ids": [product["id"]], "action": "publish", "listing_schedule_at": "2026-07-20T19:45:00"},
+    ).json()[0]
+    client.post(f"/listing-jobs/{job['id']}/run").raise_for_status()
+
+    session_provider = app.dependency_overrides[get_db]
+    session_generator = session_provider()
+    db = next(session_generator)
+    try:
+        record = db.get(ListingJob, job["id"])
+        record.updated_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        db.commit()
+
+        assert flag_stale_listing_jobs(db) == 1
+        db.refresh(record)
+        assert record.status == "needs_review"
+        assert "stopped reporting" in record.message
+    finally:
+        session_generator.close()
+
+
 def test_publish_listing_job_enables_guarded_auto_submit(client) -> None:
     product = create_ready_product(client, "Automatic Scheduled Product")
     schedule_at = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7)).replace(
@@ -380,6 +536,54 @@ def test_completed_past_publish_job_creates_active_listing_with_renewal(client) 
     assert listing["started_at"] is not None
     assert listing["renews_at"] is not None
     assert listing["days_until_relist"] is not None
+
+
+def test_generic_live_confirmation_does_not_override_future_planned_schedule(client) -> None:
+    product = create_ready_product(client, "Future Scheduled Product", "987654322")
+    schedule_at = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "action": "publish",
+            "listing_schedule_at": schedule_at,
+        },
+    ).json()[0]
+
+    client.post(
+        f"/products/{product['id']}/mark-listed",
+        json={"listing_id": "800262913582", "account_id": "manual", "status": "active"},
+    )
+    client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "completed",
+            "listing_id": "800262913582",
+            "message": "Listed on eBay as item 800262913582.",
+        },
+    )
+    incorrectly_live = client.get("/ebay/listings").json()[0]
+    assert incorrectly_live["status"] == "active"
+    assert incorrectly_live["renews_at"] is not None
+
+    client.post(
+        f"/products/{product['id']}/mark-listed",
+        json={"listing_id": "800262913582", "account_id": "manual", "status": "scheduled"},
+    )
+    client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "completed",
+            "listing_id": "800262913582",
+            "message": "Scheduled on eBay as item 800262913582.",
+        },
+    )
+
+    listing = client.get("/ebay/listings").json()[0]
+    assert listing["listing_id"] == "800262913582"
+    assert listing["status"] == "scheduled"
+    assert listing["started_at"] is None
+    assert listing["renews_at"] is None
 
 
 def test_product_listing_schedule_can_be_saved_and_cleared(client) -> None:

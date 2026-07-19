@@ -24,6 +24,7 @@ from app.models.domain import (
     PriceSnapshot,
     Product,
     ProductStatus,
+    PushSubscription,
     ResearchJob,
     SupplierProduct,
 )
@@ -96,6 +97,7 @@ from app.schemas.domain import (
     PushDispatchResult,
     PushSubscriptionCreate,
     PushSubscriptionRead,
+    PushSubscriptionUpdate,
     PushTestRequest,
     ProductImageDownloadResult,
     ProductImageOrderUpdate,
@@ -204,6 +206,7 @@ from app.services.source_refresh_jobs import (
     create_source_refresh_batch,
     fail_source_refresh_job,
     list_source_refresh_jobs,
+    reject_suspicious_source_refresh_price,
     serialize_source_refresh_job,
     source_refresh_has_running_job,
 )
@@ -213,7 +216,9 @@ from app.services.push_notifications import (
     dispatch_alert_notifications,
     get_push_config,
     list_push_subscriptions,
+    serialize_push_subscription,
     send_test_push,
+    update_push_subscription,
     upsert_push_subscription,
 )
 
@@ -274,7 +279,7 @@ def read_push_config_route() -> PushConfigRead:
 
 @router.get("/push/subscriptions", response_model=list[PushSubscriptionRead])
 def read_push_subscriptions_route(db: Session = Depends(get_db)) -> list[PushSubscriptionRead]:
-    return list_push_subscriptions(db)
+    return [PushSubscriptionRead(**serialize_push_subscription(subscription)) for subscription in list_push_subscriptions(db)]
 
 
 @router.post("/push/subscriptions", response_model=PushSubscriptionRead)
@@ -288,7 +293,7 @@ def create_push_subscription_route(
     auth = keys.get("auth")
     if not payload.endpoint or not p256dh or not auth:
         raise HTTPException(status_code=400, detail="Push subscription endpoint and keys are required")
-    return upsert_push_subscription(
+    subscription = upsert_push_subscription(
         db,
         endpoint=payload.endpoint,
         p256dh=p256dh,
@@ -296,12 +301,42 @@ def create_push_subscription_route(
         label=payload.label or "AutoZS iPhone",
         user_agent=payload.user_agent or request.headers.get("user-agent", ""),
         dashboard_url=payload.dashboard_url or "",
+        vapid_public_key=payload.vapid_public_key or "",
+        preferences=payload.preferences,
     )
+    return PushSubscriptionRead(**serialize_push_subscription(subscription))
+
+
+@router.patch("/push/subscriptions/{subscription_id}", response_model=PushSubscriptionRead)
+def patch_push_subscription_route(
+    subscription_id: int,
+    payload: PushSubscriptionUpdate,
+    db: Session = Depends(get_db),
+) -> PushSubscriptionRead:
+    subscription = db.get(PushSubscription, subscription_id)
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Push subscription not found")
+    updated = update_push_subscription(
+        db,
+        subscription,
+        enabled=payload.enabled,
+        preferences=payload.preferences,
+        timezone_name=payload.timezone,
+        weekly_summary_day=payload.weekly_summary_day,
+        weekly_summary_time=payload.weekly_summary_time,
+        weekly_summary_enabled=payload.weekly_summary_enabled,
+    )
+    return PushSubscriptionRead(**serialize_push_subscription(updated))
 
 
 @router.post("/push/test", response_model=PushDispatchResult)
 def send_push_test_route(payload: PushTestRequest, db: Session = Depends(get_db)) -> PushDispatchResult:
-    return PushDispatchResult(**send_test_push(db, title=payload.title, body=payload.body))
+    return PushDispatchResult(**send_test_push(
+        db,
+        title=payload.title,
+        body=payload.body,
+        subscription_id=payload.subscription_id,
+    ))
 
 
 @router.post("/push/dispatch-alerts", response_model=PushDispatchResult)
@@ -580,6 +615,10 @@ def import_source_products(payload: ProductImportRequest, db: Session = Depends(
 @router.post("/products/import-captured", response_model=ProductRead)
 def import_captured_source_product(payload: CapturedProductImport, db: Session = Depends(get_db)) -> Product:
     reject_home_depot_error_capture(payload.source_url, payload.title)
+    if payload.refresh_job_id:
+        suspicious_price = reject_suspicious_source_refresh_price(db, payload.refresh_job_id, payload.source_price)
+        if suspicious_price:
+            raise HTTPException(status_code=422, detail=suspicious_price)
     product = import_captured_product(
         db,
         source_url=payload.source_url,
@@ -593,6 +632,8 @@ def import_captured_source_product(payload: CapturedProductImport, db: Session =
     )
     if payload.refresh_job_id:
         complete_source_refresh_job(db, payload.refresh_job_id, product.id)
+    else:
+        enqueue_ebay_price_revisions(db, product_ids=[product.id])
     return product
 
 
@@ -740,6 +781,7 @@ def update_product_capture(product_id: int, payload: CapturedProductUpdate, db: 
     )
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    enqueue_ebay_price_revisions(db, product_ids=[product.id])
     return product
 
 

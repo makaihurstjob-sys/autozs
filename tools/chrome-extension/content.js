@@ -31,6 +31,98 @@
       return "assets/import-to-autozs.png";
     }
   })();
+  const progressLogoUrl = (() => {
+    try {
+      return typeof chrome !== "undefined" && chrome.runtime?.getURL
+        ? chrome.runtime.getURL("assets/autozs-logo.png")
+        : "";
+    } catch {
+      return "";
+    }
+  })();
+  let autoProgressHost = null;
+  let autoProgressPercent = 0;
+  const ensureAutoProgressOverlay = () => {
+    if (autoProgressHost?.shadowRoot) return autoProgressHost;
+    const mount = document.documentElement || document.body;
+    if (!mount || typeof document.createElement !== "function") return null;
+    const progressHost = document.createElement("div");
+    progressHost.id = "autozs-source-import-progress-host";
+    progressHost.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:auto;";
+    if (typeof progressHost.attachShadow !== "function") return null;
+    const progressShadow = progressHost.attachShadow({ mode: "open" });
+    progressShadow.innerHTML = `
+      <style>
+        :host {
+          --az-bg: #111a15;
+          --az-line: #2b352f;
+          --az-ink: #edf4ef;
+          --az-muted: #9aa89f;
+          --az-accent: #4bb7a6;
+        }
+        .progress-overlay {
+          align-items: center;
+          background: rgba(10, 14, 12, .74);
+          backdrop-filter: blur(3px);
+          color: var(--az-ink);
+          display: flex;
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          inset: 0;
+          justify-content: center;
+          pointer-events: auto;
+          position: absolute;
+        }
+        .progress-card {
+          align-items: center;
+          background: var(--az-bg);
+          border: 1px solid var(--az-line);
+          border-radius: 8px;
+          box-shadow: 0 24px 70px rgba(0,0,0,.38);
+          display: grid;
+          gap: 14px;
+          justify-items: center;
+          padding: 28px;
+          width: min(410px, calc(100vw - 48px));
+        }
+        .logo { height: 52px; object-fit: contain; width: 52px; }
+        .progress-title { font-size: 28px; font-weight: 850; line-height: 1.1; text-align: center; }
+        .progress-label { color: var(--az-muted); font-size: 13px; line-height: 1.35; min-height: 18px; text-align: center; }
+        .progress-track { background: #263631; border-radius: 999px; height: 10px; overflow: hidden; width: 100%; }
+        .progress-fill { background: var(--az-accent); height: 100%; transition: width .22s ease; width: 0%; }
+        .progress-percent { color: var(--az-ink); font-size: 13px; font-weight: 800; }
+        .progress-note { color: var(--az-muted); font-size: 11px; text-align: center; }
+        :host([data-state="error"]) .progress-fill { background: #ff6b6b; }
+        :host([data-state="complete"]) .progress-fill { background: #56d88a; }
+      </style>
+      <div class="progress-overlay" role="status" aria-live="polite">
+        <div class="progress-card">
+          ${progressLogoUrl ? `<img class="logo" src="${progressLogoUrl}" alt="AutoZS" draggable="false" />` : ""}
+          <div class="progress-title">AutoZS is working</div>
+          <div id="progress-label" class="progress-label">Preparing automatic product import...</div>
+          <div class="progress-track" aria-hidden="true"><div id="progress-fill" class="progress-fill"></div></div>
+          <div id="progress-percent" class="progress-percent">0%</div>
+          <div class="progress-note">Keep this tab open until AutoZS finishes.</div>
+        </div>
+      </div>
+    `;
+    if (typeof mount.appendChild === "function") mount.appendChild(progressHost);
+    else if (typeof mount.append === "function") mount.append(progressHost);
+    else return null;
+    autoProgressHost = progressHost;
+    return autoProgressHost;
+  };
+  const setAutoProgress = (text, percent = autoProgressPercent, state = "working") => {
+    const progressHost = ensureAutoProgressOverlay();
+    if (!progressHost?.shadowRoot) return;
+    autoProgressPercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    progressHost.setAttribute?.("data-state", state);
+    const progressLabel = progressHost.shadowRoot.querySelector("#progress-label");
+    const progressFill = progressHost.shadowRoot.querySelector("#progress-fill");
+    const progressPercent = progressHost.shadowRoot.querySelector("#progress-percent");
+    if (progressLabel) progressLabel.textContent = text;
+    if (progressFill) progressFill.style.width = `${autoProgressPercent}%`;
+    if (progressPercent) progressPercent.textContent = `${autoProgressPercent}%`;
+  };
   shadow.innerHTML = `
     <style>
       :host { all: initial; }
@@ -191,12 +283,27 @@
     const readiness = payloadReadiness(payload);
     return readiness.title && readiness.price && readiness.images;
   };
-  const captureWhenReady = async () => {
+  const captureWhenReady = async (onProgress = () => {}) => {
     let latestPayload = null;
+    let latestError = null;
     for (let attempt = 1; attempt <= 12; attempt += 1) {
-      latestPayload = captureSourceProductFromPage();
-      if (isCaptureReady(latestPayload)) return latestPayload;
+      try {
+        latestPayload = captureSourceProductFromPage();
+        latestError = null;
+      } catch (error) {
+        latestError = error;
+        if (!/Home Depot showed an error page/i.test(error.message || String(error)) || attempt === 12) throw error;
+        onProgress(Math.min(44, 22 + attempt * 2), `Home Depot is still settling; checking again (${attempt}/12)...`);
+        setStatus(`Home Depot is still settling; checking again (${attempt}/12)...`);
+        await sleep(700);
+        continue;
+      }
+      if (isCaptureReady(latestPayload)) {
+        onProgress(48, "Product data captured.");
+        return latestPayload;
+      }
       const readiness = payloadReadiness(latestPayload);
+      onProgress(Math.min(44, 22 + attempt * 2), `Waiting for Home Depot product data (${attempt}/12)...`);
       setStatus(
         `Waiting for page data... title ${readiness.title ? "yes" : "no"}, price ${
           readiness.price ? "yes" : "no"
@@ -204,27 +311,47 @@
       );
       await sleep(700);
     }
+    if (latestError) throw latestError;
     return latestPayload || captureSourceProductFromPage();
   };
 
   const captureAndImport = async (mode = "manual") => {
     const refreshContext = typeof sourceRefreshContextFromLocation === "function" ? sourceRefreshContextFromLocation() : null;
+    const automatic = mode === "auto";
+    const closeCompletedRefreshTab = () => {
+      if (!automatic || !refreshContext) return;
+      setTimeout(() => {
+        chrome.runtime.sendMessage({
+          type: "autozs-close-source-refresh-tab",
+          jobId: refreshContext.jobId,
+        }).catch(() => {});
+      }, 1500);
+    };
+    const progress = (percent, text, state = "working") => {
+      if (automatic) setAutoProgress(text, percent, state);
+    };
     button.disabled = true;
     button.textContent = mode === "auto" ? "Importing..." : "Checking...";
     setStatus(mode === "auto" ? "Auto-import requested. Checking local app..." : "Checking local app...");
+    progress(6, refreshContext ? "Starting scheduled source-price import..." : "Starting automatic product import...");
     try {
       await checkLocalApi();
+      progress(16, "Connected to AutoZS.");
       button.textContent = "Importing...";
       setStatus("Capturing visible product data...");
-      const payload = await captureWhenReady();
+      progress(22, "Capturing visible product data...");
+      const payload = await captureWhenReady((percent, text) => progress(percent, text));
       if (payload.detected_shipping !== null && payload.detected_shipping !== undefined) payload.source_shipping = payload.detected_shipping;
       delete payload.detected_shipping;
       if (refreshContext) payload.refresh_job_id = refreshContext.jobId;
+      progress(58, refreshContext ? "Importing the latest source price into AutoZS..." : "Importing the product into AutoZS...");
       const product = await importCapturedProduct(payload);
+      progress(78, refreshContext ? "Source price saved." : "Product saved. Preparing images...");
       setStatus(refreshContext ? "Price refresh saved." : "Import saved. Downloading product images...");
       let imageStatus = "no image URLs found";
       if (!refreshContext && product.images && product.images.length) {
         try {
+          progress(84, "Downloading product images...");
           const imageResult = await downloadProductImages(product.id);
           imageStatus = readImageDownloadStatus(imageResult);
         } catch (imageError) {
@@ -240,33 +367,42 @@
       );
       button.textContent = "Imported";
       if (refreshContext) {
-        setStatus(`Refreshed ${product.sku}. Cooling down before the next product...`);
-        setTimeout(async () => {
-          try {
-            const nextJob = await claimNextSourceRefreshJob(refreshContext.batchKey);
-            if (nextJob?.runner_url) location.replace(nextJob.runner_url);
-            else {
-              let cleanupMessage = "Home Depot batch state cleaned.";
-              try {
-                const cleanup = await chrome.runtime.sendMessage({ type: "autozs-home-depot-batch-cleanup" });
-                if (!cleanup?.ok) cleanupMessage = "Batch cleanup will retry with the next worker run.";
-              } catch {
-                cleanupMessage = "Batch cleanup will retry with the next worker run.";
-              }
-              setStatus(`Refresh batch complete. Last product: ${product.sku}. ${cleanupMessage}`);
-            }
-          } catch (nextError) {
-            setStatus(`Refreshed ${product.sku}. Next product will resume on the worker poll.`);
-          }
-        }, 45 * 1000);
+        try {
+          await chrome.runtime.sendMessage({ type: "autozs-source-refresh-cooldown" });
+        } catch {}
+        setStatus(`Refreshed ${product.sku}. The background worker will continue after the Home Depot cooldown.`);
       }
+      progress(100, refreshContext ? "Source price imported. AutoZS will continue the schedule." : `Imported ${product.sku} into AutoZS.`, "complete");
+      closeCompletedRefreshTab();
     } catch (error) {
       setStatus(`Import failed: ${error.message}`);
       button.textContent = "Import failed";
+      progress(autoProgressPercent || 10, `Import needs attention: ${error.message || String(error)}`, "error");
       if (refreshContext) {
+        const isHomeDepotError = /Home Depot showed an error page/i.test(error.message || String(error));
+        const retryAlreadyAttempted = new URLSearchParams(location.search).get("autozs_error_retry") === "1";
+        if (isHomeDepotError && !retryAlreadyAttempted) {
+          try {
+            const cleanup = await chrome.runtime.sendMessage({ type: "autozs-home-depot-batch-cleanup" });
+            if (cleanup?.ok) {
+              const retryUrl = new URL(location.href);
+              retryUrl.searchParams.set("autozs_error_retry", "1");
+              setStatus(`Home Depot error detected. Cleared ${Number(cleanup.cleared || 0)} Home Depot cookie(s), cache, and site data; retrying once...`);
+              progress(12, "Home Depot was blocked. Site data cleared; retrying once...");
+              setTimeout(() => location.replace(retryUrl.href), 1200);
+              return;
+            }
+          } catch {}
+        }
         try {
-          await failSourceRefreshJob(refreshContext.jobId, error.message || String(error));
-          setStatus(`Refresh paused after an error. The worker will retry the queue after its cooldown.`);
+          const failedJob = await failSourceRefreshJob(refreshContext.jobId, error.message || String(error));
+          if (failedJob?.status === "cancelled") {
+            setStatus(failedJob.message || "This refresh was superseded by a newer successful capture.");
+            progress(100, "A newer source-price refresh already completed this product.", "complete");
+            closeCompletedRefreshTab();
+          } else {
+            setStatus(`Refresh paused after an error. The worker will retry the queue after its cooldown.`);
+          }
         } catch {}
       }
     } finally {
@@ -283,6 +419,7 @@
   if (autoImportRequested && !window.__ebayAutomationAutoImportStarted) {
     window.__ebayAutomationAutoImportStarted = true;
     setStatus("Auto-import will start after the page settles...");
+    setAutoProgress("Waiting for the scheduled product page to settle...", 2);
     setTimeout(() => captureAndImport("auto"), 1800);
   }
 

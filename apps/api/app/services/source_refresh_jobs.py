@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import re
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -12,6 +13,70 @@ from app.services.settings import read_pricing_settings
 
 LEASE_MINUTES = 10
 AUTO_REFRESH_LISTING_STATUSES = {"scheduled", "listed", "live", "active"}
+TRANSIENT_BROWSER_ERROR = re.compile(
+    r"failed to fetch|network\s*error|load failed|home depot showed an error page|please refresh page",
+    re.IGNORECASE,
+)
+MAX_TRANSIENT_ATTEMPTS = 3
+
+
+def reject_suspicious_source_refresh_price(
+    db: Session,
+    job_id: int,
+    captured_price: float | None,
+) -> str | None:
+    """Reject the known Home Depot $5 promotion false-positive before import."""
+    job = db.get(SourceRefreshJob, job_id)
+    if job is None or captured_price is None or job.baseline_price is None:
+        return None
+    captured = round(float(captured_price), 2)
+    baseline = round(float(job.baseline_price), 2)
+    if captured != 5.0 or baseline == 5.0:
+        return None
+    message = (
+        f"Rejected suspicious $5.00 source price; preserved the previous ${baseline:.2f} price. "
+        "The page likely exposed a promotional discount as a product price."
+    )
+    job.status = SourceRefreshJobStatus.failed.value
+    job.captured_price = None
+    job.price_changed = False
+    job.revision_queued = False
+    job.completed_at = datetime.utcnow()
+    job.lease_expires_at = None
+    job.message = message
+    db.commit()
+    db.refresh(job)
+    return message
+
+
+def cancel_superseded_source_refresh_jobs(db: Session) -> int:
+    queued = db.scalars(
+        select(SourceRefreshJob).where(SourceRefreshJob.status == SourceRefreshJobStatus.queued.value)
+    ).all()
+    cancelled = 0
+    for job in queued:
+        newer = db.scalar(
+            select(SourceRefreshJob)
+            .where(
+                SourceRefreshJob.product_id == job.product_id,
+                SourceRefreshJob.id > job.id,
+                SourceRefreshJob.status == SourceRefreshJobStatus.completed.value,
+            )
+            .order_by(SourceRefreshJob.id.desc())
+        )
+        if newer is None:
+            continue
+        job.status = SourceRefreshJobStatus.cancelled.value
+        job.captured_price = newer.captured_price
+        job.price_changed = newer.price_changed
+        job.revision_queued = newer.revision_queued
+        job.completed_at = datetime.utcnow()
+        job.lease_expires_at = None
+        job.message = f"Superseded by newer completed source refresh #{newer.id}"
+        cancelled += 1
+    if cancelled:
+        db.commit()
+    return cancelled
 
 
 def _runner_url(job: SourceRefreshJob, source_url: str) -> str:
@@ -164,6 +229,7 @@ def release_expired_source_refresh_jobs(db: Session, now: datetime | None = None
 
 def claim_next_source_refresh_job_any_batch(db: Session) -> SourceRefreshJob | None:
     release_expired_source_refresh_jobs(db)
+    cancel_superseded_source_refresh_jobs(db)
     queued = db.scalar(
         select(SourceRefreshJob)
         .where(
@@ -192,6 +258,7 @@ def source_refresh_has_running_job(db: Session) -> bool:
 def claim_next_source_refresh_job(db: Session, batch_key: str) -> SourceRefreshJob | None:
     now = datetime.utcnow()
     release_expired_source_refresh_jobs(db, now=now)
+    cancel_superseded_source_refresh_jobs(db)
 
     job = db.scalar(
         select(SourceRefreshJob)
@@ -231,12 +298,19 @@ def complete_source_refresh_job(db: Session, job_id: int, product_id: int) -> So
     job.lease_expires_at = None
     job.message = "Price changed" if job.price_changed else "Price confirmed"
     db.commit()
+    # A capture can correct shipping while leaving the item price unchanged.
+    # Always recalculate and reconcile revisions so a stale proposal created by
+    # bad shipping data is cancelled as soon as the corrected capture arrives.
+    recalculate_all_draft_prices(db, product_ids=[product_id])
+    queued, updated = enqueue_ebay_price_revisions(db, product_ids=[product_id])
+    job.revision_queued = bool(queued or updated)
     if job.price_changed:
-        recalculate_all_draft_prices(db, product_ids=[product_id])
-        queued, updated = enqueue_ebay_price_revisions(db, product_ids=[product_id])
-        job.revision_queued = bool(queued or updated)
         job.message = f"Price changed; {queued + updated} eBay revision job(s) queued"
-        db.commit()
+    elif queued or updated:
+        job.message = f"Price confirmed; {queued + updated} eBay revision job(s) reconciled"
+    else:
+        job.message = "Price and shipping confirmed; eBay revision state reconciled"
+    db.commit()
     db.refresh(job)
     return job
 
@@ -245,10 +319,46 @@ def fail_source_refresh_job(db: Session, job_id: int, message: str) -> SourceRef
     job = db.get(SourceRefreshJob, job_id)
     if job is None:
         return None
+    # A source tab can finish its capture, then report a stale page error while
+    # it is closing. Never let that late callback undo an accepted price.
+    if job.status == SourceRefreshJobStatus.completed.value:
+        return job
+    newer = db.scalar(
+        select(SourceRefreshJob)
+        .where(
+            SourceRefreshJob.product_id == job.product_id,
+            SourceRefreshJob.id > job.id,
+            SourceRefreshJob.status == SourceRefreshJobStatus.completed.value,
+        )
+        .order_by(SourceRefreshJob.id.desc())
+    )
+    if newer is not None:
+        job.status = SourceRefreshJobStatus.cancelled.value
+        job.captured_price = newer.captured_price
+        job.price_changed = newer.price_changed
+        job.revision_queued = newer.revision_queued
+        job.completed_at = datetime.utcnow()
+        job.lease_expires_at = None
+        job.message = f"Superseded by newer completed source refresh #{newer.id}"
+        db.commit()
+        db.refresh(job)
+        return job
+    clean_message = str(message or "Browser capture failed")[:1000]
+    if job.attempts < MAX_TRANSIENT_ATTEMPTS and TRANSIENT_BROWSER_ERROR.search(clean_message):
+        home_depot_block = bool(re.search(r"home depot showed an error page|please refresh page", clean_message, re.IGNORECASE))
+        delay_seconds = (300 * max(1, job.attempts)) if home_depot_block else (60 * max(1, job.attempts))
+        job.status = SourceRefreshJobStatus.queued.value
+        job.scheduled_for = datetime.utcnow() + timedelta(seconds=delay_seconds)
+        job.completed_at = None
+        job.lease_expires_at = None
+        job.message = f"Transient browser error; automatic retry in {delay_seconds // 60} minute(s): {clean_message}"[:1000]
+        db.commit()
+        db.refresh(job)
+        return job
     job.status = SourceRefreshJobStatus.failed.value
     job.completed_at = datetime.utcnow()
     job.lease_expires_at = None
-    job.message = message[:1000]
+    job.message = clean_message
     db.commit()
     db.refresh(job)
     return job

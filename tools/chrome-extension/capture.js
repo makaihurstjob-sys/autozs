@@ -1,6 +1,6 @@
 var API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-56u49jf.tailb2892a.ts.net:8443";
-var CAPTURE_BUILD = "2026-07-11-batch-cleanup";
+var CAPTURE_BUILD = "2026-07-18-home-depot-price-corroboration";
 var AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
 
 function defaultAutozsWorkerMode() {
@@ -82,30 +82,35 @@ async function claimNextSourceRefreshJob(batchKey) {
 function detectEbaySignedInUsernameFromPage() {
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const usernamePattern = /^[A-Za-z0-9._-]{2,64}$/;
+  const ignoredUsernameCandidates = new Set(["account", "kg", "lb", "lbs", "oz", "stand", "user"]);
   const usernameLike = (value) => /[._-]|\d/.test(value || "");
   const cleanUsername = (value) => {
     const text = clean(value)
       .replace(/\([^)]*\)/g, " ")
       .replace(/[!,:;]+$/g, "")
       .trim();
-    return usernamePattern.test(text) ? text : "";
+    return usernamePattern.test(text) && !ignoredUsernameCandidates.has(text.toLowerCase()) ? text : "";
   };
-  const usernameFromText = (value) => {
+  const usernameFromText = (value, allowPlain = false) => {
     const text = clean(value);
     if (!text || /sign in|register|guest|help|cart|watchlist|my ebay/i.test(text)) return "";
     const profileMatch = text.match(/\b([A-Za-z0-9._-]{2,64})\s*\([^)]*(?:feedback|\d)/i);
     if (profileMatch) return cleanUsername(profileMatch[1]);
-    const userLine = text.split(/\s*[|\n]\s*/).map(cleanUsername).find(Boolean);
+    const userLine = text
+      .split(/\s*[|\n]\s*/)
+      .map(cleanUsername)
+      .find((candidate) => candidate && (allowPlain || usernameLike(candidate)));
     if (userLine) return userLine;
     const hiMatch = text.match(/\bHi[, ]+([A-Za-z0-9._-]{2,64})\b/i);
     if (hiMatch && usernameLike(hiMatch[1])) return cleanUsername(hiMatch[1]);
     const signedInMatch = text.match(/\b(?:signed in as|account|username|user id)[: ]+([A-Za-z0-9._-]{2,64})\b/i);
     if (signedInMatch) return cleanUsername(signedInMatch[1]);
-    return cleanUsername(text);
+    const fallback = cleanUsername(text);
+    return fallback && (allowPlain || usernameLike(fallback)) ? fallback : "";
   };
   const candidates = [];
-  const addCandidate = (value, priority) => {
-    const username = usernameFromText(value);
+  const addCandidate = (value, priority, allowPlain = false) => {
+    const username = usernameFromText(value, allowPlain);
     if (!username) return;
     candidates.push({ username, priority: priority + (usernameLike(username) ? 10 : 0) });
   };
@@ -123,12 +128,14 @@ function detectEbaySignedInUsernameFromPage() {
   ];
   document.querySelectorAll(selectors.join(",")).forEach((element) => {
     const href = element.getAttribute("href") || "";
+    const elementId = element.getAttribute("id") || element.id || "";
     const profileMatch = href.match(/(?:\/usr\/|feedback_profile\/)([A-Za-z0-9._-]{2,64})/i);
-    if (profileMatch) addCandidate(profileMatch[1], 100);
+    if (profileMatch) addCandidate(profileMatch[1], 100, true);
     const hasProfileHref = /\/usr\/|feedback_profile/i.test(href);
-    addCandidate(element.getAttribute("aria-label"), hasProfileHref ? 90 : 45);
-    addCandidate(element.getAttribute("title"), hasProfileHref ? 90 : 45);
-    addCandidate(element.textContent, hasProfileHref ? 90 : 45);
+    const trustedAccountChrome = hasProfileHref || ["gh-ug", "gh-eb-uid"].includes(elementId);
+    addCandidate(element.getAttribute("aria-label"), hasProfileHref ? 90 : 45, trustedAccountChrome);
+    addCandidate(element.getAttribute("title"), hasProfileHref ? 90 : 45, trustedAccountChrome);
+    addCandidate(element.textContent, hasProfileHref ? 90 : 45, trustedAccountChrome);
   });
   const bodyRaw = String(document.body?.innerText || "");
   const bodyText = clean(bodyRaw);
@@ -203,6 +210,7 @@ function startEbayBrowserAccountReporter() {
 function detectEbayDraftPresence() {
   const params = autozsParamsFromLocation();
   const draftId = params.get("draftId") || params.get("draft_id") || "";
+  const reconcileRequested = params.get("autozs_reconcile_listing") === "1";
   const text = String(document.body?.innerText || "").replace(/\s+/g, " ").trim();
   const normalized = text.toLowerCase();
   const missing =
@@ -211,6 +219,9 @@ function detectEbayDraftPresence() {
     /complete your listing|photos|title|item specifics|pricing|delivery|shipping|save for later|list it/i.test(text) &&
     (/\/lstng/i.test(location.pathname || "") || Boolean(draftId));
   if (missing) return { exists: false, draftId, message: "eBay reported this draft or listing could not be found." };
+  if (present && reconcileRequested) {
+    return { exists: true, draftId, message: `Opened and reconciled eBay draft ${draftId || "unknown"}.` };
+  }
   if (present) return { exists: null, draftId, message: "eBay opened a listing editor, but Seller Hub Drafts must confirm the saved draft still exists." };
   if (normalized.includes("sign in")) return { exists: null, draftId, message: "eBay sign-in is required before draft verification." };
   return { exists: null, draftId, message: "Waiting for eBay draft verification page." };
@@ -318,7 +329,10 @@ async function reportEbayDraftListPresence() {
 async function reportEbayDraftPresence() {
   const params = autozsParamsFromLocation();
   const jobId = params.get("autozs_job_id");
-  if (!jobId || params.get("autozs_verify_draft") !== "1") return null;
+  if (
+    !jobId ||
+    (params.get("autozs_verify_draft") !== "1" && params.get("autozs_reconcile_listing") !== "1")
+  ) return null;
   const presence = detectEbayDraftPresence();
   if (presence.exists === null) return presence;
   const response = await fetch(`${API}/listing-jobs/${encodeURIComponent(jobId)}/verify-draft`, {
@@ -338,7 +352,9 @@ async function reportEbayDraftPresence() {
 function startEbayDraftPresenceReporter() {
   if (!isEbayPage() || window.__autozsEbayDraftPresenceReporterStarted) return;
   const params = autozsParamsFromLocation();
-  const singleDraftCheck = params.get("autozs_verify_draft") === "1" && params.get("autozs_job_id");
+  const singleDraftCheck =
+    (params.get("autozs_verify_draft") === "1" || params.get("autozs_reconcile_listing") === "1") &&
+    params.get("autozs_job_id");
   const draftListCheck = params.get("autozs_verify_drafts") === "1" && draftChecksFromLocation().length;
   if (!singleDraftCheck && !draftListCheck) return;
   window.__autozsEbayDraftPresenceReporterStarted = true;
@@ -359,7 +375,7 @@ function captureSourceProductFromPage() {
   const cleanSourceUrl = () => {
     try {
       const url = new URL(location.href);
-      ["ea_auto_import", "auto_download_test", "autozs_refresh_job", "autozs_refresh_batch"].forEach((param) =>
+      ["ea_auto_import", "auto_download_test", "autozs_refresh_job", "autozs_refresh_batch", "autozs_error_retry"].forEach((param) =>
         url.searchParams.delete(param)
       );
       return url.href;
@@ -368,9 +384,12 @@ function captureSourceProductFromPage() {
     }
   };
   const visibleText = document.body.innerText || "";
+  const homeDepotOops = /oops!!?\s+something\s+went\s+wrong/i.test(visibleText);
+  const homeDepotRecoveryPrompt = /please\s+refresh\s+page|need\s+help\?\s+visit\s+our\s+customer\s+service\s+center/i.test(visibleText);
   if (
     location.hostname.includes("homedepot.com") &&
-    /oops!!?\s+something\s+went\s+wrong|please\s+refresh\s+page|need\s+help\?\s+visit\s+our\s+customer\s+service\s+center/i.test(visibleText)
+    homeDepotOops &&
+    homeDepotRecoveryPrompt
   ) {
     throw new Error("Home Depot showed an error page; refresh this source page and try again.");
   }
@@ -559,6 +578,25 @@ function captureSourceProductFromPage() {
     const contextAround = (index, radius = 3) => lines.slice(Math.max(0, index - radius), index + radius + 1).join(" ");
     const isSubscriptionContext = (text) => subscriptionPattern.test(text);
     const freeShippingRegex = /free\s+(standard\s+)?(shipping|delivery)|(?:shipping|delivery)\s+(is\s+)?free|ship(?:s|ping)?\s+free/i;
+    const shippingThresholdRegex = /\$\s*[0-9]{1,4}(?:\.[0-9]{2})?\s*\+\s*(?:of\s+)?(?:eligible\s+)?(?:items?|orders?|purchase)|(?:items?|orders?|purchase)\s+(?:over|above|of\s+at\s+least)\s+\$\s*[0-9]{1,4}(?:\.[0-9]{2})?|(?:minimum\s+(?:purchase|order)|spend)\s+(?:of\s+)?\$\s*[0-9]{1,4}(?:\.[0-9]{2})?/i;
+    const isShippingThresholdContext = (text) => shippingThresholdRegex.test(text);
+
+    // Home Depot's normal fulfillment option is exposed as a stable deliveryTile.
+    // Prefer it over optional expedited offers such as "$2.99 today" and never
+    // treat order thresholds such as "$25+ of eligible items" as shipping fees.
+    const standardDeliveryText = clean(
+      document.querySelector('[data-testid="deliveryTile"]')?.innerText ||
+      document.querySelector('[aria-label="deliveryTile"]')?.innerText ||
+      ""
+    );
+    if (/\bfree\b/i.test(standardDeliveryText) && /\b(?:delivery|shipping)\b/i.test(standardDeliveryText) && !isShippingThresholdContext(standardDeliveryText)) return 0;
+
+    const explicitFreeStandardDelivery = lines.some((line, index) => {
+      if (!/^(?:standard\s+)?(?:delivery|shipping)$/i.test(line)) return false;
+      const context = lines.slice(index, index + 5).join(" ");
+      return /\bfree\b/i.test(context) && !isShippingThresholdContext(context);
+    });
+    if (explicitFreeStandardDelivery) return 0;
 
     const blocks = [];
     lines.forEach((line, index) => {
@@ -572,17 +610,23 @@ function captureSourceProductFromPage() {
       .slice(0, 40);
 
     for (const line of relevant) {
+      if (isShippingThresholdContext(line)) continue;
       const parsed = parsePrice(line);
       if (parsed !== null && !isSubscriptionPrice(parsed)) return parsed;
     }
 
     const pagePaidMatch = visibleText.match(/(?:delivery|shipping)[\s\S]{0,90}\$\s*[0-9]{1,4}(?:,[0-9]{3})*(?:\.[0-9]{2})?/i);
     const pagePaid = pagePaidMatch ? parsePrice(pagePaidMatch[0]) : null;
-    if (pagePaid !== null && !isSubscriptionContext(pagePaidMatch[0]) && !isSubscriptionPrice(pagePaid)) return pagePaid;
+    if (
+      pagePaid !== null &&
+      !isSubscriptionContext(pagePaidMatch[0]) &&
+      !isShippingThresholdContext(pagePaidMatch[0]) &&
+      !isSubscriptionPrice(pagePaid)
+    ) return pagePaid;
 
-    const freeRelevant = relevant.some((line) => freeShippingRegex.test(line)) || lines.some((line, index) => {
+    const freeRelevant = relevant.some((line) => freeShippingRegex.test(line) && !isShippingThresholdContext(line)) || lines.some((line, index) => {
       const context = contextAround(index, 2);
-      return freeShippingRegex.test(context) && !isSubscriptionContext(context);
+      return freeShippingRegex.test(context) && !isSubscriptionContext(context) && !isShippingThresholdContext(context);
     });
     return freeRelevant ? 0 : null;
   };
@@ -646,6 +690,14 @@ function captureSourceProductFromPage() {
     "";
 
   const homeDepotSalePrice = detectHomeDepotSalePrice();
+  const standardPriceText = clean(document.querySelector("#standard-price")?.innerText || "");
+  const standardPrice = parsePrice(standardPriceText);
+  const salePriceCorroborated = homeDepotSalePrice !== null && [...visiblePrices, ...domPrices, ...structuredPrices]
+    .some((candidate) => Math.abs(candidate - homeDepotSalePrice) < 0.01);
+  // Home Depot's global savings/promotional copy can place "Get $5 off"
+  // close to a sale banner. The sale scanner must never outrank the actual
+  // product price unless another product-price source corroborates it.
+  const trustedHomeDepotSalePrice = salePriceCorroborated ? homeDepotSalePrice : null;
   const withCentsForSameWhole = (price) => {
     if (price === null || price === undefined || Math.abs(price - Math.round(price)) > 0.001) return price;
     const decimalMatch = [...visiblePrices, ...domPrices, ...structuredPrices].find(
@@ -654,9 +706,8 @@ function captureSourceProductFromPage() {
     return decimalMatch || price;
   };
   const sourcePrice = location.hostname.includes("homedepot.com")
-    ? withCentsForSameWhole(homeDepotSalePrice) || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
-    : homeDepotSalePrice || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null;
-  const standardPriceText = clean(document.querySelector("#standard-price")?.innerText || "");
+    ? withCentsForSameWhole(trustedHomeDepotSalePrice) || standardPrice || visiblePrices[0] || domPrices[0] || structuredPrices[0] || null
+    : trustedHomeDepotSalePrice || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null;
 
   return {
     source_url: cleanSourceUrl(),
@@ -672,6 +723,8 @@ function captureSourceProductFromPage() {
       visible_prices: visiblePrices.slice(0, 6),
       dom_prices: domPrices.slice(0, 6),
       structured_prices: structuredPrices.slice(0, 6),
+      detected_sale_price: homeDepotSalePrice,
+      sale_price_corroborated: salePriceCorroborated,
       selected_price: sourcePrice,
     },
   };

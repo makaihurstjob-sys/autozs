@@ -2,7 +2,7 @@
   const STYLE_ID = "autozs-ebay-dark-mode-style";
   const ROOT_CLASS = "autozs-ebay-dark-mode";
   const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
-  const DARK_MODE_BUILD = "2026-07-03-seller-hub-uploads";
+  const DARK_MODE_BUILD = "2026-07-18-prelist-category-contrast";
   const existingStyle = document.getElementById(STYLE_ID);
   const existingBuild = existingStyle?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayDarkModeStarted && existingBuild === DARK_MODE_BUILD) return;
@@ -368,6 +368,197 @@
     html.${ROOT_CLASS} .srp-refine__item,
     html.${ROOT_CLASS} .srp-refine__item * {
       color: #8ed8cc !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .textbox,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .textbox__control,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox-button__control,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .se-rte__button-group,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary-container,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary-container-main,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary__legal-faq,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .aggregate-metric,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .metric-title {
+      background: #171d1a !important;
+      background-color: #171d1a !important;
+      border-color: #3a4840 !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox-button__control,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox-button__control .btn__cell,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox-button__control .btn__text,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .service-details__add-services,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .service-details__add-services *,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .se-rte__button-group .icon-btn,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .se-rte__button-group .icon-btn * {
+      background-color: #25312b !important;
+      border-color: #3a4840 !important;
+      color: #edf4ef !important;
+      fill: currentColor !important;
+      opacity: 1 !important;
+      stroke: currentColor !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox-button__control:hover,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .service-details__add-services:hover,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .se-rte__button-group .icon-btn:not([disabled]):hover {
+      background-color: #304139 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor button[disabled],
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor button[disabled] * {
+      color: #c2cec7 !important;
+      opacity: .72 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary__attributes--label,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary__attributes--label *,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary-container *,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary__legal-faq,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary__legal-faq * {
+      color: #edf4ef !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary-container a,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary-container button.fake-link,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .summary__legal-faq a {
+      color: #8ed8cc !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .se-textbox--counter,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .se-textarea--counter,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [class*="helper" i],
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [class*="subtitle" i] {
+      color: #b8c5bd !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .uploader-thumbnails-ux__image,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .uploader-thumbnails-ux__image * {
+      color: #17201b !important;
+      fill: currentColor !important;
+      stroke: currentColor !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .uploader-thumbnails-ux__image:not([id]),
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .uploader-thumbnails-ux__image:not([id]) .uploader-thumbnails-ux-image-guidance,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .uploader-thumbnails-ux__image:not([id]) * {
+      background: #1b2420 !important;
+      background-color: #1b2420 !important;
+      border-color: #3a4840 !important;
+      color: #dce7e0 !important;
+      fill: currentColor !important;
+      stroke: currentColor !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox__options,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="listbox"],
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="menu"] {
+      background: #171d1a !important;
+      background-color: #171d1a !important;
+      border-color: #3a4840 !important;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, .48) !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox__option,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox__value,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="option"],
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="option"] *,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="menuitemradio"],
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="menuitemradio"] * {
+      background-color: transparent !important;
+      color: #edf4ef !important;
+      fill: currentColor !important;
+      opacity: 1 !important;
+      stroke: currentColor !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox__option:hover,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .listbox__option--active,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="option"]:hover,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="option"][aria-selected="true"],
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="menuitemradio"]:hover,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor [role="menuitemradio"][aria-checked="true"] {
+      background-color: #25352e !important;
+      color: #ffffff !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .dp-container,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .date-picker {
+      background: #171d1a !important;
+      background-color: #171d1a !important;
+      border-color: #3a4840 !important;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, .48) !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .date-picker button:not([disabled]) {
+      color: #9be1d5 !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .date-picker button[disabled] {
+      color: #829087 !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .date-picker .day.today button {
+      outline: 1px solid #6bc9ba !important;
+      outline-offset: -2px !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .date-picker .day.selected,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .date-picker .day.selected button {
+      background: #0064d2 !important;
+      background-color: #0064d2 !important;
+      color: #ffffff !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .btn--primary,
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .btn--primary * {
+      background-color: #0064d2 !important;
+      border-color: #0064d2 !important;
+      color: #ffffff !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-listing-editor .gh-a11y-skip-button__link {
+      background: #171d1a !important;
+      border-color: #6bc9ba !important;
+      color: #9be1d5 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-prelist body,
+    html.${ROOT_CLASS}.autozs-ebay-prelist main,
+    html.${ROOT_CLASS}.autozs-ebay-prelist #mainContent,
+    html.${ROOT_CLASS}.autozs-ebay-prelist footer,
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="contentinfo"],
+    html.${ROOT_CLASS}.autozs-ebay-prelist [class*="footer" i] {
+      background: #101412 !important;
+      background-color: #101412 !important;
+      border-color: #2b352f !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-prelist footer *,
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="contentinfo"] *,
+    html.${ROOT_CLASS}.autozs-ebay-prelist [class*="footer" i] * {
+      border-color: #3a4840 !important;
+      color: #b8c5bd !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-prelist footer a,
+    html.${ROOT_CLASS}.autozs-ebay-prelist footer a *,
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="contentinfo"] a,
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="contentinfo"] a *,
+    html.${ROOT_CLASS}.autozs-ebay-prelist button.fake-link,
+    html.${ROOT_CLASS}.autozs-ebay-prelist button[aria-label*="category" i] {
+      color: #8ed8cc !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-prelist button[disabled],
+    html.${ROOT_CLASS}.autozs-ebay-prelist button[aria-disabled="true"],
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="button"][aria-disabled="true"] {
+      background: #1d2521 !important;
+      background-color: #1d2521 !important;
+      border-color: #48574f !important;
+      color: #aebbb4 !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-prelist button[disabled] *,
+    html.${ROOT_CLASS}.autozs-ebay-prelist button[aria-disabled="true"] *,
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="button"][aria-disabled="true"] * {
+      color: #aebbb4 !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="dialog"],
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="listbox"],
+    html.${ROOT_CLASS}.autozs-ebay-prelist [role="menu"] {
+      background: #171d1a !important;
+      background-color: #171d1a !important;
+      border-color: #3a4840 !important;
+      color: #edf4ef !important;
     }
     html.${ROOT_CLASS}.autozs-ebay-seller-hub body,
     html.${ROOT_CLASS}.autozs-ebay-seller-hub main,
@@ -759,6 +950,11 @@
     injectStyle();
     document.documentElement.classList.toggle(ROOT_CLASS, Boolean(enabled));
     document.documentElement.classList.toggle("autozs-ebay-item-page", /^\/itm\//i.test(location.pathname || ""));
+    document.documentElement.classList.toggle(
+      "autozs-ebay-listing-editor",
+      /^\/(?:lstng|sl\/(?:list|prelist))(?:\/|$)/i.test(location.pathname || ""),
+    );
+    document.documentElement.classList.toggle("autozs-ebay-prelist", /^\/sl\/prelist(?:\/|$)/i.test(location.pathname || ""));
     document.documentElement.classList.toggle("autozs-ebay-seller-hub", /^\/sh\//i.test(location.pathname || ""));
     document.documentElement.classList.toggle(
       "autozs-ebay-reports-uploads",

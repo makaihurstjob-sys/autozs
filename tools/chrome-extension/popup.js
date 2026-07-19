@@ -15,7 +15,10 @@ function formatCaptureDebug(debug) {
   const dom = Array.isArray(debug.dom_prices) ? debug.dom_prices.join(", ") || "-" : "-";
   const structured = Array.isArray(debug.structured_prices) ? debug.structured_prices.join(", ") || "-" : "-";
   const selected = debug.selected_price === null || debug.selected_price === undefined ? "-" : debug.selected_price;
-  return `\nBuild: ${typeof CAPTURE_BUILD === "string" ? CAPTURE_BUILD : "unknown"}\nPrice debug: selected ${selected}; ${standard}; visible ${visible}; dom ${dom}; structured ${structured}`;
+  const sale = debug.detected_sale_price === null || debug.detected_sale_price === undefined
+    ? "sale -"
+    : `sale ${debug.detected_sale_price}${debug.sale_price_corroborated ? " confirmed" : " rejected"}`;
+  return `\nBuild: ${typeof CAPTURE_BUILD === "string" ? CAPTURE_BUILD : "unknown"}\nPrice debug: selected ${selected}; ${sale}; ${standard}; visible ${visible}; dom ${dom}; structured ${structured}`;
 }
 
 function setConnectionState(state) {

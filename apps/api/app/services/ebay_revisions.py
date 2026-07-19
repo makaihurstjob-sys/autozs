@@ -11,6 +11,8 @@ from app.models.domain import (
     ListingDraft,
     Product,
     ProductStatus,
+    SourceRefreshJob,
+    SourceRefreshJobStatus,
     SupplierProduct,
 )
 from app.services.ebay_browser_account import assert_ebay_browser_account_can_list
@@ -415,6 +417,11 @@ def release_expired_ebay_revision_jobs(db: Session, now: datetime | None = None)
 def serialize_ebay_revision_job(db: Session, job: EbayRevisionJob) -> dict:
     listing = db.get(EbayListing, job.ebay_listing_id)
     product = db.get(Product, job.product_id)
+    supplier = db.scalar(
+        select(SupplierProduct)
+        .where(SupplierProduct.product_id == job.product_id)
+        .order_by(SupplierProduct.created_at.asc(), SupplierProduct.id.asc())
+    )
     listing_id = listing.listing_id if listing is not None else ""
     return {
         "id": job.id,
@@ -427,8 +434,10 @@ def serialize_ebay_revision_job(db: Session, job: EbayRevisionJob) -> dict:
         "status": job.status,
         "old_price": job.old_price,
         "target_price": job.target_price,
+        "old_source_price": _revision_old_source_price(db, job),
         "source_price": job.source_price,
         "source_shipping": job.source_shipping,
+        "source_url": supplier.source_url if supplier is not None else None,
         "projected_profit": job.projected_profit,
         "minimum_profit": job.minimum_profit,
         "guard_passed": job.guard_passed,
@@ -444,6 +453,34 @@ def serialize_ebay_revision_job(db: Session, job: EbayRevisionJob) -> dict:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+
+
+def _revision_old_source_price(db: Session, job: EbayRevisionJob) -> float | None:
+    """Return the source price that immediately preceded this revision's evidence.
+
+    Source refresh jobs retain the authoritative baseline/captured pair. Revision
+    jobs historically stored only the captured price, so use the latest matching
+    changed refresh to provide a real before value for existing and future cards.
+    Revisions created by a pricing-only recalculation have no source-price change;
+    in that case the before and after values are intentionally identical.
+    """
+    if job.source_price is None:
+        return None
+    refresh = db.scalar(
+        select(SourceRefreshJob)
+        .where(
+            SourceRefreshJob.product_id == job.product_id,
+            SourceRefreshJob.status == SourceRefreshJobStatus.completed.value,
+            SourceRefreshJob.price_changed.is_(True),
+            SourceRefreshJob.captured_price == job.source_price,
+            SourceRefreshJob.completed_at.is_not(None),
+            SourceRefreshJob.completed_at <= job.updated_at,
+        )
+        .order_by(SourceRefreshJob.completed_at.desc(), SourceRefreshJob.id.desc())
+    )
+    if refresh is not None and refresh.baseline_price is not None:
+        return refresh.baseline_price
+    return job.source_price
 
 
 def _assistant_url(job: EbayRevisionJob, listing_id: str) -> str:

@@ -1,5 +1,5 @@
 (async () => {
-  const ASSISTANT_BUILD = "2026-07-02-guarded-revision-runner";
+  const ASSISTANT_BUILD = "2026-07-18-stable-schedule-calendar";
   const existingAssistant = document.getElementById("autozs-ebay-fill-assistant");
   const existingBuild = existingAssistant?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayFillAssistant && existingBuild === ASSISTANT_BUILD) return;
@@ -40,15 +40,14 @@
       listingScheduleAt: requestedListingScheduleAt,
       status: preservedRevisionPhase === "completed" ? "completed" : "running",
       phase: preservedRevisionPhase,
+      draftId: requestedWorkflow === "create_draft" ? (params.get("draftId") || "") : (existingWorkflow?.draftId || ""),
+      listingId: requestedWorkflow === "create_draft" ? "" : (existingWorkflow?.listingId || ""),
     });
   }
   const activeWorkflow = readAutoWorkflowState();
   const workflowRunning = activeWorkflow && !["completed", "failed"].includes(activeWorkflow.status);
   const savedProductId = readSavedProductId();
   const savedJobId = readSavedJobId();
-  const listingEditor = isEbayListingEditorPage();
-  const prelistPage = isEbayPrelistPage();
-  const assistantPage = listingEditor || prelistPage;
   const waitForBody = () =>
     new Promise((resolve) => {
       if (document.body) return resolve();
@@ -59,13 +58,20 @@
         }
       }, 100);
     });
+  await waitForBody();
+  const listingEditor = isEbayListingEditorPage();
+  const prelistPage = isEbayPrelistPage();
+  const assistantPage = listingEditor || prelistPage;
   if (requestedProductId) writeSavedProductId(requestedProductId);
   if (requestedJobId) writeSavedJobId(requestedJobId);
   else if (requestedProductId) clearSavedJobId();
   if (!assistantPage) {
-    await waitForBody();
     if (typeof reportEbayBrowserAccount === "function") reportEbayBrowserAccount("manual").catch(() => {});
-    if (activeWorkflow?.mode === "create_draft" && activeWorkflow?.phase === "submitting") {
+    if (
+      Boolean(detectEbayPublishConfirmation()) ||
+      (activeWorkflow?.mode === "create_draft" && activeWorkflow?.phase === "submitting") ||
+      params.get("autozs_reconcile_listing") === "1"
+    ) {
       startEbayPublishSuccessReporter();
       reportEbayPublishConfirmation().catch(() => {});
     }
@@ -74,7 +80,6 @@
   window.__autozsEbayFillAssistant = true;
   const initialProductId = escapeHtmlAttribute(requestedProductId || activeWorkflow?.productId || savedProductId || "");
 
-  await waitForBody();
   if (requestedWorkflow === "revise_price" || activeWorkflow?.mode === "revise_price") {
     startEbayRevisionSuccessReporter();
   } else {
@@ -310,7 +315,7 @@
     <div id="progress-overlay" class="progress-overlay" role="status" aria-live="polite">
       <div class="progress-card">
         ${logoUrl ? `<img class="logo" src="${logoUrl}" alt="AutoZS" draggable="false" />` : ""}
-        <div class="progress-title">Auto-ZS in progress</div>
+        <div class="progress-title">AutoZS in progress</div>
         <div id="progress-label" class="progress-label">Preparing listing...</div>
         <div class="progress-track" aria-hidden="true"><div id="progress-fill" class="progress-fill"></div></div>
         <div id="progress-percent" class="progress-percent">0%</div>
@@ -564,7 +569,9 @@ function readAutozsParams() {
 }
 
 function isEbayListingEditorPage() {
-  return /(^|\.)ebay\.com$/i.test(location.hostname) && /^\/(?:lstng|sl\/list)\b/i.test(location.pathname);
+  return /(^|\.)ebay\.com$/i.test(location.hostname)
+    && /^\/(?:lstng|sl\/list)\b/i.test(location.pathname)
+    && !detectEbayPublishConfirmation();
 }
 
 function isEbayPrelistPage() {
@@ -620,7 +627,7 @@ function clearAutoWorkflowState() {
 function detectEbayPublishConfirmation() {
   const text = String(document.body?.innerText || "").replace(/\s+/g, " ").trim();
   const scheduled = /your listing has been scheduled|listing has been scheduled/i.test(text);
-  const listed = scheduled || /your listing is (?:live|active)|listing (?:is live|was listed|has been listed)|listed successfully/i.test(text);
+  const listed = scheduled || /your listing is (?:now )?(?:live|active)|listing (?:is live|was listed|has been listed)|listed successfully/i.test(text);
   if (!listed) return null;
   const itemLink = [...document.querySelectorAll('a[href*="/itm/"]')].find((link) => /\/itm\/\d+/i.test(link.href || ""));
   const itemId =
@@ -637,13 +644,44 @@ function detectEbayPublishConfirmation() {
 }
 
 async function reportEbayPublishConfirmation() {
-  const confirmation = detectEbayPublishConfirmation();
-  if (!confirmation) return null;
+  const detectedConfirmation = detectEbayPublishConfirmation();
+  if (!detectedConfirmation) return null;
+  finishEbayAssistantForConfirmation();
+  const params = readAutozsParams();
   const workflow = readAutoWorkflowState() || {};
-  const productId = workflow.productId || readSavedProductId();
-  if (!productId) return confirmation;
-  if (workflow.listingId === confirmation.listingId && workflow.phase === "completed") return confirmation;
-  const accountKey = workflow.accountKey || currentWorkflowAccountKey();
+  const reconcileRequested = params.get("autozs_reconcile_listing") === "1";
+  const explicitJobContext = Boolean(params.get("autozs_product_id") && params.get("autozs_job_id"));
+  const expectedConfirmation = ["submitting", "confirmation_pending"].includes(workflow.phase);
+  const productId = params.get("autozs_product_id") || workflow.productId || readSavedProductId();
+  if (!productId) return detectedConfirmation;
+  const jobId = params.get("autozs_job_id") || workflow.jobId || readSavedJobId();
+  const draftId = workflow.draftId || readDraftIdFromUrl() || "";
+  let trackedJob = null;
+  let recoveredFromDraftId = false;
+  if (!reconcileRequested && !explicitJobContext && !expectedConfirmation) {
+    if (!jobId || !draftId) return detectedConfirmation;
+    trackedJob = await loadTrackedListingJob(jobId);
+    const ownsDraft = trackedJob
+      && String(trackedJob.product_id || "") === String(productId)
+      && String(trackedJob.ebay_draft_id || "") === String(draftId)
+      && Boolean(draftId);
+    if (!ownsDraft) return detectedConfirmation;
+    recoveredFromDraftId = true;
+  }
+  let plannedScheduleAt = params.get("autozs_listing_schedule_at") || workflow.listingScheduleAt || trackedJob?.listing_schedule_at || "";
+  if (!plannedScheduleAt && jobId) {
+    trackedJob = trackedJob || await loadTrackedListingJob(jobId);
+    if (trackedJob && String(trackedJob.product_id || "") === String(productId)) {
+      plannedScheduleAt = trackedJob.listing_schedule_at || "";
+    }
+  }
+  const confirmation = normalizePublishConfirmation(detectedConfirmation, plannedScheduleAt);
+  if (
+    workflow.listingId === confirmation.listingId &&
+    workflow.phase === "completed" &&
+    String(workflow.jobId || "") === String(jobId || "")
+  ) return confirmation;
+  const accountKey = params.get("autozs_account_key") || workflow.accountKey || currentWorkflowAccountKey();
   const response = await fetch(`${API}/products/${encodeURIComponent(productId)}/mark-listed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -656,20 +694,51 @@ async function reportEbayPublishConfirmation() {
     }),
   });
   if (!response.ok) throw new Error(await response.text());
-  const jobId = workflow.jobId || readSavedJobId();
   if (jobId) {
     await updateListingJob(jobId, {
       status: "completed",
-      message: confirmation.message,
-      ebay_draft_id: workflow.draftId || readDraftIdFromUrl() || null,
+      listing_id: confirmation.listingId,
+      message: reconcileRequested
+        ? `Reconciled from eBay confirmation: ${confirmation.message}`
+        : recoveredFromDraftId
+          ? `Recovered from matching eBay draft confirmation: ${confirmation.message}`
+        : confirmation.message,
+      ebay_draft_id: draftId || null,
     });
   }
   writeAutoWorkflowState({
     phase: "completed",
     status: "completed",
+    productId: String(productId),
+    jobId: String(jobId || ""),
+    accountKey: accountKey || "manual",
     listingId: confirmation.listingId,
   });
   return confirmation;
+}
+
+function normalizePublishConfirmation(confirmation, plannedScheduleAt) {
+  const scheduledTime = Date.parse(String(plannedScheduleAt || ""));
+  const futureSchedule = Number.isFinite(scheduledTime) && scheduledTime > Date.now();
+  if (confirmation?.status !== "listed" || !futureSchedule) return confirmation;
+  return {
+    ...confirmation,
+    status: "scheduled",
+    message: `Scheduled on eBay as item ${confirmation.listingId}.`,
+  };
+}
+
+async function loadTrackedListingJob(jobId) {
+  if (!jobId) return null;
+  try {
+    const response = await fetch(`${API}/listing-jobs?limit=250`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const jobs = await response.json();
+    if (!Array.isArray(jobs)) return null;
+    return jobs.find((job) => String(job?.id || "") === String(jobId)) || null;
+  } catch {
+    return null;
+  }
 }
 
 function startEbayPublishSuccessReporter() {
@@ -799,6 +868,8 @@ async function fillEbayListingDraft(pkg, onProgress = () => {}) {
   fills.push(await tryFill("quantity", pkg.quantity || 1, (value) => fillEbayFieldByHints(["quantity", "available quantity"], String(value))));
   onProgress(52, "Filling HTML description...");
   fills.push(await tryFill("description", pkg.description, (value) => fillDescription(value)));
+  onProgress(58, "Applying item condition...");
+  fills.push(await tryFill("condition", pkg.condition || "New", (value) => chooseVisibleCondition(value)));
   onProgress(62, "Applying item specifics...");
   const appliedSuggestedSpecifics = await applySuggestedItemSpecifics();
   if (appliedSuggestedSpecifics) results.push("OK suggested item specifics");
@@ -821,6 +892,11 @@ async function fillEbayListingDraft(pkg, onProgress = () => {}) {
   }
   onProgress(78, "Applying shipping defaults...");
   fills.push(await tryApply("shipping defaults", () => applyShippingDefaults(pkg)));
+  if (pkg.listing_schedule_at) {
+    onProgress(80, "Verifying scheduled date and time...");
+    const stableSchedule = await ensureListingScheduleStable(pkg);
+    results.push(`${stableSchedule ? "OK" : "Review"} final schedule verification`);
+  }
   return { filled: fills.filter(Boolean).length, total: fills.length, lines: results };
 }
 
@@ -966,6 +1042,15 @@ async function submitPriceRevision(targetPrice) {
 
 async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
   const workflow = readAutoWorkflowState() || startAutoWorkflow(pkg, { autosave: true }) || {};
+  const existingConfirmation = detectEbayPublishConfirmation();
+  if (existingConfirmation) {
+    const message = `eBay opened an already-published listing (${existingConfirmation.listingId}) instead of a fresh draft. AutoZS did not attach that draft to this product.`;
+    if (currentWorkflowJobId()) {
+      await updateListingJob(currentWorkflowJobId(), { status: "needs_review", ebay_draft_id: "", message });
+    }
+    writeAutoWorkflowState({ phase: "failed", status: "failed", draftId: "", listingId: "" });
+    return { lines: ["Review stale eBay listing page"], message, terminal: true };
+  }
   if (isEbayDraftsPage() && workflow.phase === "saving") {
     return finalizeSavedDraftWorkflow(pkg, workflow);
   }
@@ -993,7 +1078,15 @@ async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
     };
   }
 
-  await waitForEditorReady();
+  const editorReady = await waitForEditorReady();
+  if (!editorReady) {
+    const message = "eBay did not load a fresh listing editor. AutoZS did not save the page's draft ID to this product.";
+    if (currentWorkflowJobId()) {
+      await updateListingJob(currentWorkflowJobId(), { status: "needs_review", ebay_draft_id: "", message });
+    }
+    writeAutoWorkflowState({ phase: "failed", status: "failed", draftId: "", listingId: "" });
+    return { lines: ["Review eBay listing editor"], message, terminal: true };
+  }
   writeAutoWorkflowState({ phase: "editor", status: "running", draftId: readDraftIdFromUrl() || workflow.draftId || "" });
   const fillResult = await fillEbayListingDraft(pkg, onProgress);
   onProgress(82, "Uploading listing images...");
@@ -1099,11 +1192,17 @@ async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
 
 function criticalListingCheckDetails(pkg) {
   const expectedImages = Math.min(24, [...new Set(pkg.manual_image_paths || pkg.local_image_paths || [])].filter(Boolean).length);
+  const expectedSpecifics = inferredItemSpecifics(pkg);
+  if (!expectedSpecifics.Brand) expectedSpecifics.Brand = "Unbranded";
   const checks = [
     { label: "title", ok: fieldMatchesHints(["title", "listing title"], pkg.title, { exact: true }) },
     { label: "price", ok: fieldMatchesHints(["price", "buy it now", "fixed price"], Number(pkg.price).toFixed(2), { exact: true }) },
     { label: "description", ok: descriptionSourceMatches(pkg.description) },
-    { label: "required item specifics", ok: requiredItemSpecificsSatisfied() },
+    { label: "condition", ok: conditionSelectionMatches(pkg.condition || "New") },
+    {
+      label: "item specifics",
+      ok: requiredItemSpecificsSatisfied() && Object.entries(expectedSpecifics).every(([key, value]) => itemSpecificMatches(key, value)),
+    },
     { label: "photos", ok: expectedImages > 0 && readEbayPhotoUploadCount() >= expectedImages },
   ];
   if (pkg.listing_schedule_at) {
@@ -1156,7 +1255,13 @@ function itemSpecificMatches(key, value) {
   if (!expectedKey || !expectedValue) return false;
   const controls = [...document.querySelectorAll('button[name^="attributes."], input, textarea')].filter(isVisible);
   return controls.some((element) => {
-    const label = normalizeText(`${element.getAttribute("name") || ""} ${element.getAttribute("aria-label") || ""} ${nearbyText(element)}`);
+    const label = normalizeText([
+      element.id,
+      element.getAttribute("name"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      labelText(element),
+    ].filter(Boolean).join(" "));
     const current = normalizeComparableValue(element.value || element.innerText || element.textContent || "");
     return label.includes(expectedKey) && (current.includes(expectedValue) || expectedValue.includes(current));
   });
@@ -1186,8 +1291,18 @@ async function finalizeSavedDraftWorkflow(pkg, workflow) {
 }
 
 function currentWorkflowJobId() {
+  const params = readAutozsParams();
   const workflow = readAutoWorkflowState();
-  return workflow?.jobId || readSavedJobId() || "";
+  return params.get("autozs_job_id") || workflow?.jobId || readSavedJobId() || "";
+}
+
+function finishEbayAssistantForConfirmation() {
+  const host = document.getElementById?.("autozs-ebay-fill-assistant");
+  if (host) {
+    host.removeAttribute?.("data-progress-active");
+    host.remove?.();
+  }
+  window.__autozsEbayFillAssistant = false;
 }
 
 function currentWorkflowAccountKey() {
@@ -1210,6 +1325,25 @@ function isEbayDraftsPage() {
 
 function detectEbaySubmissionIssue() {
   const text = String(document.body?.innerText || "").replace(/\s+/g, " ").trim();
+  if (/this looks like a duplicate listing\b/i.test(text)) {
+    const duplicateLink = [...document.querySelectorAll('a[href*="/itm/"]')]
+      .find((link) => /\/itm\/\d{9,15}/i.test(link.href || ""));
+    const listingId = String(duplicateLink?.href || "").match(/\/itm\/(\d{9,15})/i)?.[1] || "";
+    return listingId
+      ? `eBay already has this item as listing ${listingId}. AutoZS did not create another listing.`
+      : "eBay reported a duplicate listing. AutoZS did not create another listing.";
+  }
+  const validationMatch = text.match(
+    /looks like something is missing or invalid\.\s*please fix any issues and try again\.\s*([^.!?]{1,160})/i
+  );
+  if (validationMatch) {
+    const sections = validationMatch[1]
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/(?:complete your listing|photos\s*&\s*video).*$/i, "")
+      .trim();
+    return `eBay needs review: ${sections || "one or more required listing fields are missing or invalid"}.`;
+  }
   const blockingPatterns = [
     /captcha/i,
     /verify (?:your )?(?:identity|account|phone)/i,
@@ -1249,7 +1383,7 @@ function findFinalScheduleButton() {
   return null;
 }
 
-async function submitScheduledListing(pkg) {
+async function submitScheduledListing(pkg, interactionTimeoutMs = 8000) {
   if (!pkg.listing_schedule_at) return { ok: false, message: "A scheduled start is required for automatic submission." };
   const schedule = parseListingSchedule(pkg.listing_schedule_at);
   if (!schedule || !scheduleDateFieldMatches(findScheduleDayField(), schedule)) {
@@ -1259,10 +1393,15 @@ async function submitScheduledListing(pkg) {
   if (issue) return { ok: false, message: issue };
   const button = findFinalScheduleButton();
   if (!button) return { ok: false, message: "Could not find eBay's final Schedule/List button. AutoZS did not submit." };
-  const clicked = await clickEbayElement(button);
-  return clicked
-    ? { ok: true, message: "Clicked eBay's final scheduled-listing button." }
-    : { ok: false, message: "Could not click eBay's final scheduled-listing button." };
+  const pageUrl = location.href;
+  const advanced = await clickPrelistElementAndWait(button, () => {
+    return location.href !== pageUrl || !isVisible(button) || Boolean(detectEbayPublishConfirmation()) || Boolean(detectEbaySubmissionIssue());
+  }, interactionTimeoutMs);
+  const postClickIssue = detectEbaySubmissionIssue();
+  if (postClickIssue) return { ok: false, message: postClickIssue };
+  return advanced
+    ? { ok: true, message: "eBay accepted the final scheduled-listing click." }
+    : { ok: false, message: "eBay did not respond to the final List button, so AutoZS left the listing open for review." };
 }
 
 async function saveDraftForLater() {
@@ -1293,7 +1432,7 @@ async function waitForEditorReady() {
 }
 
 async function prepareEbayPrelist(pkg) {
-  const categoryResult = await preparePrelistCategory();
+  const categoryResult = await preparePrelistCategory(pkg);
   if (categoryResult) return categoryResult;
 
   const matchResult = await continueWithoutCatalogMatch();
@@ -1375,7 +1514,12 @@ async function preparePrelistCondition(pkg) {
   if (!/condition/i.test(pageText) || !/(new|used|open box|refurbished)/i.test(pageText)) return null;
 
   const condition = String(pkg.condition || "New").trim() || "New";
-  const conditionOk = await chooseVisibleCondition(condition);
+  let conditionOk = false;
+  for (let attempt = 0; attempt < 8 && !conditionOk; attempt += 1) {
+    conditionOk = await chooseVisibleCondition(condition);
+    if (!conditionOk) await delay(500);
+  }
+  if (conditionOk) await waitForCondition(() => conditionContinueButtonEnabled(), 5000, 250);
   const continueOk = conditionOk ? await clickPrelistContinueButton() : false;
   return {
     ok: conditionOk && continueOk,
@@ -1386,6 +1530,33 @@ async function preparePrelistCondition(pkg) {
 
 async function chooseVisibleCondition(condition) {
   const normalized = normalizeText(condition);
+  const conditionCodes = {
+    new: "1000",
+    newopenbox: "1500",
+    sellerrefurbished: "2500",
+    used: "3000",
+    forpartsornotworking: "7000",
+  };
+  const directRadios = [...document.querySelectorAll('input[type="radio"]')];
+  const directRadio = directRadios.find((radio) => normalizeText(conditionRadioLabel(radio)) === normalized)
+    || directRadios.find((radio) => String(radio.value || "") === conditionCodes[normalized]);
+  if (directRadio) {
+    if (!directRadio.checked) {
+      const clicked = await clickConditionChoice(directRadio);
+      if (!clicked) return false;
+      directRadio.dispatchEvent(new Event("input", { bubbles: true }));
+      directRadio.dispatchEvent(new Event("change", { bubbles: true }));
+      await waitForCondition(() => directRadio.checked || conditionSelectionMatches(condition), 2500, 100);
+      if (!directRadio.checked && !conditionSelectionMatches(condition)) {
+        conditionAssociatedLabel(directRadio)?.click?.();
+        directRadio.click?.();
+        directRadio.dispatchEvent(new Event("input", { bubbles: true }));
+        directRadio.dispatchEvent(new Event("change", { bubbles: true }));
+        await waitForCondition(() => directRadio.checked || conditionSelectionMatches(condition), 2500, 100);
+      }
+    }
+    return directRadio.checked || conditionSelectionMatches(condition);
+  }
   const controls = conditionControls()
     .filter(isVisible)
     .map((element) => ({
@@ -1444,6 +1615,12 @@ async function chooseVisibleCondition(condition) {
   return conditionSelectionMatches(condition) || conditionContinueButtonEnabled();
 }
 
+function conditionRadioLabel(radio) {
+  if (!radio) return "";
+  const direct = radio.id ? document.querySelector(`label[for="${cssEscape(radio.id)}"]`) : null;
+  return direct?.innerText || direct?.textContent || labelText(radio) || radio.getAttribute?.("aria-label") || "";
+}
+
 function conditionControls() {
   return [...document.querySelectorAll('input[type="radio"], button, [role="button"], [role="radio"], [role="combobox"], label')];
 }
@@ -1457,7 +1634,7 @@ function conditionPopupControls() {
 function conditionControlMatches(control, normalizedCondition) {
   if (!control?.text || !normalizedCondition) return false;
   const exactText = normalizeText(control.element?.innerText || control.element?.textContent || control.element?.value || control.element?.getAttribute?.("aria-label") || "");
-  return exactText === normalizedCondition || control.text === normalizedCondition || control.text.includes(`condition${normalizedCondition}`) || control.text.includes(normalizedCondition);
+  return exactText === normalizedCondition || control.text === normalizedCondition || control.text.includes(`condition${normalizedCondition}`);
 }
 
 async function clickConditionChoice(element) {
@@ -1483,7 +1660,6 @@ function conditionSelectionMatches(condition) {
   const normalized = normalizeText(condition);
   if (!normalized) return false;
   const selected = [...document.querySelectorAll('input[type="radio"]:checked, [aria-checked="true"], [aria-selected="true"]')]
-    .filter(isVisible)
     .some((element) => normalizeText(`${element.value || ""} ${element.getAttribute?.("aria-label") || ""} ${labelText(element)} ${nearbyText(element)} ${element.innerText || ""} ${element.textContent || ""}`).includes(normalized));
   if (selected) return true;
   return conditionControls().filter(isVisible).some((element) => {
@@ -1511,31 +1687,66 @@ async function clickPrelistContinueButton() {
 
 function requiredItemSpecificsSatisfied() {
   const text = document.body?.innerText || "";
-  return !/additional details are required|item specific\s+[^.\n]+\s+is missing/i.test(text);
+  const validationBanner = /looks like something is missing or invalid/i.test(text) && /item specifics/i.test(text);
+  return !validationBanner && !/additional details are required|item specific\s+[^.\n]+\s+is missing/i.test(text);
 }
 
-async function preparePrelistCategory() {
+async function preparePrelistCategory(pkg = {}) {
   const pageText = document.body?.innerText || "";
-  if (!/provide a category for your item|select a category/i.test(pageText)) return null;
-  const dialog = document.querySelector('[role="dialog"]') || document;
-  const categoryButton = [...dialog.querySelectorAll("button")]
-    .filter(isVisible)
-    .find((button) => /\s>\s/.test((button.innerText || button.textContent || "").trim()));
+  const categoryRequested = /provide a category for your item|select a category/i.test(pageText);
+  let dialog = document.querySelector('[role="dialog"]') || document;
+  let categoryButtons = prelistCategoryButtons(dialog);
+  let dialogText = String(dialog.innerText || dialog.textContent || pageText);
+  let isCategoryDialog = dialog !== document && /(^|\n|\s)category(?:\s|$)/i.test(dialogText) && categoryButtons.length > 0;
+  if (!categoryRequested && !isCategoryDialog) return null;
+
+  if (categoryRequested && !isCategoryDialog) {
+    const categoryOpener = [...document.querySelectorAll("button, [role='button']")]
+      .filter(isVisible)
+      .find((button) => {
+        const text = `${button.getAttribute?.("aria-label") || ""} ${button.innerText || button.textContent || ""}`;
+        return /selected category.*edit category|none selected.*category|edit category/i.test(text);
+      });
+    if (!categoryOpener) {
+      return { ok: false, lines: ["Review category selector"], message: "eBay needs a category, but AutoZS could not open the category choices." };
+    }
+    const opened = await clickPrelistElementAndWait(categoryOpener, () => {
+      const nextDialog = document.querySelector('[role="dialog"]');
+      return Boolean(nextDialog && prelistCategoryButtons(nextDialog).length);
+    });
+    if (!opened) {
+      return { ok: false, lines: ["Review category selector"], message: "AutoZS clicked eBay's category selector, but the category choices did not open." };
+    }
+    dialog = document.querySelector('[role="dialog"]') || document;
+    categoryButtons = prelistCategoryButtons(dialog);
+    dialogText = String(dialog.innerText || dialog.textContent || pageText);
+    isCategoryDialog = dialog !== document && /(^|\n|\s)category(?:\s|$)/i.test(dialogText) && categoryButtons.length > 0;
+  }
+
+  const categoryContext = `${pkg.title || ""} ${pkg.description || ""} ${pkg.source_url || ""}`;
+  const titleTokens = prelistCategoryTokens(categoryContext);
+  const categoryButton = [...categoryButtons]
+    .map((button, index) => ({ button, index, score: prelistCategoryScore(button, titleTokens) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)[0]?.button;
   if (!categoryButton) {
     return { ok: false, lines: ["Review suggested category"], message: "eBay needs a category, but AutoZS could not find a suggested category." };
   }
-  const categorySelected = await clickPrelistElementAndWait(categoryButton, () => {
-    const text = document.body?.innerText || "";
-    return !/none selected/i.test(text) || !/provide a category for your item/i.test(text);
-  }, 3000);
-  if (categorySelected && !/provide a category for your item/i.test(document.body?.innerText || "")) {
-    return { ok: true, lines: ["OK selected first suggested category"], message: "Selected eBay's first suggested category and continued." };
+  const selectedLabel = (categoryButton.innerText || categoryButton.textContent || "").replace(/\s+/g, " ").trim();
+  const categorySelected = await clickEbayElement(categoryButton);
+  if (!categorySelected) {
+    return { ok: false, lines: ["Review suggested category"], message: `Could not select eBay category ${selectedLabel || "suggestion"}.` };
+  }
+  await delay(350);
+  const activeDialog = document.querySelector('[role="dialog"]');
+  const activeDialogText = String(activeDialog?.innerText || activeDialog?.textContent || "");
+  if (activeDialog !== dialog || !/(^|\n|\s)category(?:\s|$)/i.test(activeDialogText)) {
+    return { ok: true, lines: [`OK category: ${selectedLabel}`], message: `Selected ${selectedLabel} and continued.` };
   }
   const doneButton = [...dialog.querySelectorAll("button")]
     .filter(isVisible)
     .find((button) => /^done$/i.test((button.innerText || button.textContent || "").trim()));
   if (!doneButton) {
-    return { ok: false, lines: ["OK selected first suggested category", "Review category Done button"], message: "Selected eBay's first suggested category, but could not find Done." };
+    return { ok: false, lines: [`OK category: ${selectedLabel}`, "Review category Done button"], message: "Selected eBay's suggested category, but could not find Done." };
   }
   const pageUrl = location.href;
   const completed = await clickPrelistElementAndWait(doneButton, () => {
@@ -1543,9 +1754,33 @@ async function preparePrelistCategory() {
   });
   return {
     ok: completed,
-    lines: ["OK selected first suggested category", `${completed ? "OK" : "Review"} confirmed category`],
-    message: completed ? "Selected eBay's first suggested category and continued." : "Selected a suggested category, but eBay did not continue after Done.",
+    lines: [`OK category: ${selectedLabel}`, `${completed ? "OK" : "Review"} confirmed category`],
+    message: completed ? `Selected ${selectedLabel} and continued.` : "Selected a suggested category, but eBay did not continue after Done.",
   };
+}
+
+function prelistCategoryButtons(root) {
+  return [...(root?.querySelectorAll?.("button") || [])]
+    .filter(isVisible)
+    .filter((button) => /\s>\s/.test((button.innerText || button.textContent || "").trim()));
+}
+
+function prelistCategoryTokens(value) {
+  const ignored = new Set(["and", "free", "shipping", "the", "with", "for", "home", "garden", "improvement"]);
+  return new Set(
+    String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token)
+      .filter((token) => token.length > 2 && !ignored.has(token))
+  );
+}
+
+function prelistCategoryScore(button, titleTokens) {
+  const categoryTokens = prelistCategoryTokens(button?.innerText || button?.textContent || "");
+  return [...categoryTokens].reduce((score, token) => score + (titleTokens.has(token) ? 1 : 0), 0);
 }
 
 async function clickPrelistElementAndWait(element, advanced, timeoutMs = 5000) {
@@ -1588,9 +1823,89 @@ async function fillEbayFieldByHints(hints, value) {
 }
 
 async function fillEbayItemSpecific(key, value) {
-  if (await fillEbayFieldByHints([key], value)) return true;
+  const normalizedKey = normalizeText(key);
+  const direct = candidateFields()
+    .filter((field) => field.haystack.includes(normalizedKey))
+    .sort((a, b) => itemSpecificFieldScore(a, normalizedKey) - itemSpecificFieldScore(b, normalizedKey))[0];
+  if (direct) {
+    await setEbayTextFieldValue(direct.element, value);
+    await commitEbayItemSpecificField(direct.element, value);
+    if (itemSpecificMatches(key, value)) return true;
+  }
   if (await fillEbayItemSpecificDropdown(key, value)) return true;
   return suggestedItemSpecificMatches(key, value);
+}
+
+function itemSpecificFieldScore(field, normalizedKey) {
+  const element = field?.element;
+  const identity = normalizeText([
+    element?.id,
+    element?.name,
+    element?.getAttribute?.("aria-label"),
+    element?.getAttribute?.("data-testid"),
+    labelText(element),
+  ].filter(Boolean).join(" "));
+  if (identity === normalizedKey || identity.includes(`attributes${normalizedKey}`)) return 0;
+  if (identity.includes(normalizedKey)) return 1;
+  return 2;
+}
+
+async function commitEbayItemSpecificField(element, value) {
+  if (!element) return false;
+  const expected = normalizeComparableValue(value);
+  const option = [...document.querySelectorAll("[role='option'], [role='menuitem'], [role='menuitemradio'], button, li")]
+    .filter(isVisible)
+    .find((candidate) => itemSpecificOptionMatches(candidate, expected));
+  if (option) {
+    await clickEbayElement(option);
+    await delay(350);
+  } else if (
+    element.getAttribute?.("role") === "combobox" ||
+    element.getAttribute?.("aria-autocomplete") ||
+    element.getAttribute?.("aria-haspopup") === "listbox"
+  ) {
+    element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    await delay(250);
+  }
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  element.blur?.();
+  await delay(250);
+  return normalizeComparableValue(element.value || element.textContent || "") === expected;
+}
+
+function itemSpecificOptionMatches(element, expectedValue) {
+  const expected = normalizeComparableValue(expectedValue);
+  const text = normalizeComparableValue(element?.innerText || element?.textContent || "");
+  const accessible = normalizeComparableValue(`${element?.getAttribute?.("aria-label") || ""} ${text}`);
+  return Boolean(expected) && (
+    text === expected ||
+    accessible === expected ||
+    accessible === `add custom value ${expected}` ||
+    (accessible.startsWith("add custom value") && accessible.endsWith(` ${expected}`))
+  );
+}
+
+function itemSpecificDropdownTriggerScore(control, normalizedKey) {
+  const element = control?.element;
+  if (!element) return Number.POSITIVE_INFINITY;
+  const ariaLabel = normalizeText(element.getAttribute?.("aria-label") || "");
+  const className = normalizeText(element.className || "");
+  const id = normalizeText(element.id || "");
+  const ownText = normalizeText(element.innerText || element.textContent || "");
+
+  // eBay renders a tooltip/label button beside a separate value button. The
+  // label's id contains the attribute name, but clicking it never opens the
+  // value menu. Prefer the accessible value control and explicitly demote the
+  // label so required item specifics do not silently remain blank.
+  if (/itemspecificdropdownlabel/.test(id) || /tooltip/.test(className)) return 50;
+  if (ariaLabel === normalizedKey) return 0;
+  if (ariaLabel.includes(normalizedKey) && /seexpandbutton|fakemenubutton|combobox/.test(className)) return 1;
+  if (/seexpandbutton|fakemenubutton|combobox/.test(className)) return 2;
+  if (!ownText && control.text.includes(normalizedKey)) return 3;
+  if (ariaLabel.includes(normalizedKey)) return 4;
+  return 10;
 }
 
 async function fillEbayItemSpecificDropdown(key, value) {
@@ -1612,10 +1927,11 @@ async function fillEbayItemSpecificDropdown(key, value) {
       ].filter(Boolean).join(" "));
       return { element, text };
     });
-  const trigger =
-    controls.find((control) => control.text.includes(`attributes${normalizedKey}`))?.element ||
-    controls.find((control) => control.text.includes(normalizedKey))?.element ||
-    null;
+  const trigger = controls
+    .filter((control) => control.text.includes(normalizedKey))
+    .sort((left, right) =>
+      itemSpecificDropdownTriggerScore(left, normalizedKey) - itemSpecificDropdownTriggerScore(right, normalizedKey)
+    )[0]?.element || null;
   if (!trigger) return false;
   const currentText = normalizeComparableValue(`${trigger.innerText || trigger.textContent || ""} ${nearbyText(trigger)}`);
   const expectedComparable = normalizeComparableValue(expected);
@@ -1639,9 +1955,9 @@ async function fillEbayItemSpecificDropdown(key, value) {
     await delay(500);
   }
 
-  const option = [...document.querySelectorAll("[role='option'], [role='menuitem'], button, li, div")]
+  const option = [...document.querySelectorAll("[role='option'], [role='menuitem'], [role='menuitemradio'], button, li")]
     .filter(isVisible)
-    .find((element) => normalizeComparableValue(element.innerText || element.textContent || "") === normalizeComparableValue(expected));
+    .find((element) => itemSpecificOptionMatches(element, expected));
   if (option) {
     await clickEbayElement(option);
     await delay(500);
@@ -1651,19 +1967,30 @@ async function fillEbayItemSpecificDropdown(key, value) {
     await delay(500);
   }
 
-  const updatedText = normalizeComparableValue(document.body?.innerText || "");
-  return updatedText.includes(normalizeComparableValue(expected)) || itemSpecificMatches(key, expected);
+  return itemSpecificMatches(key, expected);
 }
 
 function inferredItemSpecifics(pkg) {
   const specifics = { ...(pkg.item_specifics || {}) };
   const title = String(pkg.title || "");
   const description = stripListingHtml(pkg.description || "");
-  const source = `${title} ${description}`;
-  if (!specifics["Battery Included"] && /\bbatter(?:y|ies)\b/i.test(source)) specifics["Battery Included"] = "Yes";
+  const source = `${title} ${description} ${String(pkg.source_url || "")}`;
+  if (!specifics.Type && /\bwet[\s/&-]*dry\b[\s\S]{0,40}\bvacuum\b|\bvacuum\b[\s\S]{0,40}\bwet[\s/&-]*dry\b/i.test(source)) {
+    specifics.Type = "Handheld";
+  }
+  if (!specifics["Battery Included"] && /\bcharger(?:s)?\b/i.test(source)) {
+    specifics["Battery Included"] = "No";
+  } else if (
+    !specifics["Battery Included"] &&
+    /\b(?:battery included|includes?\s+(?:an?\s+|\d+\s+)?batter(?:y|ies)|with\s+(?:an?\s+|\d+\s+)?batter(?:y|ies))\b/i.test(source)
+  ) {
+    specifics["Battery Included"] = "Yes";
+  }
   if (!specifics.Voltage) {
-    const voltage = source.match(/\b(\d{1,3})\s*[- ]?\s*v(?:olt)?\b/i);
-    if (voltage) specifics.Voltage = `${voltage[1]} V`;
+    const voltages = [...source.matchAll(/\b(\d{1,3}(?:\.\d+)?)\s*[- ]?\s*v(?:olt(?:s)?)?\b/gi)]
+      .map((match) => Number(match[1]))
+      .filter((voltage) => Number.isFinite(voltage) && voltage > 0);
+    if (voltages.length) specifics.Voltage = `${Math.max(...voltages)} V`;
   }
   return specifics;
 }
@@ -2146,7 +2473,14 @@ async function waitForPhotoUploadProgress(beforeCount, attempted) {
   for (let index = 0; index < 12; index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2500));
     latest = readEbayPhotoUploadCount();
-    if (latest >= target) return latest;
+    if (latest >= target) {
+      // The thumbnail counter advances before eBay has finished persisting the
+      // uploaded files. Submitting immediately can make the editor reload with
+      // 0 photos, so require the completed count to remain stable first.
+      await new Promise((resolve) => setTimeout(resolve, 7500));
+      const settled = readEbayPhotoUploadCount();
+      return settled >= target ? settled : Math.max(latest, settled);
+    }
   }
   return latest;
 }
@@ -2212,13 +2546,24 @@ function candidateFields() {
 }
 
 async function applySuggestedItemSpecifics() {
-  const buttons = [...document.querySelectorAll("button")].filter(isVisible);
-  const applyAll = buttons.find((button) => normalizeText(button.innerText || button.textContent) === "applyall");
-  if (!applyAll) return false;
+  // eBay renders its extracted item-specific suggestions after the editor is
+  // otherwise ready. A one-shot lookup races that render and leaves the
+  // suggestions unapplied on faster fill runs.
+  const findApplyAll = () => [...document.querySelectorAll("button")]
+    .filter(isVisible)
+    .find((button) => normalizeText(button.innerText || button.textContent) === "applyall");
+  await waitForCondition(() => Boolean(findApplyAll()), 8000, 250);
+  const applyAll = findApplyAll();
+  if (!applyAll || applyAll.disabled || applyAll.getAttribute?.("aria-disabled") === "true") return false;
   const clicked = await clickEbayElement(applyAll);
-  await delay(800);
   if (!clicked) return false;
-  return true;
+  // Treat the action as complete only after eBay acknowledges it by removing
+  // or disabling the control. This prevents AutoZS from racing into manual
+  // item-specific fills while React is still applying the suggestions.
+  return Boolean(await waitForCondition(() => {
+    const current = findApplyAll();
+    return !current || current.disabled || current.getAttribute?.("aria-disabled") === "true";
+  }, 5000, 200));
 }
 
 function suggestedItemSpecificMatches(key, value) {
@@ -2245,6 +2590,18 @@ async function applyListingSchedule(pkg) {
   const verifiedDateOk = scheduleDateFieldMatches(findScheduleDayField(), schedule);
   const verifiedTimeOk = scheduleTimeMatches(schedule);
   return Boolean(enabled && timeOk && verifiedDateOk && dateOk && verifiedTimeOk);
+}
+
+async function ensureListingScheduleStable(pkg) {
+  const schedule = parseListingSchedule(pkg.listing_schedule_at);
+  if (!schedule) return false;
+  const matches = () => scheduleDateFieldMatches(findScheduleDayField(), schedule) && scheduleTimeMatches(schedule);
+  if (!matches() && !(await applyListingSchedule(pkg))) return false;
+  // eBay can briefly show the requested date, then React restores today's
+  // date. Require it to survive a second render before autosubmit is allowed.
+  if (!(await waitForCondition(matches, 2500, 150))) return false;
+  await delay(750);
+  return matches();
 }
 
 async function setScheduleDate(schedule) {
@@ -2279,8 +2636,11 @@ async function chooseScheduleCalendarDate(dateField, schedule) {
     const target = findScheduleCalendarDay(schedule);
     if (target) {
       await clickEbayElement(target);
-      await delay(400);
-      return scheduleDateFieldMatches(findScheduleDayField() || dateField, schedule) || scheduleVisible(schedule.usDate);
+      return Boolean(await waitForCondition(
+        () => scheduleDateFieldMatches(findScheduleDayField() || dateField, schedule),
+        2500,
+        150
+      ));
     }
     const nextMonth = findScheduleCalendarNextMonth();
     if (!nextMonth) return false;
@@ -2877,7 +3237,13 @@ async function setEbayTextFieldValue(element, value) {
     });
     if (nativeInput) {
       await delay(300);
-      if (valueMatches()) return true;
+      if (valueMatches()) {
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        element.blur?.();
+        await delay(200);
+        if (valueMatches()) return true;
+      }
     }
   } catch {}
 

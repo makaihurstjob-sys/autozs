@@ -163,7 +163,7 @@
       <div class="progress-overlay" role="status" aria-live="polite">
         <div class="progress-card">
           ${logoUrl ? `<img class="logo" src="${logoUrl}" alt="AutoZS" draggable="false" />` : ""}
-          <div class="progress-title">Auto-ZS in progress</div>
+          <div class="progress-title">AutoZS in progress</div>
           <div id="progress-label" class="progress-label">Preparing eBay sync...</div>
           <div class="progress-track" aria-hidden="true"><div id="progress-fill" class="progress-fill"></div></div>
           <div id="progress-percent" class="progress-percent">0%</div>

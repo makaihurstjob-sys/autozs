@@ -3,6 +3,12 @@ const vm = require("vm");
 
 const source = fs.readFileSync(`${__dirname}/ebay-revision-upload.js`, "utf8");
 
+function runLogoAssetTest() {
+  if (!source.includes('chrome.runtime.getURL("assets/autozs-logo.png")')) {
+    throw new Error("Expected the revision overlay to use the packaged AutoZS logo asset.");
+  }
+}
+
 class FakeElement {
   constructor({ text = "", tagName = "DIV", cells = [], visible = true, attrs = {} } = {}) {
     this.innerText = text;
@@ -179,6 +185,8 @@ async function runNeedsReviewRetryTest() {
   await new Promise((resolve) => setImmediate(resolve));
   if (!downloadOutputLink.clicked) throw new Error("Expected a needs-review retry to download the existing eBay result.");
 }
+
+runLogoAssetTest();
 
 runRenamedUploadResultTest()
   .then(runNeedsReviewRetryTest)

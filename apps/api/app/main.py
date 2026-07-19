@@ -13,7 +13,8 @@ from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.database import Base, SessionLocal, engine
 from app.services.ebay_report_files import watch_ebay_report_inbox
-from app.services.push_notifications import dispatch_alert_notifications
+from app.services.listing_jobs import flag_stale_listing_jobs
+from app.services.push_notifications import dispatch_push_cycle
 from app.services.settings import read_pricing_settings
 from app.services.source_refresh_jobs import create_automatic_source_refresh_batch
 from app.services.workers import heartbeat_current_worker
@@ -42,6 +43,15 @@ def _ensure_lightweight_columns() -> None:
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME"},
         "operational_alerts": {"last_notified_at": "DATETIME"},
+        "push_subscriptions": {
+            "vapid_public_key": "TEXT DEFAULT '' NOT NULL",
+            "preferences_json": "TEXT DEFAULT '{}' NOT NULL",
+            "timezone": "VARCHAR(64) DEFAULT 'America/New_York' NOT NULL",
+            "weekly_summary_day": "INTEGER DEFAULT 5 NOT NULL",
+            "weekly_summary_time": "VARCHAR(5) DEFAULT '18:00' NOT NULL",
+            "weekly_summary_enabled": "BOOLEAN DEFAULT 1 NOT NULL",
+            "last_weekly_summary_at": "DATETIME",
+        },
         "ebay_revision_jobs": {
             "source_price": "FLOAT",
             "source_shipping": "FLOAT DEFAULT 0 NOT NULL",
@@ -92,6 +102,7 @@ def _ensure_lightweight_columns() -> None:
 
 def _write_worker_heartbeat(message: str = "AutoZS API heartbeat.") -> None:
     with SessionLocal() as db:
+        flag_stale_listing_jobs(db)
         heartbeat_current_worker(db, message=message)
 
 
@@ -125,7 +136,7 @@ async def _source_refresh_auto_queue_loop() -> None:
 
 def _dispatch_push_alerts() -> None:
     with SessionLocal() as db:
-        dispatch_alert_notifications(db)
+        dispatch_push_cycle(db)
 
 
 async def _push_alert_loop() -> None:

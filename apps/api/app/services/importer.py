@@ -650,8 +650,10 @@ def update_product_from_capture(
     if draft is None:
         draft = ListingDraft(product_id=product.id, title=_listing_title(product.title, settings, _infer_brand(product.title)), description="")
         db.add(draft)
-    draft.title = _listing_title(title or product.title, settings, _infer_brand(title or product.title))
-    draft.description = _description_from_capture(title or product.title, description, settings)
+    if title:
+        draft.title = _listing_title(title, settings, _infer_brand(title))
+    if description is not None:
+        draft.description = _description_from_capture(title or product.title, description, settings)
     draft.source_price = effective_source_price
     draft.margin_percent = float(settings["default_margin_percent"])
     draft.ebay_fee_rate = float(settings["default_ebay_fee_rate"])
@@ -1853,7 +1855,7 @@ def _download_image(product_id: int, image_url: str, sort_order: int) -> str | N
             }.get(media_type, ".img")
             path = directory / f"{sort_order + 1:02d}{extension}"
             path.write_bytes(base64.b64decode(encoded))
-            return str(relative_directory / path.name)
+            return (relative_directory / path.name).as_posix()
         response = httpx.get(image_url, timeout=20, follow_redirects=True)
         content_type = response.headers.get("content-type", "")
         if response.status_code != 200 or not content_type.startswith("image/"):
@@ -1865,7 +1867,7 @@ def _download_image(product_id: int, image_url: str, sort_order: int) -> str | N
         }.get(content_type.split(";")[0], ".jpg")
         path = directory / f"{sort_order + 1:02d}{extension}"
         path.write_bytes(response.content)
-        return str(relative_directory / path.name)
+        return (relative_directory / path.name).as_posix()
     except httpx.HTTPError:
         return None
 

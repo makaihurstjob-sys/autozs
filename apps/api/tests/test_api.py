@@ -1047,7 +1047,9 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     assert jobs[0]["status"] == "needs_review"
     assert jobs[0]["approval_required"] is True
     assert jobs[0]["guard_passed"] is True
+    assert jobs[0]["old_source_price"] == 10.0
     assert jobs[0]["source_price"] == 10.0
+    assert jobs[0]["source_url"] == "https://example.com/p/Scheduled-Reprice/333"
     assert jobs[0]["projected_profit"] is not None
     assert jobs[0]["old_price"] == original_price
     assert jobs[0]["target_price"] == 16.67
@@ -1474,6 +1476,7 @@ def test_capture_update_and_ebay_package(client) -> None:
     assert "<h3>Highlights</h3>" in draft_description
     assert "<h3>Details</h3>" in draft_description
     assert "<li>Reinforced drawstring top</li>" in draft_description
+
     assert "Please review all item specifics" in draft_description
     assert "Review source details" not in draft_description
 
@@ -1518,6 +1521,12 @@ def test_capture_update_and_ebay_package(client) -> None:
     assert export["description_html_path"].endswith("description.html")
     assert export["macro_script_path"].endswith("ebay_manual_macro_template.js")
     assert export["zip_path"].endswith(".zip")
+
+    price_only = client.patch(
+        f"/products/{product_id}/capture",
+        json={"source_price": 18.97, "source_shipping": 0.0},
+    ).json()
+    assert price_only["listing_drafts"][0]["description"] == draft_description
 
 
 def test_import_captured_product_directly(client) -> None:
@@ -1769,6 +1778,42 @@ def test_source_refresh_pilot_runs_as_a_resumable_single_item_batch(client) -> N
     assert jobs[0]["captured_price"] == 21.5
     assert jobs[0]["price_changed"] is True
     assert client.post(f"/source-refresh/batches/{batch['batch_key']}/next").json() is None
+
+
+def test_source_refresh_route_rejects_five_dollar_promotion_candidate(client) -> None:
+    source_url = "https://www.homedepot.com/p/Refresh-Five-Dollar-Guard/555"
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Refresh Five Dollar Guard",
+            "source_price": 20.0,
+            "source_shipping": 0.0,
+        },
+    ).json()
+    batch = client.post(
+        "/source-refresh/batches",
+        json={"limit": 1, "interval_hours": 6, "force": True},
+    ).json()
+
+    response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Refresh Five Dollar Guard",
+            "source_price": 5.0,
+            "source_shipping": 0.0,
+            "refresh_job_id": batch["jobs"][0]["id"],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "preserved the previous $20.00" in response.json()["detail"]
+    current = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert current["supplier_products"][0]["last_price"] == 20.0
+    job = client.get(f"/source-refresh/jobs?batch_key={batch['batch_key']}").json()[0]
+    assert job["status"] == "failed"
+    assert job["price_changed"] is False
 
 
 def test_source_refresh_batch_only_queues_due_products_unless_forced(client) -> None:

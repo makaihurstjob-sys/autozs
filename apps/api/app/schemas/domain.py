@@ -546,8 +546,10 @@ class EbayRevisionJobRead(BaseModel):
     status: str
     old_price: float | None = None
     target_price: float
+    old_source_price: float | None = None
     source_price: float | None = None
     source_shipping: float = 0.0
+    source_url: str | None = None
     projected_profit: float | None = None
     minimum_profit: float | None = None
     guard_passed: bool = False
@@ -1159,6 +1161,17 @@ class PushSubscriptionCreate(BaseModel):
     label: str | None = None
     user_agent: str | None = None
     dashboard_url: str | None = None
+    vapid_public_key: str | None = None
+    preferences: dict[str, bool | str | int] | None = None
+
+
+class PushSubscriptionUpdate(BaseModel):
+    enabled: bool | None = None
+    preferences: dict[str, bool | str | int] | None = None
+    timezone: str | None = Field(default=None, max_length=64)
+    weekly_summary_day: int | None = Field(default=None, ge=0, le=6)
+    weekly_summary_time: str | None = Field(default=None, pattern="^(?:[01]\\d|2[0-3]):[0-5]\\d$")
+    weekly_summary_enabled: bool | None = None
 
 
 class PushSubscriptionRead(BaseModel):
@@ -1166,9 +1179,16 @@ class PushSubscriptionRead(BaseModel):
     endpoint: str
     label: str = ""
     dashboard_url: str = ""
+    vapid_public_key: str = ""
+    preferences: dict[str, bool | str | int] = Field(default_factory=dict)
+    timezone: str = "America/New_York"
+    weekly_summary_day: int = 5
+    weekly_summary_time: str = "18:00"
+    weekly_summary_enabled: bool = True
     enabled: bool
     last_seen_at: datetime
     last_notified_at: datetime | None = None
+    last_weekly_summary_at: datetime | None = None
     last_error: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -1179,6 +1199,7 @@ class PushSubscriptionRead(BaseModel):
 class PushTestRequest(BaseModel):
     title: str = "AutoZS test alert"
     body: str = "Push notifications are working."
+    subscription_id: int | None = None
 
 
 class PushDispatchResult(BaseModel):

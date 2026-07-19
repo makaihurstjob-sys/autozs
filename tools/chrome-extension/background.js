@@ -3,6 +3,10 @@ const REPORT_SYNC_CONTEXT_KEY = "autozsEbayReportSyncContext";
 const REPORT_DOWNLOADS_KEY = "autozsEbayReportDownloads";
 const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
 const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
+const LISTING_JOB_ALARM = "autozs-listing-job-poll";
+const LISTING_JOB_LAST_OPENED_KEY = "autozsListingJobLastOpened";
+const HOME_DEPOT_LAST_CLEANED_BATCH_KEY = "autozsHomeDepotLastCleanedBatch";
+const SOURCE_REFRESH_MIN_GAP_MS = 75 * 1000;
 const EBAY_REVISION_ALARM = "autozs-ebay-revision-poll";
 const EBAY_REVISION_LAST_OPENED_KEY = "autozsEbayRevisionLastOpened";
 const EBAY_REVISION_BATCH_ALARM = "autozs-ebay-revision-batch-poll";
@@ -11,7 +15,6 @@ const EBAY_REVISION_RESULT_CONTEXT_KEY = "autozsEbayRevisionResultContext";
 const EBAY_REVISION_RESULT_DOWNLOADS_KEY = "autozsEbayRevisionResultDownloads";
 const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 const AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
-const HOME_DEPOT_TRANSIENT_COOKIE_PATTERN = /^(?:_abck|ak_bmsc|bm_mi|bm_sv|bm_sz|bm_so|bm_ss)$/i;
 
 function defaultAutozsWorkerMode() {
   return isWindowsPlatform() ? "operations" : "viewer";
@@ -47,19 +50,45 @@ async function canRunAutozsWorkerJobs() {
 async function clearHomeDepotBatchState() {
   if (!(await canRunAutozsWorkerJobs())) return { cleared: 0, skipped: true };
   const cookies = await chrome.cookies.getAll({ domain: ".homedepot.com" });
-  const transient = (cookies || []).filter((cookie) => HOME_DEPOT_TRANSIENT_COOKIE_PATTERN.test(cookie.name || ""));
-  await Promise.all(transient.map((cookie) => {
+  const removals = await Promise.allSettled((cookies || []).map((cookie) => {
     const protocol = cookie.secure ? "https" : "http";
     const host = String(cookie.domain || "www.homedepot.com").replace(/^\./, "");
-    return chrome.cookies.remove({ url: `${protocol}://${host}${cookie.path || "/"}`, name: cookie.name, storeId: cookie.storeId });
+    const details = { url: `${protocol}://${host}${cookie.path || "/"}`, name: cookie.name, storeId: cookie.storeId };
+    if (cookie.partitionKey) details.partitionKey = cookie.partitionKey;
+    return chrome.cookies.remove(details);
   }));
   if (chrome.browsingData?.remove) {
     await chrome.browsingData.remove(
       { origins: ["https://www.homedepot.com"] },
-      { cache: true, cacheStorage: true, serviceWorkers: true }
+      {
+        cache: true,
+        cacheStorage: true,
+        cookies: true,
+        indexedDB: true,
+        localStorage: true,
+        serviceWorkers: true,
+      }
     );
   }
-  return { cleared: transient.length, skipped: false };
+  return {
+    cleared: removals.filter((result) => result.status === "fulfilled" && result.value).length,
+    failed: removals.filter((result) => result.status === "rejected").length,
+    skipped: false,
+  };
+}
+
+async function ensureHomeDepotBatchState(batchKey) {
+  const normalizedBatchKey = String(batchKey || "").trim();
+  if (!normalizedBatchKey) return { cleared: 0, skipped: true };
+  const stored = await chrome.storage.local.get(HOME_DEPOT_LAST_CLEANED_BATCH_KEY);
+  if (stored?.[HOME_DEPOT_LAST_CLEANED_BATCH_KEY] === normalizedBatchKey) {
+    return { cleared: 0, alreadyCleaned: true, skipped: false };
+  }
+  const cleanup = await clearHomeDepotBatchState();
+  if (!cleanup.skipped) {
+    await chrome.storage.local.set({ [HOME_DEPOT_LAST_CLEANED_BATCH_KEY]: normalizedBatchKey });
+  }
+  return cleanup;
 }
 
 function reportDownloadFilename(context, originalFilename) {
@@ -132,11 +161,73 @@ async function openNextSourceRefreshJob() {
   if (await hasRunningSourceRefreshJob()) return;
   const stored = await chrome.storage.local.get(SOURCE_REFRESH_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[SOURCE_REFRESH_LAST_OPENED_KEY] || 0);
-  if (Date.now() - lastOpened < 30 * 1000) return;
+  if (Date.now() - lastOpened < SOURCE_REFRESH_MIN_GAP_MS) return;
   const job = await claimNextSourceRefreshJob();
   if (!job?.runner_url) return;
+  if (Number(job.attempts || 0) > 1) await clearHomeDepotBatchState();
+  else await ensureHomeDepotBatchState(job.batch_key);
   await chrome.storage.local.set({ [SOURCE_REFRESH_LAST_OPENED_KEY]: Date.now() });
   await openSourceRefreshRunnerUrl(job.runner_url);
+}
+
+async function hasRunningListingJob() {
+  try {
+    const jobs = await localApiJson("/listing-jobs?status=running&limit=1");
+    return Array.isArray(jobs) && jobs.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function claimNextListingJob() {
+  const response = await fetch(`${LOCAL_API}/listing-jobs/next`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`AutoZS API returned ${response.status}`);
+  return response.json();
+}
+
+function isListingJobRunnerUrl(url, jobId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const parsedJobId = parsed.searchParams.get("autozs_job_id") || new URLSearchParams(parsed.hash.replace(/^#/, "")).get("autozs_job_id");
+    return (parsed.hostname === "www.ebay.com" || parsed.hostname === "sell.ebay.com")
+      && Boolean(parsedJobId)
+      && (jobId === null || parsedJobId === String(jobId));
+  } catch {
+    return false;
+  }
+}
+
+async function openListingJobRunner(result) {
+  const job = result?.job;
+  if (!job?.assistant_url || !result?.package) return false;
+  const tabs = await chrome.tabs.query({ url: ["https://www.ebay.com/*", "https://sell.ebay.com/*"] });
+  const existing = tabs.find((tab) => isListingJobRunnerUrl(tab.url));
+  if (existing?.id) {
+    // eBay keeps parts of the listing editor in client-side state. Reusing a
+    // runner tab can therefore leave the next product attached to the previous
+    // draft even after changing the URL. A fresh tab gives every job a clean
+    // editor and prevents stale draft ownership from leaking between products.
+    await chrome.tabs.remove(existing.id);
+  }
+  await chrome.tabs.create({ url: job.assistant_url, active: false });
+  return true;
+}
+
+async function openNextListingJob() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  if (await hasRunningListingJob()) return;
+  const stored = await chrome.storage.local.get(LISTING_JOB_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[LISTING_JOB_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 75 * 1000) return;
+  const result = await claimNextListingJob();
+  if (!result?.job) return;
+  await chrome.storage.local.set({ [LISTING_JOB_LAST_OPENED_KEY]: Date.now() });
+  await openListingJobRunner(result);
 }
 
 async function claimNextEbayRevisionJob() {
@@ -371,6 +462,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
+  if (message?.type === "autozs-source-refresh-cooldown") {
+    chrome.storage.local.set({ [SOURCE_REFRESH_LAST_OPENED_KEY]: Date.now() })
+      .then(() => sendResponse({ ok: true, minimumGapMs: SOURCE_REFRESH_MIN_GAP_MS }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (
+    message?.type === "autozs-close-source-refresh-tab" &&
+    sender.tab?.id &&
+    isSourceRefreshRunnerUrl(sender.tab.url)
+  ) {
+    chrome.tabs.remove(sender.tab.id, () => sendResponse({ ok: true }));
+    return true;
+  }
   if (message?.type === "autozs-ebay-report-sync-context") {
     (async () => {
       const context = {
@@ -502,20 +607,24 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
 if (chrome.alarms) {
   chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    chrome.alarms.create(LISTING_JOB_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
     chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
     chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   });
   chrome.runtime.onStartup.addListener(() => {
     chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    chrome.alarms.create(LISTING_JOB_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
     chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
     chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm?.name === SOURCE_REFRESH_ALARM) openNextSourceRefreshJob().catch(() => {});
+    if (alarm?.name === LISTING_JOB_ALARM) openNextListingJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_ALARM) openNextEbayRevisionJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_BATCH_ALARM) openNextEbayRevisionBatch().catch(() => {});
   });
   chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+  chrome.alarms.create(LISTING_JOB_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
   chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
 }

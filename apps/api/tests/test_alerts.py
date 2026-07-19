@@ -85,6 +85,33 @@ def test_stale_alert_resolves_when_condition_clears() -> None:
     assert [item.id for item in resolved] == [alert.id]
 
 
+def test_failed_source_refresh_alert_resolves_after_newer_success() -> None:
+    db = make_session()
+    product = add_product(db, sku="SRC-NEWER-SUCCESS")
+    failed = SourceRefreshJob(
+        batch_key="refresh-failed",
+        product_id=product.id,
+        status=SourceRefreshJobStatus.failed.value,
+        message="Old Home Depot error",
+    )
+    db.add(failed)
+    db.commit()
+    alert = next(alert for alert in refresh_operational_alerts(db) if alert.source == "source-refresh")
+
+    db.add(SourceRefreshJob(
+        batch_key="refresh-success",
+        product_id=product.id,
+        status=SourceRefreshJobStatus.completed.value,
+        message="Price confirmed",
+    ))
+    db.commit()
+    active = [item for item in refresh_operational_alerts(db) if item.source == "source-refresh"]
+    resolved = [item for item in list_operational_alerts(db, status="resolved", refresh=False) if item.source == "source-refresh"]
+
+    assert active == []
+    assert [item.id for item in resolved] == [alert.id]
+
+
 def test_summary_counts_active_supplier_alert() -> None:
     db = make_session()
     product = add_product(db, sku="SRC-STOCK")

@@ -86,6 +86,7 @@ class SourceRefreshJobStatus(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class EbaySyncRunStatus(str, Enum):
@@ -366,10 +367,30 @@ class PushSubscription(Base, TimestampMixin):
     label: Mapped[str] = mapped_column(String(128), default="")
     user_agent: Mapped[str] = mapped_column(Text, default="")
     dashboard_url: Mapped[str] = mapped_column(Text, default="")
+    vapid_public_key: Mapped[str] = mapped_column(Text, default="")
+    preferences_json: Mapped[str] = mapped_column(Text, default="{}")
+    timezone: Mapped[str] = mapped_column(String(64), default="America/New_York")
+    weekly_summary_day: Mapped[int] = mapped_column(Integer, default=5)
+    weekly_summary_time: Mapped[str] = mapped_column(String(5), default="18:00")
+    weekly_summary_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     last_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_weekly_summary_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PushDeliveryReceipt(Base):
+    __tablename__ = "push_delivery_receipts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("push_subscriptions.id"), index=True)
+    event_key: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    job_type: Mapped[str] = mapped_column(String(64), default="")
+    job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="")
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class EbayRevisionJob(Base, TimestampMixin):
