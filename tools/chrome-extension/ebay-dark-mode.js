@@ -2,7 +2,7 @@
   const STYLE_ID = "autozs-ebay-dark-mode-style";
   const ROOT_CLASS = "autozs-ebay-dark-mode";
   const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
-  const DARK_MODE_BUILD = "2026-07-18-prelist-category-contrast";
+  const DARK_MODE_BUILD = "2026-07-19-myebay-flyout-contrast";
   const existingStyle = document.getElementById(STYLE_ID);
   const existingBuild = existingStyle?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayDarkModeStarted && existingBuild === DARK_MODE_BUILD) return;
@@ -37,6 +37,49 @@
       background: #171d1a !important;
       border-color: #2b352f !important;
       color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS} #gh-eb-My-o,
+    html.${ROOT_CLASS} #gh-eb-My [role="menu"],
+    html.${ROOT_CLASS} #gh [data-menu-name="my-ebay"],
+    html.${ROOT_CLASS} #gh [aria-label*="My eBay" i][role="menu"],
+    html.${ROOT_CLASS} #gh [class*="myebay" i] {
+      background: #171d1a !important;
+      background-color: #171d1a !important;
+      border-color: #35423b !important;
+      color: #edf4ef !important;
+      box-shadow: 0 18px 42px rgba(0, 0, 0, .48) !important;
+    }
+    html.${ROOT_CLASS} #gh-eb-My-o *,
+    html.${ROOT_CLASS} #gh-eb-My [role="menu"] *,
+    html.${ROOT_CLASS} #gh [data-menu-name="my-ebay"] *,
+    html.${ROOT_CLASS} #gh [aria-label*="My eBay" i][role="menu"] *,
+    html.${ROOT_CLASS} #gh [class*="myebay" i] * {
+      background: transparent !important;
+      background-color: transparent !important;
+      border-color: #2b352f !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS} #gh-eb-My-o a,
+    html.${ROOT_CLASS} #gh-eb-My-o a span,
+    html.${ROOT_CLASS} #gh-eb-My [role="menu"] a,
+    html.${ROOT_CLASS} #gh-eb-My [role="menu"] a span,
+    html.${ROOT_CLASS} #gh [data-menu-name="my-ebay"] a,
+    html.${ROOT_CLASS} #gh [data-menu-name="my-ebay"] a span,
+    html.${ROOT_CLASS} #gh [class*="myebay" i] a,
+    html.${ROOT_CLASS} #gh [class*="myebay" i] a span {
+      color: #a7e5db !important;
+    }
+    html.${ROOT_CLASS} #gh-eb-My-o li:hover,
+    html.${ROOT_CLASS} #gh-eb-My-o a:hover,
+    html.${ROOT_CLASS} #gh-eb-My [role="menu"] li:hover,
+    html.${ROOT_CLASS} #gh-eb-My [role="menu"] a:hover,
+    html.${ROOT_CLASS} #gh [data-menu-name="my-ebay"] li:hover,
+    html.${ROOT_CLASS} #gh [data-menu-name="my-ebay"] a:hover,
+    html.${ROOT_CLASS} #gh [class*="myebay" i] li:hover,
+    html.${ROOT_CLASS} #gh [class*="myebay" i] a:hover {
+      background: #25312b !important;
+      background-color: #25312b !important;
+      color: #ffffff !important;
     }
     html.${ROOT_CLASS} div,
     html.${ROOT_CLASS} li,

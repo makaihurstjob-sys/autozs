@@ -66,5 +66,9 @@ setImmediate(() => {
   assert.match(style.textContent, /autozs-ebay-prelist \[role="contentinfo"\]/);
   assert.match(style.textContent, /autozs-ebay-prelist button\[disabled\]/);
   assert.match(style.textContent, /autozs-ebay-prelist button\.fake-link/);
+  assert.match(style.textContent, /#gh-eb-My-o/);
+  assert.match(style.textContent, /data-menu-name="my-ebay"/);
+  assert.match(style.textContent, /aria-label\*="My eBay" i/);
+  assert.match(style.textContent, /#gh \[class\*="myebay" i\] a:hover/);
   console.log("eBay listing editor and pre-list dark-mode contrast tests ok");
 });
