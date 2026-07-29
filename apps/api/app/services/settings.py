@@ -153,7 +153,10 @@ def read_pricing_settings(db: Session) -> dict[str, float | bool | str]:
         "ui_theme": "system",
         "supplier_settings_json": (
             '{"home_depot":{"enabled":true,"default_quantity":1,"country":"United States",'
-            '"zipcode":"","shipping_method":"Cheapest with tracking"}}'
+            '"zipcode":"","shipping_method":"Cheapest with tracking"},'
+            '"lowes":{"enabled":false,"status":"coming_soon","default_quantity":1,"country":"United States",'
+            '"zipcode":"","shipping_method":"Cheapest with tracking","capture_enabled":false,'
+            '"automatic_price_refresh_enabled":false,"fulfillment_enabled":false}}'
         ),
         "description_template_enabled": True,
         "description_template_name": "AutoZS Home Improvement",

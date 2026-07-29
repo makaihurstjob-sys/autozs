@@ -34,6 +34,7 @@ class FulfillmentStatus(str, Enum):
     open = "open"
     in_progress = "in_progress"
     completed = "completed"
+    refunded = "refunded"
     blocked = "blocked"
 
 
@@ -41,6 +42,18 @@ class CustomerUpdateStatus(str, Enum):
     draft = "draft"
     sent = "sent"
     skipped = "skipped"
+
+
+class SupplierOrderStatus(str, Enum):
+    draft = "draft"
+    needs_review = "needs_review"
+    queued = "queued"
+    placing = "placing"
+    placed = "placed"
+    shipped = "shipped"
+    delivered = "delivered"
+    failed = "failed"
+    cancelled = "cancelled"
 
 
 class ListingJobStatus(str, Enum):
@@ -176,6 +189,8 @@ class Product(Base, TimestampMixin):
     return_risk_rate: Mapped[float] = mapped_column(Float, default=0.02)
     undercut_amount: Mapped[float] = mapped_column(Float, default=0.20)
     listing_schedule_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    capture_lease_owner: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    capture_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     supplier_products: Mapped[list["SupplierProduct"]] = relationship(back_populates="product")
     images: Mapped[list["ProductImage"]] = relationship(back_populates="product", order_by="ProductImage.sort_order")
@@ -194,7 +209,9 @@ class SupplierProduct(Base, TimestampMixin):
     last_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     last_shipping: Mapped[float] = mapped_column(Float, default=0.0)
     subscription_discount_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    minimum_order_quantity: Mapped[int] = mapped_column(Integer, default=1)
     in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
+    price_unavailable: Mapped[bool] = mapped_column(Boolean, default=False)
 
     product: Mapped[Product] = relationship(back_populates="supplier_products")
 
@@ -289,6 +306,51 @@ class EbayListingViewSnapshot(Base):
     sync_run_id: Mapped[int | None] = mapped_column(ForeignKey("ebay_sync_runs.id"), nullable=True, index=True)
     views: Mapped[int] = mapped_column(Integer)
     captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class EbayTrafficRecord(Base, TimestampMixin):
+    __tablename__ = "ebay_traffic_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_key",
+            "dimension",
+            "dimension_value",
+            "period_start",
+            "period_end",
+            name="uq_ebay_traffic_record_period",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_key: Mapped[str] = mapped_column(String(128), default="manual", index=True)
+    account_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    marketplace_id: Mapped[str] = mapped_column(String(32), default="EBAY_US")
+    dimension: Mapped[str] = mapped_column(String(32), index=True)
+    dimension_value: Mapped[str] = mapped_column(String(128), index=True)
+    listing_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    sku: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    period_end: Mapped[datetime] = mapped_column(DateTime, index=True)
+    last_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    total_impressions: Mapped[float] = mapped_column(Float, default=0.0)
+    listing_impressions: Mapped[float] = mapped_column(Float, default=0.0)
+    search_impressions: Mapped[float] = mapped_column(Float, default=0.0)
+    store_impressions: Mapped[float] = mapped_column(Float, default=0.0)
+    total_views: Mapped[float] = mapped_column(Float, default=0.0)
+    direct_views: Mapped[float] = mapped_column(Float, default=0.0)
+    off_ebay_views: Mapped[float] = mapped_column(Float, default=0.0)
+    other_ebay_views: Mapped[float] = mapped_column(Float, default=0.0)
+    search_views: Mapped[float] = mapped_column(Float, default=0.0)
+    store_views: Mapped[float] = mapped_column(Float, default=0.0)
+    click_through_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    sales_conversion_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    transactions: Mapped[float] = mapped_column(Float, default=0.0)
+    promoted_impressions: Mapped[float | None] = mapped_column(Float, nullable=True)
+    promoted_views: Mapped[float | None] = mapped_column(Float, nullable=True)
+    promoted_transactions: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sales_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    raw_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class WorkerNode(Base, TimestampMixin):
@@ -520,6 +582,7 @@ class Order(Base, TimestampMixin):
     ebay_order_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     account_id: Mapped[str] = mapped_column(String(128), default="sandbox")
     buyer_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    recipient_name: Mapped[str] = mapped_column(String(256), default="")
     status: Mapped[str] = mapped_column(String(64), default="imported")
     ship_by: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     total: Mapped[float] = mapped_column(Float, default=0.0)
@@ -527,6 +590,7 @@ class Order(Base, TimestampMixin):
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order")
     fulfillment_tasks: Mapped[list["FulfillmentTask"]] = relationship(back_populates="order")
     customer_updates: Mapped[list["CustomerUpdate"]] = relationship(back_populates="order")
+    supplier_orders: Mapped[list["SupplierOrder"]] = relationship(back_populates="order")
 
 
 class OrderItem(Base, TimestampMixin):
@@ -569,3 +633,217 @@ class CustomerUpdate(Base, TimestampMixin):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     order: Mapped[Order] = relationship(back_populates="customer_updates")
+
+
+class CustomerConversation(Base, TimestampMixin):
+    __tablename__ = "customer_conversations"
+    __table_args__ = (
+        UniqueConstraint("account_id", "ebay_thread_id", name="uq_customer_conversation_account_thread"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    ebay_thread_id: Mapped[str] = mapped_column(String(256))
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True, index=True)
+    buyer_username: Mapped[str] = mapped_column(String(128), default="")
+    subject: Mapped[str] = mapped_column(String(512), default="")
+    status: Mapped[str] = mapped_column(String(32), default="open", index=True)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    order: Mapped[Order | None] = relationship()
+    messages: Mapped[list["CustomerMessage"]] = relationship(back_populates="conversation")
+
+    @property
+    def buyer_first_name(self) -> str:
+        name = " ".join(str(self.order.recipient_name if self.order else "").strip().split())
+        if not name:
+            return ""
+        parts = name.split()
+        while len(parts) > 1 and parts[0].rstrip(".").lower() in {"mr", "mrs", "ms", "miss", "dr"}:
+            parts.pop(0)
+        return parts[0].strip(" ,.")
+
+
+class CustomerMessage(Base, TimestampMixin):
+    __tablename__ = "customer_messages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "external_message_id", name="uq_customer_message_conversation_external"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("customer_conversations.id"), index=True)
+    external_message_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    direction: Mapped[str] = mapped_column(String(16), default="inbound", index=True)
+    origin: Mapped[str] = mapped_column(String(32), default="buyer", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="imported", index=True)
+    subject: Mapped[str] = mapped_column(String(512), default="")
+    body: Mapped[str] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    conversation: Mapped[CustomerConversation] = relationship(back_populates="messages")
+
+
+class GiftCard(Base, TimestampMixin):
+    __tablename__ = "gift_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier: Mapped[str] = mapped_column(String(64), default="home_depot", index=True)
+    label: Mapped[str] = mapped_column(String(128))
+    last_four: Mapped[str] = mapped_column(String(4), default="")
+    face_value: Mapped[float] = mapped_column(Float, default=0.0)
+    acquisition_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    current_balance: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    secret_ref: Mapped[str] = mapped_column(String(256), default="")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    ledger_entries: Mapped[list["GiftCardLedgerEntry"]] = relationship(back_populates="gift_card")
+    supplier_orders: Mapped[list["SupplierOrder"]] = relationship(back_populates="gift_card")
+
+
+class SupplierOrder(Base, TimestampMixin):
+    __tablename__ = "supplier_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    gift_card_id: Mapped[int | None] = mapped_column(ForeignKey("gift_cards.id"), nullable=True, index=True)
+    supplier: Mapped[str] = mapped_column(String(64), default="home_depot", index=True)
+    status: Mapped[str] = mapped_column(String(32), default=SupplierOrderStatus.draft.value, index=True)
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    external_order_id: Mapped[str] = mapped_column(String(128), default="")
+    payment_method: Mapped[str] = mapped_column(String(32), default="credit_card")
+    item_subtotal: Mapped[float] = mapped_column(Float, default=0.0)
+    sales_tax: Mapped[float] = mapped_column(Float, default=0.0)
+    shipping_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    gift_card_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    card_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    total: Mapped[float] = mapped_column(Float, default=0.0)
+    tracking_number: Mapped[str] = mapped_column(String(256), default="")
+    carrier: Mapped[str] = mapped_column(String(128), default="")
+    estimated_delivery: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approval_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    approved_total: Mapped[float] = mapped_column(Float, default=0.0)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    checkout_token: Mapped[str] = mapped_column(String(128), default="")
+    placed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    shipped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recipient_name: Mapped[str] = mapped_column(String(256), default="")
+    address_line1: Mapped[str] = mapped_column(String(256), default="")
+    address_line2: Mapped[str] = mapped_column(String(256), default="")
+    city: Mapped[str] = mapped_column(String(128), default="")
+    state: Mapped[str] = mapped_column(String(64), default="")
+    postal_code: Mapped[str] = mapped_column(String(32), default="")
+    phone: Mapped[str] = mapped_column(String(64), default="")
+
+    order: Mapped[Order] = relationship(back_populates="supplier_orders")
+    gift_card: Mapped[GiftCard | None] = relationship(back_populates="supplier_orders")
+    items: Mapped[list["SupplierOrderItem"]] = relationship(back_populates="supplier_order")
+    ledger_entries: Mapped[list["GiftCardLedgerEntry"]] = relationship(back_populates="supplier_order")
+
+
+class SupplierOrderItem(Base, TimestampMixin):
+    __tablename__ = "supplier_order_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_order_id: Mapped[int] = mapped_column(ForeignKey("supplier_orders.id"), index=True)
+    order_item_id: Mapped[int | None] = mapped_column(ForeignKey("order_items.id"), nullable=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(512))
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price: Mapped[float] = mapped_column(Float, default=0.0)
+    source_url: Mapped[str] = mapped_column(Text, default="")
+
+    supplier_order: Mapped[SupplierOrder] = relationship(back_populates="items")
+
+
+class GiftCardLedgerEntry(Base, TimestampMixin):
+    __tablename__ = "gift_card_ledger_entries"
+    __table_args__ = (
+        UniqueConstraint("gift_card_id", "supplier_order_id", "event", name="uq_gift_card_order_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    gift_card_id: Mapped[int] = mapped_column(ForeignKey("gift_cards.id"), index=True)
+    supplier_order_id: Mapped[int | None] = mapped_column(ForeignKey("supplier_orders.id"), nullable=True, index=True)
+    event: Mapped[str] = mapped_column(String(64), index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    balance_after: Mapped[float] = mapped_column(Float, default=0.0)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    gift_card: Mapped[GiftCard] = relationship(back_populates="ledger_entries")
+    supplier_order: Mapped[SupplierOrder | None] = relationship(back_populates="ledger_entries")
+
+
+class FinancialAccount(Base, TimestampMixin):
+    __tablename__ = "financial_accounts"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_financial_account_provider_external"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    external_id: Mapped[str] = mapped_column(String(256))
+    account_type: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    mask: Mapped[str] = mapped_column(String(8), default="")
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    current_balance: Mapped[float] = mapped_column(Float, default=0.0)
+    available_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    held_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_release_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="connected", index=True)
+    connection_ref: Mapped[str] = mapped_column(String(256), default="")
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    snapshots: Mapped[list["BalanceSnapshot"]] = relationship(back_populates="account")
+
+
+class BalanceSnapshot(Base, TimestampMixin):
+    __tablename__ = "balance_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    financial_account_id: Mapped[int] = mapped_column(ForeignKey("financial_accounts.id"), index=True)
+    current_balance: Mapped[float] = mapped_column(Float, default=0.0)
+    available_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    held_balance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    account: Mapped[FinancialAccount] = relationship(back_populates="snapshots")
+
+
+class SubscriptionExpense(Base, TimestampMixin):
+    __tablename__ = "subscription_expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(256))
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    cadence: Mapped[str] = mapped_column(String(16), default="monthly")
+    next_charge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    payment_account_id: Mapped[int | None] = mapped_column(ForeignKey("financial_accounts.id"), nullable=True)
+    category: Mapped[str] = mapped_column(String(64), default="software")
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class FinanceEntry(Base, TimestampMixin):
+    __tablename__ = "finance_entries"
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_finance_entry_provider_external"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), default="manual")
+    external_id: Mapped[str] = mapped_column(String(256))
+    financial_account_id: Mapped[int | None] = mapped_column(ForeignKey("financial_accounts.id"), nullable=True)
+    entry_type: Mapped[str] = mapped_column(String(32), index=True)
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    description: Mapped[str] = mapped_column(String(512), default="")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)

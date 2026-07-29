@@ -46,6 +46,65 @@ async function runNativePcInputTest() {
           }),
         };
       }
+      if (url.endsWith("/products/capture-queue/claim")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            product_id: 44,
+            source_url: "https://www.homedepot.com/p/Test-Capture/123456",
+          }),
+        };
+      }
+      if (url.endsWith("/supplier-orders/next")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 14,
+            status: "placing",
+            checkout_token: "checkout-token-14",
+            source_url: "https://www.homedepot.com/p/AutoZS-Checkout-Test/123456",
+            items: [{
+              source_url: "https://www.homedepot.com/p/AutoZS-Checkout-Test/123456",
+              unit_price: 20,
+              quantity: 1,
+            }],
+          }),
+        };
+      }
+      if (url.endsWith("/customer-service/messages/next")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 5,
+            conversation_id: 1,
+            subject: "Important order update",
+            body: "English and Spanish refund message",
+            status: "sending",
+          }),
+        };
+      }
+      if (url.endsWith("/customer-service/conversations")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ([{
+            id: 1,
+            ebay_thread_id: "order:13-14947-26719",
+            buyer_username: "buyer-user",
+          }]),
+        };
+      }
+      if (url === "https://www.ebay.com/traffic.csv") {
+        const bytes = Buffer.from("Item ID,Listing title,Impressions,eBay views\n800123456789,Test listing,42,3\n", "utf8");
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+        };
+      }
       return {
         ok: true,
         status: 200,
@@ -107,6 +166,10 @@ async function runNativePcInputTest() {
       },
     },
     navigator: { platform: "Win32" },
+    setTimeout: (callback) => {
+      callback();
+      return 1;
+    },
   };
 
   vm.createContext(context);
@@ -145,6 +208,18 @@ async function runNativePcInputTest() {
   if (reportFilename !== "AutoZS/ebay-active-listings-main-store-run-42.csv") {
     throw new Error(`Unexpected tagged report filename: ${reportFilename}`);
   }
+  const trafficFilename = context.reportDownloadFilename(
+    { runId: 43, accountKey: "Main Store", reportType: "traffic" },
+    "active-listings-traffic.csv"
+  );
+  if (trafficFilename !== "AutoZS/ebay-traffic-main-store-run-43.csv") {
+    throw new Error(`Unexpected tagged traffic filename: ${trafficFilename}`);
+  }
+  await context.openNextProductCapture();
+  const captureTab = createdTabs.find((tab) => /autozs_capture_product_id=44/.test(tab.url || ""));
+  if (!captureTab || captureTab.active !== false || !/ea_auto_import=1/.test(captureTab.url)) {
+    throw new Error(`Expected a background Home Depot capture runner, got ${JSON.stringify(createdTabs)}`);
+  }
 
   await context.uploadRevisionResultDownload(
     { batchId: 3, accountKey: "main-store", filename: "result.csv" },
@@ -155,6 +230,16 @@ async function runNativePcInputTest() {
   const directPayload = JSON.parse(directImport.options.body);
   if (directPayload.filename !== "result.csv" || !directPayload.result_base64) {
     throw new Error(`Unexpected direct revision payload: ${JSON.stringify(directPayload)}`);
+  }
+  await context.uploadTrafficReportDownload(
+    { runId: 43, accountKey: "main-store", filename: "traffic.csv" },
+    { finalUrl: "https://www.ebay.com/traffic.csv", filename: "/Downloads/AutoZS/traffic.csv" }
+  );
+  const trafficImport = fetched.find((request) => request.url.endsWith("/stats/traffic/import-file"));
+  if (!trafficImport) throw new Error(`Expected direct traffic report import, got ${JSON.stringify(fetched)}`);
+  const trafficPayload = JSON.parse(trafficImport.options.body);
+  if (trafficPayload.run_id !== 43 || trafficPayload.account_key !== "main-store" || !trafficPayload.report_base64) {
+    throw new Error(`Unexpected direct traffic payload: ${JSON.stringify(trafficPayload)}`);
   }
 
   let closeResponse = null;
@@ -271,6 +356,51 @@ async function runNativePcInputTest() {
   });
   if (closedTabs[closedBeforeFreshListingRunner] !== 44 || createdTabs.length !== 1) {
     throw new Error(`Expected a stale listing runner to close before opening a fresh tab, got ${JSON.stringify({ closedTabs, createdTabs })}`);
+  }
+  tabQueryResults = [];
+
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsWorkerMode = "operations";
+  storage.autozsCustomerMessageLastOpened = 0;
+  await context.openNextCustomerMessage();
+  if (!fetched.some((request) => request.url.endsWith("/customer-service/messages/next") && request.options.method === "POST")) {
+    throw new Error(`Expected customer-message queue claim, got ${JSON.stringify(fetched)}`);
+  }
+  if (
+    createdTabs.length !== 1 ||
+    !context.isCustomerMessageRunnerUrl(createdTabs[0].url, 5) ||
+    !createdTabs[0].active
+  ) {
+    throw new Error(`Expected one active eBay customer-message tab, got ${JSON.stringify(createdTabs)}`);
+  }
+  const messageUrl = new URL(createdTabs[0].url);
+  if (messageUrl.searchParams.get("srn") !== "13-14947-26719") {
+    throw new Error(`Expected the eBay order number in the message runner URL, got ${createdTabs[0].url}`);
+  }
+  if (storage.autozsCustomerMessagePayloads?.["5"]?.message?.body !== "English and Spanish refund message") {
+    throw new Error(`Expected queued message payload in extension storage, got ${JSON.stringify(storage.autozsCustomerMessagePayloads)}`);
+  }
+  tabQueryResults = [];
+
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsWorkerMode = "operations";
+  storage.autozsSupplierOrderLastOpened = 0;
+  await context.openNextSupplierOrder();
+  if (!fetched.some((request) => request.url.endsWith("/supplier-orders/next") && request.options.method === "POST")) {
+    throw new Error(`Expected supplier-order queue claim, got ${JSON.stringify(fetched)}`);
+  }
+  if (createdTabs.length !== 1 || !context.isSupplierOrderRunnerUrl(createdTabs[0].url, 14)) {
+    throw new Error(`Expected one guarded Home Depot checkout tab, got ${JSON.stringify(createdTabs)}`);
+  }
+  const checkoutUrl = new URL(createdTabs[0].url);
+  if (checkoutUrl.searchParams.get("autozs_checkout_canary") !== "1") {
+    throw new Error(`Expected checkout canary marker, got ${createdTabs[0].url}`);
+  }
+  const tokens = storage.autozsSupplierCheckoutTokens || {};
+  if (tokens["14"]?.token !== "checkout-token-14") {
+    throw new Error(`Expected short-lived checkout token to be retained by the service worker, got ${JSON.stringify(tokens)}`);
   }
   tabQueryResults = [];
 

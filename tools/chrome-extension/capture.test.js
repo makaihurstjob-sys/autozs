@@ -3,7 +3,14 @@ const vm = require("vm");
 
 const source = fs.readFileSync(`${__dirname}/capture.js`, "utf8");
 
-function runCapture(visibleText, { offerPrice = "17.97", productName = "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count", standardPrice = null } = {}) {
+function runCapture(visibleText, {
+  offerPrice = "17.97",
+  productName = "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count",
+  standardPrice = null,
+  href = "https://www.homedepot.com/p/HDX-13-Gallon-Reinforced-Top-Drawstring-Fresh-Scented-Tall-Kitchen-Trash-Bags-with-20-PCR-200-Count-HDR13XHFN200W-F/331012931?ea_auto_import=1&auto_download_test=1&MERCH=REC",
+  hostname = "www.homedepot.com",
+  pathname = "/p/HDX-13-Gallon-Reinforced-Top-Drawstring-Fresh-Scented-Tall-Kitchen-Trash-Bags-with-20-PCR-200-Count-HDR13XHFN200W-F/331012931",
+} = {}) {
   const context = {
     console,
     URL,
@@ -11,9 +18,9 @@ function runCapture(visibleText, { offerPrice = "17.97", productName = "HDX 13 G
       matchMedia: () => ({ matches: false }),
     },
     location: {
-      href: "https://www.homedepot.com/p/HDX-13-Gallon-Reinforced-Top-Drawstring-Fresh-Scented-Tall-Kitchen-Trash-Bags-with-20-PCR-200-Count-HDR13XHFN200W-F/331012931?ea_auto_import=1&auto_download_test=1&MERCH=REC",
-      hostname: "www.homedepot.com",
-      pathname: "/p/HDX-13-Gallon-Reinforced-Top-Drawstring-Fresh-Scented-Tall-Kitchen-Trash-Bags-with-20-PCR-200-Count-HDR13XHFN200W-F/331012931",
+      href,
+      hostname,
+      pathname,
     },
     document: {
       body: { innerText: visibleText },
@@ -66,8 +73,36 @@ if (freeShippingWithSubscription.subscription_discount_percent !== 5) {
 if (freeShippingWithSubscription.source_url.includes("ea_auto_import") || freeShippingWithSubscription.source_url.includes("auto_download_test")) {
   throw new Error(`Expected internal params stripped from source URL, got ${freeShippingWithSubscription.source_url}`);
 }
-if (!freeShippingWithSubscription.source_url.includes("MERCH=REC")) {
-  throw new Error(`Expected normal Home Depot params to remain, got ${freeShippingWithSubscription.source_url}`);
+if (freeShippingWithSubscription.source_url.includes("?") || freeShippingWithSubscription.source_url.includes("#")) {
+  throw new Error(`Expected Home Depot product tracking parameters to be stripped, got ${freeShippingWithSubscription.source_url}`);
+}
+
+const recommendationOnlyPrice = runCapture(
+  `
+Milwaukee M18 PACKOUT Wet/Dry Vacuum
+This product is currently unavailable.
+Customers also viewed
+Milwaukee M18 replacement kit
+$249.00
+`,
+  { offerPrice: null, productName: "Milwaukee M18 PACKOUT Wet/Dry Vacuum" }
+);
+if (recommendationOnlyPrice.source_price !== null) {
+  throw new Error(`Expected recommendation-only price to be rejected, got ${recommendationOnlyPrice.source_price}`);
+}
+
+let rejectedLowesScaffold = false;
+try {
+  runCapture("Lowe's sample product\n$19.98", {
+    hostname: "www.lowes.com",
+    pathname: "/pd/Project-Source-Sample/5012345678",
+    href: "https://www.lowes.com/pd/Project-Source-Sample/5012345678?cm_mmc=tracking",
+  });
+} catch (error) {
+  rejectedLowesScaffold = /not enabled yet/i.test(error.message);
+}
+if (!rejectedLowesScaffold) {
+  throw new Error("Expected Lowe's browser capture to remain disabled while scaffolded.");
 }
 
 let rejectedHomeDepotErrorPage = false;
@@ -84,6 +119,65 @@ Need Help? Visit our Customer Service Center
 }
 if (!rejectedHomeDepotErrorPage) {
   throw new Error("Expected Home Depot error pages to be rejected before import.");
+}
+if (freeShippingWithSubscription.minimum_order_quantity !== 1) {
+  throw new Error(`Expected ordinary products to default to minimum quantity 1, got ${freeShippingWithSubscription.minimum_order_quantity}`);
+}
+
+const minimumOrderTwo = runCapture(
+  `
+Ornamental Mouldings Unfinished Natural Ash Wood Board
+$14.19
+Minimum Order Quantity: 2
+Free Delivery
+`,
+  { offerPrice: "14.19", productName: "Ornamental Mouldings Unfinished Natural Ash Wood Board" }
+);
+if (minimumOrderTwo.source_price !== 14.19) {
+  throw new Error(`Expected per-unit source price 14.19, got ${minimumOrderTwo.source_price}`);
+}
+if (minimumOrderTwo.minimum_order_quantity !== 2) {
+  throw new Error(`Expected minimum order quantity 2, got ${minimumOrderTwo.minimum_order_quantity}`);
+}
+
+const flooringCasePrice = runCapture(
+  `
+Mohawk Elite - Azure Edge - Blue Commercial 24 x 24 in. Glue-Down Carpet Tile Square (72 sq. ft.)
+Covers 72 sq. ft.
+$2.67
+/sq. ft.
+($192.24 /case)
+Free Delivery
+`,
+  {
+    offerPrice: "2.67",
+    productName: "Mohawk Elite - Azure Edge - Blue Commercial 24 x 24 in. Glue-Down Carpet Tile Square (72 sq. ft.)",
+  }
+);
+if (flooringCasePrice.source_price !== 192.24) {
+  throw new Error(`Expected purchasable case price 192.24 instead of square-foot rate, got ${flooringCasePrice.source_price}`);
+}
+if (flooringCasePrice.capture_debug.purchase_price_basis !== "explicit-package-total") {
+  throw new Error(`Expected explicit package-price basis, got ${JSON.stringify(flooringCasePrice.capture_debug)}`);
+}
+if (flooringCasePrice.source_purchase_unit !== "case" || flooringCasePrice.source_bulk_package !== true) {
+  throw new Error(`Expected case products to be blocked, got ${JSON.stringify(flooringCasePrice.capture_debug)}`);
+}
+
+const computedFlooringCasePrice = runCapture(
+  `
+Mohawk Commercial Carpet Tile Square
+Covers 72 sq. ft.
+$2.67 /sq. ft.
+Free Delivery
+`,
+  { offerPrice: "2.67", productName: "Mohawk Commercial Carpet Tile Square" }
+);
+if (computedFlooringCasePrice.source_price !== 192.24) {
+  throw new Error(`Expected computed 72 sq. ft. case price 192.24, got ${computedFlooringCasePrice.source_price}`);
+}
+if (computedFlooringCasePrice.source_purchase_unit !== "coverage" || computedFlooringCasePrice.source_bulk_package !== true) {
+  throw new Error(`Expected coverage-priced products to be blocked, got ${JSON.stringify(computedFlooringCasePrice.capture_debug)}`);
 }
 
 const normalPageWithRefreshCopy = runCapture(`
@@ -135,6 +229,93 @@ $2.99
 
 if (freeStandardDeliveryBeatsOrderThreshold.detected_shipping !== 0) {
   throw new Error(`Expected normal free delivery instead of the $25 order threshold, got ${freeStandardDeliveryBeatsOrderThreshold.detected_shipping}`);
+}
+
+const freeStandardDeliveryBeatsThreeHourFee = runCapture(`
+RIDGID 9-Amp 7 in. Blade Corded Wet Tile Saw with Stand R4031S
+$369.00
+Delivery
+Tomorrow
+FREE
+Get It Faster
+Get it within 3 hours
+$7.00
+`);
+
+if (freeStandardDeliveryBeatsThreeHourFee.detected_shipping !== 0) {
+  throw new Error(`Expected normal free delivery instead of the three-hour $7 fee, got ${freeStandardDeliveryBeatsThreeHourFee.detected_shipping}`);
+}
+
+const threeHourFeeIsNotStandardShipping = runCapture(`
+ROBERTS 630 sq. ft. Underlayment
+$165.41
+Get It Faster
+Delivery within 3 hours
+$7.00
+`);
+
+if (threeHourFeeIsNotStandardShipping.detected_shipping !== null) {
+  throw new Error(`Expected an isolated accelerated-delivery fee to be ignored, got ${threeHourFeeIsNotStandardShipping.detected_shipping}`);
+}
+
+const unavailableDeliveryDoesNotBorrowLaterPrice = runCapture(`
+Vigoro 6 lb. Organic Rose and Flower Plant Food 4-7-3
+$10.97
+Pickup at Coral Springs
+Limited Stock
+Delivery
+Unavailable
+Check Nearby Stores
+Frequently Bought Together
+$15.65
+`);
+
+const plainOutOfStockIsUnavailable = runCapture(`
+Back to the Roots Organic Bulk Potting Mix Soil 4-Pack
+$29.08
+Bag Capacity/Dry Volume (qt): 120 qt
+Out of Stock
+Receive an email when this item is back in stock.
+Notify Me
+`);
+if (plainOutOfStockIsUnavailable.source_in_stock !== false) {
+  throw new Error(
+    `Expected a plain Out of Stock heading to mark the source unavailable, got ${plainOutOfStockIsUnavailable.source_in_stock}`
+  );
+}
+if (plainOutOfStockIsUnavailable.detected_shipping !== null) {
+  throw new Error(
+    `Expected an out-of-stock item to have no shipping quote, got ${plainOutOfStockIsUnavailable.detected_shipping}`
+  );
+}
+
+const regionRestrictedItemIsUnavailable = runCapture(`
+FOXFARM Ocean Forest 40 lbs. 6.3-6.8 pH Plant Garden Potting Soil Mix
+$38.35
+Not Available in Florida
+Please change your store or ZIP Code to purchase
+Free & Easy Returns In Store or Online
+`);
+if (regionRestrictedItemIsUnavailable.source_in_stock !== false) {
+  throw new Error(
+    `Expected a region-restricted item to be unavailable, got ${regionRestrictedItemIsUnavailable.source_in_stock}`
+  );
+}
+if (regionRestrictedItemIsUnavailable.detected_shipping !== null) {
+  throw new Error(
+    `Expected a region-restricted item to have no shipping quote, got ${regionRestrictedItemIsUnavailable.detected_shipping}`
+  );
+}
+
+if (unavailableDeliveryDoesNotBorrowLaterPrice.detected_shipping !== null) {
+  throw new Error(
+    `Expected unavailable delivery to have no shipping price, got ${unavailableDeliveryDoesNotBorrowLaterPrice.detected_shipping}`
+  );
+}
+if (unavailableDeliveryDoesNotBorrowLaterPrice.source_in_stock !== false) {
+  throw new Error(
+    `Expected unavailable delivery to mark the source unavailable, got ${unavailableDeliveryDoesNotBorrowLaterPrice.source_in_stock}`
+  );
 }
 
 const specialBuy = runCapture(`
@@ -425,6 +606,16 @@ function runEbayUsernameDetectionTest() {
   vm.runInContext(`${source}; result = detectEbaySignedInUsernameFromPage();`, genericUserLabelContext);
   if (genericUserLabelContext.result !== "") {
     throw new Error(`Expected generic eBay page label Stand to be ignored, got ${genericUserLabelContext.result}`);
+  }
+  genericUserLabelContext.document.body.innerText = "Search results\n2000W\nSponsored";
+  genericUserLabelContext.document.querySelectorAll = () => [{
+    id: "",
+    textContent: "2000W",
+    getAttribute: (name) => name === "data-testid" ? "user-facing-model" : name === "aria-label" ? "2000W" : "",
+  }];
+  vm.runInContext(`result = detectEbaySignedInUsernameFromPage();`, genericUserLabelContext);
+  if (genericUserLabelContext.result !== "") {
+    throw new Error(`Expected generic product model 2000W to be ignored as a username, got ${genericUserLabelContext.result}`);
   }
   genericUserLabelContext.document.body.innerText = "Package weight\nkg\nItem details";
   genericUserLabelContext.document.querySelectorAll = () => [{

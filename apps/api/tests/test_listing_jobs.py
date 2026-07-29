@@ -586,6 +586,38 @@ def test_generic_live_confirmation_does_not_override_future_planned_schedule(cli
     assert listing["renews_at"] is None
 
 
+def test_completed_job_reuses_listing_when_browser_account_label_changes(client) -> None:
+    product = create_ready_product(client, "Account Label Reconciliation", "987654323")
+    schedule_at = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "main-store",
+            "action": "publish",
+            "listing_schedule_at": schedule_at,
+        },
+    ).json()[0]
+
+    client.post(
+        f"/products/{product['id']}/mark-listed",
+        json={"listing_id": "800262913583", "account_id": "manual", "status": "scheduled"},
+    )
+    client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "completed",
+            "listing_id": "800262913583",
+            "message": "Scheduled on eBay as item 800262913583.",
+        },
+    )
+
+    listings = client.get("/ebay/listings").json()
+    assert len(listings) == 1
+    assert listings[0]["listing_id"] == "800262913583"
+    assert listings[0]["account_id"] == "main-store"
+
+
 def test_product_listing_schedule_can_be_saved_and_cleared(client) -> None:
     product = create_ready_product(client, "Per Product Listing Schedule")
     schedule_at = "2026-07-01T08:00:00"
@@ -631,3 +663,47 @@ def test_bulk_listing_jobs_inherit_each_product_schedule(client) -> None:
 
     assert schedules[first["id"]].startswith(friday)
     assert schedules[second["id"]].startswith(saturday)
+
+
+def test_unavailable_supplier_cannot_be_enqueued_for_listing(client) -> None:
+    product = create_ready_product(client, "Unavailable Delivery Product")
+    client.patch(
+        f"/products/{product['id']}/capture",
+        json={"source_price": 12.0, "source_in_stock": False},
+    ).raise_for_status()
+
+    response = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "main-store",
+            "action": "publish",
+            "listing_schedule_at": "2026-08-02T19:00:00Z",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No matching products found"
+
+
+def test_queued_listing_is_blocked_if_supplier_becomes_unavailable(client) -> None:
+    product = create_ready_product(client, "Availability Changed After Queue")
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "main-store",
+            "action": "publish",
+            "scheduled_for": "2099-08-02T19:00:00Z",
+            "listing_schedule_at": "2099-08-02T19:00:00Z",
+        },
+    ).json()[0]
+    client.patch(
+        f"/products/{product['id']}/capture",
+        json={"source_price": 12.0, "source_in_stock": False},
+    ).raise_for_status()
+
+    started = client.post(f"/listing-jobs/{job['id']}/run").json()["job"]
+
+    assert started["status"] == "needs_review"
+    assert "delivery is unavailable" in started["message"]

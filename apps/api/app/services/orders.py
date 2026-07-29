@@ -1,8 +1,25 @@
+import csv
 from datetime import datetime, timedelta
+from io import BytesIO, StringIO, TextIOWrapper
+import re
+from zipfile import BadZipFile, ZipFile
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain import FulfillmentTask, Order, OrderItem, Product, ProductStatus
+from app.models.domain import (
+    EbayListing,
+    EbaySyncRun,
+    EbaySyncRunStatus,
+    FulfillmentTask,
+    ListingJob,
+    ListingJobStatus,
+    Order,
+    OrderItem,
+    Product,
+    ProductStatus,
+)
+from app.services.customer_service import ensure_order_thank_you_draft
 
 
 def seed_mock_order(db: Session) -> Order:
@@ -50,3 +67,376 @@ def _first_active_product(db: Session) -> Product | None:
         .order_by(Product.created_at.asc())
         .first()
     )
+
+
+def parse_ebay_order_report(content: bytes, filename: str = "ebay-orders.csv") -> list[dict[str, str]]:
+    if filename.lower().endswith(".zip"):
+        try:
+            with ZipFile(BytesIO(content)) as archive:
+                names = [name for name in archive.namelist() if name.lower().endswith((".csv", ".tsv", ".txt"))]
+                if not names:
+                    raise ValueError("The eBay Orders ZIP did not contain a CSV file.")
+                with archive.open(names[0]) as source:
+                    text = TextIOWrapper(source, encoding="utf-8-sig", errors="replace").read()
+        except BadZipFile as exc:
+            raise ValueError("The downloaded eBay Orders ZIP is invalid.") from exc
+    else:
+        text = content.decode("utf-8-sig", errors="replace")
+    if not text.strip():
+        raise ValueError("The downloaded eBay Orders report is empty.")
+    lines = text.splitlines()
+    header_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if "order number" in line.lower() and "item number" in line.lower()
+        ),
+        None,
+    )
+    if header_index is None:
+        raise ValueError("The eBay Orders report did not contain its Order Number header.")
+    text = "\n".join(lines[header_index:])
+    try:
+        dialect = csv.Sniffer().sniff(text[:8192], delimiters=",\t")
+    except csv.Error:
+        dialect = csv.excel_tab if "\t" in text.splitlines()[0] else csv.excel
+    rows = [
+        {str(key or "").strip(): str(value or "").strip() for key, value in row.items() if key is not None}
+        for row in csv.DictReader(StringIO(text), dialect=dialect)
+    ]
+    rows = [row for row in rows if any(row.values())]
+    if not rows:
+        raise ValueError("The eBay Orders report did not contain any order rows.")
+    return rows
+
+
+def import_ebay_order_report_rows(
+    db: Session,
+    *,
+    rows: list[dict[str, str]],
+    account_key: str,
+    run_id: int | None = None,
+    filename: str | None = None,
+) -> tuple[int, int, int]:
+    normalized = [_normalize_order_row(row) for row in rows]
+    normalized = [row for row in normalized if row["order_id"] and (row["item_number"] or row["title"])]
+    if not normalized:
+        raise ValueError("No Order Number values were found in the eBay Orders report.")
+
+    grouped: dict[str, list[dict]] = {}
+    for row in normalized:
+        grouped.setdefault(row["order_id"], []).append(row)
+
+    upserted = 0
+    unmatched = 0
+    new_orders: list[Order] = []
+    for ebay_order_id, order_rows in grouped.items():
+        order = db.scalar(select(Order).where(Order.ebay_order_id == ebay_order_id))
+        is_new = order is None
+        if order is None:
+            order = Order(ebay_order_id=ebay_order_id, account_id=account_key)
+            db.add(order)
+            db.flush()
+        order.account_id = account_key
+        order.buyer_username = next((row["buyer_username"] for row in order_rows if row["buyer_username"]), None)
+        reported_recipient_name = next(
+            (row["recipient_name"] for row in order_rows if row["recipient_name"]),
+            "",
+        )
+        if reported_recipient_name:
+            order.recipient_name = reported_recipient_name
+        order.ship_by = _minimum_date(row["ship_by"] for row in order_rows)
+        order.status = _order_status(order_rows)
+        reported_totals = [row["total"] for row in order_rows if row["total"] is not None]
+        order.total = max(reported_totals) if reported_totals else round(
+            sum((row["sold_for"] or 0.0) * row["quantity"] + (row["shipping"] or 0.0) for row in order_rows),
+            2,
+        )
+
+        db.query(OrderItem).filter(OrderItem.order_id == order.id).delete(synchronize_session=False)
+        for row in order_rows:
+            product = _match_order_product(db, account_key=account_key, row=row)
+            if product is None:
+                unmatched += 1
+            elif is_new and order.status != "cancelled":
+                _queue_automatic_restock(
+                    db,
+                    product=product,
+                    account_key=account_key,
+                    item_number=row["item_number"],
+                    quantity=row["quantity"],
+                )
+            db.add(
+                OrderItem(
+                    order_id=order.id,
+                    product_id=product.id if product else None,
+                    title=row["title"] or (product.title if product else f"eBay item {row['item_number'] or 'unknown'}"),
+                    quantity=row["quantity"],
+                    sale_price=row["sold_for"] or 0.0,
+                    expected_profit=_expected_order_item_profit(product, row),
+                )
+            )
+
+        if is_new:
+            new_orders.append(order)
+            task_status = "completed" if order.status == "shipped" else "blocked" if order.status == "cancelled" else "open"
+            note = (
+                "eBay reports this order as shipped."
+                if task_status == "completed"
+                else "Do not fulfill: eBay reports this order as cancelled."
+                if task_status == "blocked"
+                else "New eBay sale detected. Review supplier availability and place the supplier order."
+            )
+            db.add(
+                FulfillmentTask(
+                    order_id=order.id,
+                    status=task_status,
+                    note=note,
+                    exception_reason="Cancelled on eBay" if task_status == "blocked" else None,
+                )
+            )
+        elif order.status == "shipped" and order.fulfillment_tasks:
+            order.fulfillment_tasks[0].status = "completed"
+            order.fulfillment_tasks[0].note = "eBay reports this order as shipped."
+        upserted += 1
+
+    db.flush()
+    for order in new_orders:
+        db.expire(order, ["items"])
+        ensure_order_thank_you_draft(db, order)
+
+    run = db.get(EbaySyncRun, run_id) if run_id else None
+    if run is not None:
+        run.status = EbaySyncRunStatus.completed.value
+        run.phase = "completed"
+        run.completed_at = datetime.utcnow()
+        run.report_filename = filename or run.report_filename
+        run.orders_seen = len(grouped)
+        run.orders_upserted = upserted
+        run.message = (
+            f"Imported {upserted} eBay order{'s' if upserted != 1 else ''}. "
+            f"{unmatched} line item{'s' if unmatched != 1 else ''} could not be matched to an AutoZS product."
+        )
+    db.commit()
+    return len(grouped), upserted, unmatched
+
+
+def _queue_automatic_restock(
+    db: Session,
+    *,
+    product: Product,
+    account_key: str,
+    item_number: str,
+    quantity: int,
+) -> None:
+    listing = None
+    if item_number:
+        listing = db.scalar(
+            select(EbayListing).where(
+                EbayListing.account_id == account_key,
+                EbayListing.listing_id == item_number,
+                EbayListing.product_id == product.id,
+            )
+        )
+    if listing is None:
+        listing = db.scalar(
+            select(EbayListing)
+            .where(
+                EbayListing.account_id == account_key,
+                EbayListing.product_id == product.id,
+                EbayListing.status.in_(("scheduled", "listed", "live", "active")),
+            )
+            .order_by(EbayListing.created_at.desc(), EbayListing.id.desc())
+        )
+    if listing is None:
+        return
+
+    listing.quantity = max(0, int(listing.quantity or 0) - max(1, int(quantity or 1)))
+    if listing.quantity > 0:
+        return
+    listing.status = "ended"
+
+    supplier = product.supplier_products[0] if product.supplier_products else None
+    if (
+        supplier is None
+        or supplier.in_stock is False
+        or supplier.last_price is None
+        or supplier.last_shipping is None
+        or float(supplier.last_shipping) < 0
+    ):
+        return
+    another_sellable_listing = db.scalar(
+        select(EbayListing).where(
+            EbayListing.id != listing.id,
+            EbayListing.account_id == account_key,
+            EbayListing.product_id == product.id,
+            EbayListing.status.in_(("scheduled", "listed", "live", "active")),
+            EbayListing.quantity > 0,
+        )
+    )
+    if another_sellable_listing is not None:
+        return
+    existing_job = db.scalar(
+        select(ListingJob).where(
+            ListingJob.product_id == product.id,
+            ListingJob.ebay_account_key == account_key,
+            ListingJob.action == "publish",
+            ListingJob.status.in_(
+                (
+                    ListingJobStatus.queued.value,
+                    ListingJobStatus.running.value,
+                    ListingJobStatus.needs_review.value,
+                    ListingJobStatus.ready_to_save.value,
+                    ListingJobStatus.paused.value,
+                )
+            ),
+        )
+    )
+    if existing_job is not None:
+        return
+
+    listing_schedule_at = datetime.utcnow() + timedelta(minutes=30)
+    product.listing_schedule_at = listing_schedule_at
+    db.add(
+        ListingJob(
+            product_id=product.id,
+            ebay_account_key=account_key,
+            action="publish",
+            scheduled_for=None,
+            listing_schedule_at=listing_schedule_at,
+            status=ListingJobStatus.queued.value,
+            message="Queued automatic restock after a new eBay sale.",
+        )
+    )
+
+
+def _normalize_order_row(raw: dict[str, str]) -> dict:
+    values = {_header_key(key): str(value or "").strip() for key, value in raw.items()}
+
+    def pick(*aliases: str) -> str:
+        return next((values.get(_header_key(alias), "") for alias in aliases if values.get(_header_key(alias), "")), "")
+
+    return {
+        "order_id": pick("Order Number", "Order ID", "Sales Record Number"),
+        "buyer_username": pick("Buyer Username", "User Id"),
+        "recipient_name": pick(
+            "Ship To Name",
+            "Shipping Name",
+            "Recipient Name",
+            "Buyer Name",
+            "Full Name",
+        ),
+        "item_number": re.sub(r"\D", "", pick("Item Number", "Item ID", "eBay Item Number")),
+        "custom_label": pick("Custom Label", "SKU"),
+        "title": pick("Item Title", "Title"),
+        "quantity": max(1, int(_number(pick("Quantity", "Quantity Sold")) or 1)),
+        "sold_for": _money(pick("Sold For", "Sale Price", "Item Price")),
+        "shipping": _money(pick("Shipping And Handling", "Shipping and Handling", "Shipping")),
+        "total": _money(pick("Total Price", "Order Total", "Total")),
+        "paid_on": _date(pick("Paid On Date", "Paid on Date")),
+        "ship_by": _date(pick("Ship By Date", "Ship by date")),
+        "shipped_on": _date(pick("Shipped On Date", "Shipped on Date")),
+        "tracking_number": pick("Tracking Number"),
+        "raw_status": pick("Order Status", "Status", "Cancel Status"),
+    }
+
+
+def _match_order_product(db: Session, *, account_key: str, row: dict) -> Product | None:
+    if row["item_number"]:
+        listing = db.scalar(
+            select(EbayListing).where(
+                EbayListing.account_id == account_key,
+                EbayListing.listing_id == row["item_number"],
+            )
+        )
+        if listing:
+            return db.get(Product, listing.product_id)
+    if row["custom_label"]:
+        product = db.scalar(select(Product).where(Product.sku == row["custom_label"]))
+        if product:
+            return product
+    title_key = _title_key(row["title"])
+    if not title_key:
+        return None
+    matches = [
+        product
+        for product in db.scalars(select(Product).where(Product.status != ProductStatus.deleted.value)).all()
+        if _title_key(product.title) == title_key
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _expected_order_item_profit(product: Product | None, row: dict) -> float | None:
+    if product is None or not product.supplier_products or row["sold_for"] is None:
+        return None
+    supplier = product.supplier_products[0]
+    if supplier.last_price is None:
+        return None
+    quantity = max(1, int(row["quantity"] or 1))
+    source_units = max(quantity, int(supplier.minimum_order_quantity or 1))
+    source_cost = float(supplier.last_price) * source_units + float(supplier.last_shipping or 0.0)
+    revenue = float(row["sold_for"]) * quantity
+    variable_rate = float(product.ebay_fee_rate or 0.0) + float(product.promoted_rate or 0.0) + float(product.return_risk_rate or 0.0)
+    return round(revenue - source_cost - revenue * variable_rate - float(product.fixed_costs or 0.0), 2)
+
+
+def _order_status(rows: list[dict]) -> str:
+    status_text = " ".join(str(row["raw_status"] or "") for row in rows).lower()
+    if "cancel" in status_text:
+        return "cancelled"
+    if any(row["shipped_on"] or row["tracking_number"] for row in rows):
+        return "shipped"
+    if any(row["paid_on"] for row in rows):
+        return "imported"
+    return "awaiting_payment"
+
+
+def _minimum_date(values) -> datetime | None:
+    dates = [value for value in values if value is not None]
+    return min(dates) if dates else None
+
+
+def _header_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _title_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _number(value: str) -> float | None:
+    match = re.search(r"-?[\d,]+(?:\.\d+)?", str(value or ""))
+    return float(match.group(0).replace(",", "")) if match else None
+
+
+def _money(value: str) -> float | None:
+    parsed = _number(value)
+    if parsed is None:
+        return None
+    return -abs(parsed) if str(value or "").strip().startswith("(") else parsed
+
+
+def _date(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
+        pass
+    without_zone = re.sub(r"\s+(?:PST|PDT|MST|MDT|CST|CDT|EST|EDT|GMT|UTC)$", "", text, flags=re.IGNORECASE)
+    for fmt in (
+        "%b %d, %Y %I:%M:%S %p",
+        "%b %d, %Y %I:%M %p",
+        "%b-%d-%y",
+        "%b-%d-%y %H:%M:%S",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y",
+    ):
+        try:
+            return datetime.strptime(without_zone, fmt)
+        except ValueError:
+            continue
+    return None

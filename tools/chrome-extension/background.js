@@ -1,11 +1,15 @@
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const REPORT_SYNC_CONTEXT_KEY = "autozsEbayReportSyncContext";
 const REPORT_DOWNLOADS_KEY = "autozsEbayReportDownloads";
+const PRODUCT_CAPTURE_ALARM = "autozs-product-capture-poll";
+const PRODUCT_CAPTURE_LAST_OPENED_KEY = "autozsProductCaptureLastOpened";
 const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
 const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
 const LISTING_JOB_ALARM = "autozs-listing-job-poll";
 const LISTING_JOB_LAST_OPENED_KEY = "autozsListingJobLastOpened";
 const HOME_DEPOT_LAST_CLEANED_BATCH_KEY = "autozsHomeDepotLastCleanedBatch";
+const HOME_DEPOT_POST_CLEANUP_ERRORS_KEY = "autozsHomeDepotPostCleanupErrors";
+const HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY = "autozsHomeDepotSourceWorkerPaused";
 const SOURCE_REFRESH_MIN_GAP_MS = 75 * 1000;
 const EBAY_REVISION_ALARM = "autozs-ebay-revision-poll";
 const EBAY_REVISION_LAST_OPENED_KEY = "autozsEbayRevisionLastOpened";
@@ -13,11 +17,48 @@ const EBAY_REVISION_BATCH_ALARM = "autozs-ebay-revision-batch-poll";
 const EBAY_REVISION_BATCH_LAST_OPENED_KEY = "autozsEbayRevisionBatchLastOpened";
 const EBAY_REVISION_RESULT_CONTEXT_KEY = "autozsEbayRevisionResultContext";
 const EBAY_REVISION_RESULT_DOWNLOADS_KEY = "autozsEbayRevisionResultDownloads";
+const EBAY_TRAFFIC_ALARM = "autozs-ebay-traffic-poll";
+const EBAY_TRAFFIC_LAST_OPENED_KEY = "autozsEbayTrafficLastOpened";
+const EBAY_ACTIVE_LISTINGS_ALARM = "autozs-ebay-active-listings-poll";
+const EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY = "autozsEbayActiveListingsLastOpened";
+const EBAY_ORDER_ALARM = "autozs-ebay-order-poll";
+const EBAY_ORDER_LAST_OPENED_KEY = "autozsEbayOrderLastOpened";
+const SUPPLIER_ORDER_ALARM = "autozs-supplier-order-poll";
+const SUPPLIER_ORDER_LAST_OPENED_KEY = "autozsSupplierOrderLastOpened";
+const SUPPLIER_CHECKOUT_TOKENS_KEY = "autozsSupplierCheckoutTokens";
+const CUSTOMER_MESSAGE_ALARM = "autozs-customer-message-poll";
+const CUSTOMER_MESSAGE_LAST_OPENED_KEY = "autozsCustomerMessageLastOpened";
+const CUSTOMER_MESSAGE_PAYLOADS_KEY = "autozsCustomerMessagePayloads";
 const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
+const LOCAL_CHECKOUT_API = "http://127.0.0.1:8000";
 const AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
+const PRODUCT_CAPTURE_MIN_GAP_MS = 15 * 1000;
+const HOME_DEPOT_WORKER_TAB_MAX_AGE_MS = 15 * 60 * 1000;
+const AUTOZS_WORKER_OPENED_AT_PARAM = "autozs_worker_opened_at";
+
+const PRODUCT_CAPTURE_WORKER_ID_KEY = "autozsProductCaptureWorkerId";
+
+async function productCaptureWorkerId() {
+  const stored = await chrome.storage.local.get(PRODUCT_CAPTURE_WORKER_ID_KEY);
+  const existing = String(stored?.[PRODUCT_CAPTURE_WORKER_ID_KEY] || "").trim();
+  if (existing) return existing;
+
+  const extensionName = String(chrome.runtime?.getManifest?.().name || "AutoZS");
+  const profileToken =
+    globalThis.crypto?.randomUUID?.() ||
+    `${String(chrome.runtime?.id || "unpacked")}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const workerId = `${extensionName}:${profileToken}`;
+  await chrome.storage.local.set({ [PRODUCT_CAPTURE_WORKER_ID_KEY]: workerId });
+  return workerId;
+}
 
 function defaultAutozsWorkerMode() {
+  if (isBackupCaptureExtension()) return "capture";
   return isWindowsPlatform() ? "operations" : "viewer";
+}
+
+function isBackupCaptureExtension() {
+  return /Home Depot Backup/i.test(String(chrome.runtime?.getManifest?.().name || ""));
 }
 
 function workerPlatform() {
@@ -33,11 +74,23 @@ function isWindowsPlatform() {
   return /\bWin|Windows\b/i.test(workerPlatform());
 }
 
+function isDashboardTab(tab) {
+  try {
+    const parsed = new URL(tab?.url || "");
+    return parsed.hostname === "desktop-56u49jf.tailb2892a.ts.net"
+      || parsed.hostname === "127.0.0.1"
+      || parsed.hostname === "localhost";
+  } catch {
+    return false;
+  }
+}
+
 async function readAutozsWorkerMode() {
+  if (isBackupCaptureExtension()) return "capture";
   try {
     const stored = await chrome.storage.local.get(AUTOZS_WORKER_MODE_KEY);
     const mode = stored?.[AUTOZS_WORKER_MODE_KEY];
-    return mode === "operations" || mode === "viewer" ? mode : defaultAutozsWorkerMode();
+    return mode === "operations" || mode === "capture" || mode === "viewer" ? mode : defaultAutozsWorkerMode();
   } catch {
     return defaultAutozsWorkerMode();
   }
@@ -47,8 +100,50 @@ async function canRunAutozsWorkerJobs() {
   return isWindowsPlatform() && (await readAutozsWorkerMode()) === "operations";
 }
 
+function isEbayUrl(url) {
+  try {
+    return /(^|\.)ebay\.com$/i.test(new URL(url || "").hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function closeUnsafeBackupEbayTabs() {
+  if (!isBackupCaptureExtension()) return;
+  const tabs = await chrome.tabs.query({});
+  const ebayTabIds = (tabs || [])
+    .filter((tab) => isEbayUrl(tab.url || tab.pendingUrl))
+    .map((tab) => tab.id)
+    .filter(Boolean);
+  if (ebayTabIds.length) await chrome.tabs.remove(ebayTabIds);
+}
+
+chrome.tabs?.onCreated?.addListener?.((tab) => {
+  if (isBackupCaptureExtension() && isEbayUrl(tab?.pendingUrl || tab?.url)) {
+    Promise.resolve(chrome.tabs.remove(tab.id)).catch(() => {});
+  }
+});
+
+chrome.tabs?.onUpdated?.addListener?.((tabId, changeInfo, tab) => {
+  if (
+    isBackupCaptureExtension()
+    && isEbayUrl(changeInfo?.url || tab?.pendingUrl || tab?.url)
+  ) {
+    Promise.resolve(chrome.tabs.remove(tabId)).catch(() => {});
+  }
+});
+
+async function canRunAutozsSourceJobs() {
+  if (!isWindowsPlatform()) return false;
+  const mode = await readAutozsWorkerMode();
+  if (mode === "capture") return true;
+  if (mode !== "operations") return false;
+  const stored = await chrome.storage.local.get(HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY);
+  return stored?.[HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY] !== true;
+}
+
 async function clearHomeDepotBatchState() {
-  if (!(await canRunAutozsWorkerJobs())) return { cleared: 0, skipped: true };
+  if (!(await canRunAutozsSourceJobs())) return { cleared: 0, skipped: true };
   const cookies = await chrome.cookies.getAll({ domain: ".homedepot.com" });
   const removals = await Promise.allSettled((cookies || []).map((cookie) => {
     const protocol = cookie.secure ? "https" : "http";
@@ -101,7 +196,7 @@ function reportDownloadFilename(context, originalFilename) {
 
 function isEbayReportDownload(item) {
   const source = `${item?.url || ""} ${item?.referrer || ""} ${item?.filename || ""}`;
-  return /\.(csv|tsv|txt|zip)(?:$|\?)/i.test(item?.filename || item?.url || "") && (/ebay/i.test(source) || /all-active-listings/i.test(source));
+  return /\.(csv|tsv|txt|zip)(?:$|\?)/i.test(item?.filename || item?.url || "") && (/ebay/i.test(source) || /all-active-listings|all-orders/i.test(source));
 }
 
 async function patchSyncRun(runId, payload) {
@@ -137,6 +232,122 @@ async function claimNextSourceRefreshJob() {
   return localApiJson("/source-refresh/jobs/next", { method: "POST" });
 }
 
+function isProductCaptureRunnerUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return parsed.hostname === "www.homedepot.com"
+      && parsed.searchParams.get("ea_auto_import") === "1"
+      && parsed.searchParams.has("autozs_capture_product_id");
+  } catch {
+    return false;
+  }
+}
+
+function isAutomaticProductImportUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return parsed.hostname === "www.homedepot.com"
+      && parsed.searchParams.get("ea_auto_import") === "1"
+      && !parsed.searchParams.has("autozs_refresh_job");
+  } catch {
+    return false;
+  }
+}
+
+function stampedHomeDepotWorkerUrl(url, openedAt = Date.now()) {
+  const parsed = new URL(url);
+  parsed.searchParams.set(AUTOZS_WORKER_OPENED_AT_PARAM, String(openedAt));
+  return parsed.href;
+}
+
+async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
+  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  const stale = tabs.filter((tab) => {
+    try {
+      const parsed = new URL(tab.url || "");
+      const automated = parsed.searchParams.get("ea_auto_import") === "1"
+        || parsed.searchParams.has("autozs_refresh_job");
+      const openedAt = Number(
+        parsed.searchParams.get(AUTOZS_WORKER_OPENED_AT_PARAM)
+        || tab.lastAccessed
+        || 0
+      );
+      return automated && openedAt > 0 && now - openedAt >= HOME_DEPOT_WORKER_TAB_MAX_AGE_MS;
+    } catch {
+      return false;
+    }
+  });
+  await Promise.all(stale.map(async (tab) => {
+    try {
+      const parsed = new URL(tab.url || "");
+      const refreshJobId = Number(parsed.searchParams.get("autozs_refresh_job") || 0);
+      if (refreshJobId) {
+        await localApiJson(`/source-refresh/jobs/${refreshJobId}/failed`, {
+          method: "POST",
+          body: JSON.stringify({
+            message: "Home Depot worker tab exceeded the 15-minute limit and was closed automatically.",
+          }),
+        });
+      }
+    } catch {}
+    if (tab.id) await chrome.tabs.remove(tab.id);
+  }));
+  return stale.length;
+}
+
+async function closeLegacyProductImportTabs() {
+  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  const staleTabIds = tabs
+    .filter((tab) => {
+      try {
+        const parsed = new URL(tab.url || "");
+        return parsed.searchParams.get("ea_auto_import") === "1"
+          && !parsed.searchParams.has("autozs_capture_product_id")
+          && !parsed.searchParams.has("autozs_refresh_job")
+          && !parsed.searchParams.has("autozs_supplier_order");
+      } catch {
+        return false;
+      }
+    })
+    .map((tab) => tab.id)
+    .filter(Boolean);
+  if (staleTabIds.length) await chrome.tabs.remove(staleTabIds);
+  return staleTabIds.length;
+}
+
+async function productCaptureRunnerTab() {
+  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  return tabs.find((tab) => isProductCaptureRunnerUrl(tab.url)) || null;
+}
+
+async function openNextProductCapture() {
+  if (!(await canRunAutozsSourceJobs())) return;
+  if (await productCaptureRunnerTab()) return;
+  if (await hasRunningSourceRefreshJob()) return;
+  const stored = await chrome.storage.local.get(PRODUCT_CAPTURE_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[PRODUCT_CAPTURE_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < PRODUCT_CAPTURE_MIN_GAP_MS) return;
+  const item = await localApiJson("/products/capture-queue/claim", {
+    method: "POST",
+    body: JSON.stringify({
+    worker_id: await productCaptureWorkerId(),
+      source_host: "homedepot.com",
+    }),
+  });
+  if (!item?.source_url || !item?.product_id) return;
+  try {
+    if (new URL(item.source_url).hostname !== "www.homedepot.com") return;
+  } catch {
+    return;
+  }
+  const runnerUrl = new URL(item.source_url);
+  runnerUrl.searchParams.set("ea_auto_import", "1");
+  runnerUrl.searchParams.set("autozs_capture_product_id", String(item.product_id));
+  runnerUrl.searchParams.set(AUTOZS_WORKER_OPENED_AT_PARAM, String(Date.now()));
+  await chrome.storage.local.set({ [PRODUCT_CAPTURE_LAST_OPENED_KEY]: Date.now() });
+  await chrome.tabs.create({ url: runnerUrl.href, active: false });
+}
+
 function isSourceRefreshRunnerUrl(url) {
   try {
     const parsed = new URL(url || "");
@@ -147,17 +358,19 @@ function isSourceRefreshRunnerUrl(url) {
 }
 
 async function openSourceRefreshRunnerUrl(url) {
+  const stampedUrl = stampedHomeDepotWorkerUrl(url);
   const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
   const runnerTab = tabs.find((tab) => isSourceRefreshRunnerUrl(tab.url));
   if (runnerTab?.id) {
-    await chrome.tabs.update(runnerTab.id, { url, active: false });
+    await chrome.tabs.update(runnerTab.id, { url: stampedUrl, active: false });
     return;
   }
-  await chrome.tabs.create({ url, active: false });
+  await chrome.tabs.create({ url: stampedUrl, active: false });
 }
 
 async function openNextSourceRefreshJob() {
-  if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await canRunAutozsSourceJobs())) return;
+  if (await productCaptureRunnerTab()) return;
   if (await hasRunningSourceRefreshJob()) return;
   const stored = await chrome.storage.local.get(SOURCE_REFRESH_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[SOURCE_REFRESH_LAST_OPENED_KEY] || 0);
@@ -230,6 +443,70 @@ async function openNextListingJob() {
   await openListingJobRunner(result);
 }
 
+function isSupplierOrderRunnerUrl(url, supplierOrderId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const orderId = parsed.searchParams.get("autozs_supplier_order");
+    return parsed.hostname === "www.homedepot.com"
+      && Boolean(orderId)
+      && (supplierOrderId === null || orderId === String(supplierOrderId));
+  } catch {
+    return false;
+  }
+}
+
+function supplierOrderRunnerUrl(supplierOrder) {
+  const sourceUrl = supplierOrder?.items?.find((item) => item?.source_url)?.source_url || supplierOrder?.source_url;
+  const parsed = new URL(sourceUrl || "");
+  if (parsed.hostname !== "www.homedepot.com" || !/^\/p\//i.test(parsed.pathname)) {
+    throw new Error("Automatic supplier checkout currently requires one Home Depot product URL.");
+  }
+  parsed.searchParams.set("autozs_supplier_order", String(supplierOrder.id));
+  parsed.searchParams.set("autozs_checkout_canary", "1");
+  return parsed.href;
+}
+
+async function rememberSupplierCheckoutToken(supplierOrder) {
+  if (!supplierOrder?.id || !supplierOrder?.checkout_token) return;
+  const stored = await chrome.storage.local.get(SUPPLIER_CHECKOUT_TOKENS_KEY);
+  const tokens = { ...(stored?.[SUPPLIER_CHECKOUT_TOKENS_KEY] || {}) };
+  tokens[String(supplierOrder.id)] = {
+    token: supplierOrder.checkout_token,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  };
+  await chrome.storage.local.set({ [SUPPLIER_CHECKOUT_TOKENS_KEY]: tokens });
+}
+
+async function readSupplierCheckoutToken(supplierOrderId) {
+  const stored = await chrome.storage.local.get(SUPPLIER_CHECKOUT_TOKENS_KEY);
+  const tokens = { ...(stored?.[SUPPLIER_CHECKOUT_TOKENS_KEY] || {}) };
+  const entry = tokens[String(supplierOrderId)];
+  if (!entry?.token || Number(entry.expiresAt || 0) < Date.now()) {
+    delete tokens[String(supplierOrderId)];
+    await chrome.storage.local.set({ [SUPPLIER_CHECKOUT_TOKENS_KEY]: tokens });
+    return "";
+  }
+  return String(entry.token);
+}
+
+async function claimNextSupplierOrder() {
+  return localApiJson("/supplier-orders/next", { method: "POST" });
+}
+
+async function openNextSupplierOrder() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  if (tabs.some((tab) => isSupplierOrderRunnerUrl(tab.url))) return;
+  const stored = await chrome.storage.local.get(SUPPLIER_ORDER_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[SUPPLIER_ORDER_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 60 * 1000) return;
+  const supplierOrder = await claimNextSupplierOrder();
+  if (!supplierOrder?.id) return;
+  await rememberSupplierCheckoutToken(supplierOrder);
+  await chrome.storage.local.set({ [SUPPLIER_ORDER_LAST_OPENED_KEY]: Date.now() });
+  await chrome.tabs.create({ url: supplierOrderRunnerUrl(supplierOrder), active: true });
+}
+
 async function claimNextEbayRevisionJob() {
   const response = await fetch(`${LOCAL_API}/ebay/revision-jobs/next`, {
     method: "POST",
@@ -290,6 +567,233 @@ async function matchedEbayAccountKey() {
     } catch {}
   }
   return null;
+}
+
+async function claimNextEbayTrafficSync() {
+  const accountKey = await matchedEbayAccountKey();
+  if (!accountKey) return null;
+  return localApiJson(`/ebay/sync-runs/traffic/next?account_key=${encodeURIComponent(accountKey)}`, {
+    method: "POST",
+  });
+}
+
+async function claimNextEbayActiveListingsSync() {
+  const accountKey = await matchedEbayAccountKey();
+  if (!accountKey) return null;
+  return localApiJson(`/ebay/sync-runs/active-listings/next?account_key=${encodeURIComponent(accountKey)}`, {
+    method: "POST",
+  });
+}
+
+function isEbayActiveListingsRunnerUrl(url, runId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const params = new URLSearchParams(String(parsed.hash || "").replace(/^#/, ""));
+    const id = params.get("autozs_sync_run");
+    return parsed.hostname === "www.ebay.com"
+      && /^\/sh\/lst\/active/i.test(parsed.pathname)
+      && params.get("autozs_report_type") === "active_listings"
+      && Boolean(id)
+      && (runId === null || id === String(runId));
+  } catch {
+    return false;
+  }
+}
+
+async function openNextEbayActiveListingsSync() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  const stored = await chrome.storage.local.get(EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 60 * 1000) return;
+  const run = await claimNextEbayActiveListingsSync();
+  if (!run?.runner_url || run.status !== "running") return;
+  const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/sh/lst/active*" });
+  const exact = tabs.find((tab) => isEbayActiveListingsRunnerUrl(tab.url, run.id));
+  if (exact?.id) {
+    await chrome.tabs.reload(exact.id);
+  } else {
+    const reusable = tabs.find((tab) => isEbayActiveListingsRunnerUrl(tab.url));
+    if (reusable?.id) {
+      await chrome.tabs.update(reusable.id, { url: run.runner_url, active: false });
+      await chrome.tabs.reload(reusable.id);
+    } else {
+      await chrome.tabs.create({ url: run.runner_url, active: false });
+    }
+  }
+  await chrome.storage.local.set({ [EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY]: Date.now() });
+}
+
+function isEbayTrafficRunnerUrl(url, runId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const id = new URLSearchParams(String(parsed.hash || "").replace(/^#/, "")).get("autozs_sync_run");
+    return parsed.hostname === "www.ebay.com"
+      && /^\/sh\/performance\/traffic/i.test(parsed.pathname)
+      && Boolean(id)
+      && (runId === null || id === String(runId));
+  } catch {
+    return false;
+  }
+}
+
+async function openNextEbayTrafficSync() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  const stored = await chrome.storage.local.get(EBAY_TRAFFIC_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[EBAY_TRAFFIC_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 60 * 1000) return;
+  const run = await claimNextEbayTrafficSync();
+  if (!run?.runner_url || run.status !== "running") return;
+  const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/sh/performance/traffic*" });
+  const exact = tabs.find((tab) => isEbayTrafficRunnerUrl(tab.url, run.id));
+  if (exact?.id) {
+    await chrome.tabs.reload(exact.id);
+  } else {
+    const reusable = tabs.find((tab) => isEbayTrafficRunnerUrl(tab.url));
+    if (reusable?.id) {
+      await chrome.tabs.update(reusable.id, { url: run.runner_url, active: false });
+      await chrome.tabs.reload(reusable.id);
+    } else {
+      await chrome.tabs.create({ url: run.runner_url, active: false });
+    }
+  }
+  await chrome.storage.local.set({ [EBAY_TRAFFIC_LAST_OPENED_KEY]: Date.now() });
+}
+
+async function claimNextEbayOrderSync() {
+  const accountKey = await matchedEbayAccountKey();
+  if (!accountKey) return null;
+  return localApiJson(`/orders/sync/next?account_key=${encodeURIComponent(accountKey)}`, {
+    method: "POST",
+  });
+}
+
+function isEbayOrderRunnerUrl(url, runId = null) {
+  try {
+    const parsed = new URL(url || "");
+    const params = new URLSearchParams(String(parsed.hash || "").replace(/^#/, ""));
+    const id = params.get("autozs_sync_run");
+    return parsed.hostname === "www.ebay.com"
+      && /^\/sh\/reports\/downloads/i.test(parsed.pathname)
+      && params.get("autozs_report_type") === "orders"
+      && Boolean(id)
+      && (runId === null || id === String(runId));
+  } catch {
+    return false;
+  }
+}
+
+async function openNextEbayOrderSync() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  const stored = await chrome.storage.local.get(EBAY_ORDER_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[EBAY_ORDER_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 60 * 1000) return;
+  const run = await claimNextEbayOrderSync();
+  if (!run?.runner_url || run.status !== "running") return;
+  const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/sh/reports/downloads*" });
+  const exact = tabs.find((tab) => isEbayOrderRunnerUrl(tab.url, run.id));
+  if (exact?.id) {
+    await chrome.tabs.reload(exact.id);
+  } else {
+    const reusable = tabs.find((tab) => isEbayOrderRunnerUrl(tab.url));
+    if (reusable?.id) {
+      await chrome.tabs.update(reusable.id, { url: run.runner_url, active: false });
+      await chrome.tabs.reload(reusable.id);
+    } else {
+      await chrome.tabs.create({ url: run.runner_url, active: false });
+    }
+  }
+  await chrome.storage.local.set({ [EBAY_ORDER_LAST_OPENED_KEY]: Date.now() });
+}
+
+async function claimNextCustomerMessage() {
+  return localApiJson("/customer-service/messages/next", { method: "POST" });
+}
+
+function customerMessageIdFromUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    const searchId = parsed.searchParams.get("autozs_customer_message");
+    const hashId = new URLSearchParams(String(parsed.hash || "").replace(/^#/, "")).get("autozs_customer_message");
+    return Number(searchId || hashId || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function isCustomerMessageRunnerUrl(url, messageId = null) {
+  const id = customerMessageIdFromUrl(url);
+  return Boolean(id) && (messageId === null || id === Number(messageId));
+}
+
+function customerMessageRunnerUrl(message, conversation) {
+  const threadId = String(conversation?.ebay_thread_id || "");
+  const orderId = threadId.startsWith("order:") ? threadId.slice("order:".length).trim() : "";
+  const target = orderId
+    ? new URL("https://www.ebay.com/sh/ord/details")
+    : new URL("https://www.ebay.com/mys/messages");
+  if (orderId) target.searchParams.set("srn", orderId);
+  target.hash = new URLSearchParams({ autozs_customer_message: String(message.id) }).toString();
+  return target.href;
+}
+
+async function rememberCustomerMessagePayload(message, conversation) {
+  const stored = await chrome.storage.local.get(CUSTOMER_MESSAGE_PAYLOADS_KEY);
+  const payloads = { ...(stored?.[CUSTOMER_MESSAGE_PAYLOADS_KEY] || {}) };
+  payloads[String(message.id)] = {
+    message,
+    conversation,
+    createdAt: Date.now(),
+  };
+  await chrome.storage.local.set({ [CUSTOMER_MESSAGE_PAYLOADS_KEY]: payloads });
+}
+
+async function readCustomerMessagePayload(messageId) {
+  const stored = await chrome.storage.local.get(CUSTOMER_MESSAGE_PAYLOADS_KEY);
+  const payloads = { ...(stored?.[CUSTOMER_MESSAGE_PAYLOADS_KEY] || {}) };
+  const payload = payloads[String(messageId)];
+  if (!payload || Date.now() - Number(payload.createdAt || 0) > 30 * 60 * 1000) {
+    delete payloads[String(messageId)];
+    await chrome.storage.local.set({ [CUSTOMER_MESSAGE_PAYLOADS_KEY]: payloads });
+    return null;
+  }
+  return payload;
+}
+
+async function patchCustomerMessage(messageId, payload) {
+  return localApiJson(`/customer-service/messages/${Number(messageId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+async function openNextCustomerMessage() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  const ebayTabs = await chrome.tabs.query({
+    url: ["https://www.ebay.com/*", "https://sell.ebay.com/*", "https://mesg.ebay.com/*"],
+  });
+  if (ebayTabs.some((tab) => isCustomerMessageRunnerUrl(tab.url))) return;
+  const stored = await chrome.storage.local.get(CUSTOMER_MESSAGE_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[CUSTOMER_MESSAGE_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 30 * 1000) return;
+  const message = await claimNextCustomerMessage();
+  if (!message?.id) return;
+  const conversations = await localApiJson("/customer-service/conversations");
+  const conversation = (conversations || []).find(
+    (item) => Number(item.id) === Number(message.conversation_id)
+  );
+  if (!conversation) {
+    await patchCustomerMessage(message.id, {
+      status: "failed",
+      error: "AutoZS could not find the eBay conversation for this queued reply.",
+    });
+    return;
+  }
+  await rememberCustomerMessagePayload(message, conversation);
+  await chrome.storage.local.set({ [CUSTOMER_MESSAGE_LAST_OPENED_KEY]: Date.now() });
+  await chrome.tabs.create({
+    url: customerMessageRunnerUrl(message, conversation),
+    active: true,
+  });
 }
 
 async function claimNextEbayRevisionBatch() {
@@ -366,10 +870,46 @@ async function uploadRevisionResultDownload(context, downloadItem) {
   });
 }
 
+async function uploadTrafficReportDownload(context, downloadItem) {
+  const sourceUrl = downloadItem?.finalUrl || downloadItem?.url;
+  if (!sourceUrl) throw new Error("The completed Seller Hub Traffic report has no source URL.");
+  const response = await fetch(sourceUrl, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw new Error(`Seller Hub Traffic report download returned ${response.status}`);
+  const content = new Uint8Array(await response.arrayBuffer());
+  if (!content.length) throw new Error("The downloaded Seller Hub Traffic report is empty.");
+  return localApiJson("/stats/traffic/import-file", {
+    method: "POST",
+    body: JSON.stringify({
+      account_key: String(context.accountKey || "manual"),
+      run_id: Number(context.runId),
+      filename: String(downloadItem.filename || context.filename || "ebay-active-listings-traffic.csv").split(/[\\/]/).pop(),
+      report_base64: bytesToBase64(content),
+    }),
+  });
+}
+
+async function uploadOrderReportDownload(context, downloadItem) {
+  const sourceUrl = downloadItem?.finalUrl || downloadItem?.url;
+  if (!sourceUrl) throw new Error("The completed Seller Hub Orders report has no source URL.");
+  const response = await fetch(sourceUrl, { credentials: "include", cache: "no-store" });
+  if (!response.ok) throw new Error(`Seller Hub Orders report download returned ${response.status}`);
+  const content = new Uint8Array(await response.arrayBuffer());
+  if (!content.length) throw new Error("The downloaded Seller Hub Orders report is empty.");
+  return localApiJson("/orders/import-file", {
+    method: "POST",
+    body: JSON.stringify({
+      account_key: String(context.accountKey || "manual"),
+      run_id: Number(context.runId),
+      filename: String(downloadItem.filename || context.filename || "ebay-orders.csv").split(/[\\/]/).pop(),
+      report_base64: bytesToBase64(content),
+    }),
+  });
+}
+
 function isEbayTab(tab) {
   try {
     const url = new URL(tab?.url || "");
-    return url.protocol === "https:" && (url.hostname === "www.ebay.com" || url.hostname === "sell.ebay.com");
+    return url.protocol === "https:" && ["www.ebay.com", "sell.ebay.com", "mesg.ebay.com"].includes(url.hostname);
   } catch {
     return false;
   }
@@ -456,6 +996,73 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
+  if (message?.type === "autozs-configure-worker-mode" && isDashboardTab(sender.tab)) {
+    (async () => {
+      const mode = String(message.mode || "");
+      if (!["operations", "capture", "viewer"].includes(mode)) throw new Error("Unsupported AutoZS worker mode.");
+      await chrome.storage.local.set({
+        [AUTOZS_WORKER_MODE_KEY]: mode,
+        [HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY]: false,
+        [HOME_DEPOT_POST_CLEANUP_ERRORS_KEY]: 0,
+      });
+      sendResponse({ ok: true, mode });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (message?.type === "autozs-home-depot-refresh-success") {
+    chrome.storage.local.set({ [HOME_DEPOT_POST_CLEANUP_ERRORS_KEY]: 0 })
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (message?.type === "autozs-home-depot-post-cleanup-error") {
+    (async () => {
+      const stored = await chrome.storage.local.get(HOME_DEPOT_POST_CLEANUP_ERRORS_KEY);
+      const errors = Number(stored?.[HOME_DEPOT_POST_CLEANUP_ERRORS_KEY] || 0) + 1;
+      await chrome.storage.local.set({ [HOME_DEPOT_POST_CLEANUP_ERRORS_KEY]: errors });
+      if (errors < 3 || (await readAutozsWorkerMode()) !== "operations") {
+        sendResponse({ ok: true, errors, rotated: false });
+        return;
+      }
+      const response = await fetch(`${LOCAL_API}/browser-recovery/home-depot-backup`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`AutoZS backup-profile launcher returned ${response.status}.`);
+      await chrome.storage.local.set({ [HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY]: true });
+      sendResponse({ ok: true, errors, rotated: true, recovery: await response.json() });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (
+    message?.type === "autozs-customer-message-payload" &&
+    sender.tab?.id &&
+    isEbayTab(sender.tab)
+  ) {
+    (async () => {
+      const messageId = Number(message.messageId || customerMessageIdFromUrl(sender.tab.url));
+      if (!messageId || customerMessageIdFromUrl(sender.tab.url) !== messageId) {
+        throw new Error("This eBay tab is not assigned to that AutoZS customer message.");
+      }
+      const payload = await readCustomerMessagePayload(messageId);
+      if (!payload) throw new Error("The queued AutoZS customer message expired.");
+      sendResponse({ ok: true, payload });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (
+    message?.type === "autozs-customer-message-status" &&
+    sender.tab?.id &&
+    isEbayTab(sender.tab)
+  ) {
+    (async () => {
+      const messageId = Number(message.messageId || customerMessageIdFromUrl(sender.tab.url));
+      if (!messageId) throw new Error("Missing AutoZS customer message ID.");
+      const updated = await patchCustomerMessage(messageId, message.payload || {});
+      sendResponse({ ok: true, message: updated });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
   if (message?.type === "autozs-home-depot-batch-cleanup") {
     clearHomeDepotBatchState()
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -469,11 +1076,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (
+    message?.type === "autozs-supplier-checkout-credential" &&
+    sender.tab?.id &&
+    isSupplierOrderRunnerUrl(sender.tab.url, Number(message.supplierOrderId))
+  ) {
+    (async () => {
+      const supplierOrderId = Number(message.supplierOrderId);
+      const token = await readSupplierCheckoutToken(supplierOrderId);
+      if (!token) throw new Error("The local supplier checkout lease expired.");
+      const response = await fetch(`${LOCAL_CHECKOUT_API}/supplier-orders/${supplierOrderId}/checkout-credential`, {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "X-AutoZS-Checkout-Token": token,
+        },
+      });
+      if (!response.ok) throw new Error(`Local checkout credential broker returned ${response.status}.`);
+      sendResponse({ ok: true, credential: await response.json() });
+    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (
     message?.type === "autozs-close-source-refresh-tab" &&
     sender.tab?.id &&
     isSourceRefreshRunnerUrl(sender.tab.url)
   ) {
     chrome.tabs.remove(sender.tab.id, () => sendResponse({ ok: true }));
+    return true;
+  }
+  if (
+    message?.type === "autozs-close-product-capture-tab" &&
+    sender.tab?.id &&
+    isAutomaticProductImportUrl(sender.tab.url)
+  ) {
+    chrome.tabs.remove(sender.tab.id, () => {
+      sendResponse({ ok: true });
+      setTimeout(() => openNextProductCapture().catch(() => {}), 1500);
+    });
+    return true;
+  }
+  if (message?.type === "autozs-start-product-capture") {
+    openNextProductCapture()
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
   if (message?.type === "autozs-ebay-report-sync-context") {
@@ -593,38 +1239,94 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
       const downloads = stored?.[REPORT_DOWNLOADS_KEY] || {};
       const context = downloads[String(delta.id)];
       if (!context) return;
-      await patchSyncRun(context.runId, {
-        phase: "report_downloaded",
-        message: "Active Listings report downloaded. AutoZS is importing it now.",
-        report_filename: context.filename,
-      });
+      if (context.reportType === "traffic") {
+        try {
+          await uploadTrafficReportDownload(context, (await chrome.downloads.search({ id: Number(delta.id) }))?.[0]);
+        } catch (error) {
+          await patchSyncRun(context.runId, {
+            phase: "report_downloaded",
+            message: `Traffic report downloaded; waiting for local import after direct upload failed: ${error?.message || String(error)}`,
+            report_filename: context.filename,
+          });
+        }
+      } else if (context.reportType === "orders") {
+        try {
+          await uploadOrderReportDownload(context, (await chrome.downloads.search({ id: Number(delta.id) }))?.[0]);
+        } catch (error) {
+          await patchSyncRun(context.runId, {
+            phase: "report_downloaded",
+            message: `Orders report downloaded; waiting for local import after direct upload failed: ${error?.message || String(error)}`,
+            report_filename: context.filename,
+          });
+        }
+      } else {
+        await patchSyncRun(context.runId, {
+          phase: "report_downloaded",
+          message: "Active Listings report downloaded. AutoZS is importing it now.",
+          report_filename: context.filename,
+        });
+      }
       delete downloads[String(delta.id)];
       await chrome.storage.local.set({ [REPORT_DOWNLOADS_KEY]: downloads, [REPORT_SYNC_CONTEXT_KEY]: null });
     })().catch(() => {});
   });
 }
 
+const BACKUP_ALLOWED_ALARMS = new Set([PRODUCT_CAPTURE_ALARM, SOURCE_REFRESH_ALARM]);
+const AUTOZS_ALARM_SCHEDULE = [
+  [PRODUCT_CAPTURE_ALARM, 0.1, 0.5],
+  [SOURCE_REFRESH_ALARM, 1, 2],
+  [LISTING_JOB_ALARM, 1, 2],
+  [EBAY_REVISION_ALARM, 1, 2],
+  [EBAY_REVISION_BATCH_ALARM, 1, 2],
+  [EBAY_ACTIVE_LISTINGS_ALARM, 1, 2],
+  [EBAY_TRAFFIC_ALARM, 1, 2],
+  [EBAY_ORDER_ALARM, 1, 2],
+  [SUPPLIER_ORDER_ALARM, 1, 2],
+  [CUSTOMER_MESSAGE_ALARM, 0.1, 1],
+];
+
+async function configureAutozsAlarms() {
+  for (const [name, delayInMinutes, periodInMinutes] of AUTOZS_ALARM_SCHEDULE) {
+    if (isBackupCaptureExtension() && !BACKUP_ALLOWED_ALARMS.has(name)) {
+      await chrome.alarms.clear(name);
+      continue;
+    }
+    chrome.alarms.create(name, { delayInMinutes, periodInMinutes });
+  }
+}
+
 if (chrome.alarms) {
   chrome.runtime.onInstalled.addListener(() => {
-    chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-    chrome.alarms.create(LISTING_JOB_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-    chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-    chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    closeUnsafeBackupEbayTabs().catch(() => {});
+    closeLegacyProductImportTabs().catch(() => {});
+    configureAutozsAlarms().catch(() => {});
   });
   chrome.runtime.onStartup.addListener(() => {
-    chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-    chrome.alarms.create(LISTING_JOB_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-    chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-    chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+    closeUnsafeBackupEbayTabs().catch(() => {});
+    closeLegacyProductImportTabs().catch(() => {});
+    configureAutozsAlarms().catch(() => {});
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (isBackupCaptureExtension() && !BACKUP_ALLOWED_ALARMS.has(alarm?.name)) {
+      Promise.resolve(chrome.alarms.clear(alarm?.name)).catch(() => {});
+      closeUnsafeBackupEbayTabs().catch(() => {});
+      return;
+    }
+    if ([PRODUCT_CAPTURE_ALARM, SOURCE_REFRESH_ALARM].includes(alarm?.name)) {
+      cleanupStaleHomeDepotWorkerTabs().catch(() => {});
+    }
+    if (alarm?.name === PRODUCT_CAPTURE_ALARM) openNextProductCapture().catch(() => {});
     if (alarm?.name === SOURCE_REFRESH_ALARM) openNextSourceRefreshJob().catch(() => {});
     if (alarm?.name === LISTING_JOB_ALARM) openNextListingJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_ALARM) openNextEbayRevisionJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_BATCH_ALARM) openNextEbayRevisionBatch().catch(() => {});
+    if (alarm?.name === EBAY_ACTIVE_LISTINGS_ALARM) openNextEbayActiveListingsSync().catch(() => {});
+    if (alarm?.name === EBAY_TRAFFIC_ALARM) openNextEbayTrafficSync().catch(() => {});
+    if (alarm?.name === EBAY_ORDER_ALARM) openNextEbayOrderSync().catch(() => {});
+    if (alarm?.name === SUPPLIER_ORDER_ALARM) openNextSupplierOrder().catch(() => {});
+    if (alarm?.name === CUSTOMER_MESSAGE_ALARM) openNextCustomerMessage().catch(() => {});
   });
-  chrome.alarms.create(SOURCE_REFRESH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-  chrome.alarms.create(LISTING_JOB_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-  chrome.alarms.create(EBAY_REVISION_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
-  chrome.alarms.create(EBAY_REVISION_BATCH_ALARM, { delayInMinutes: 1, periodInMinutes: 2 });
+  configureAutozsAlarms().catch(() => {});
+  closeUnsafeBackupEbayTabs().catch(() => {});
 }

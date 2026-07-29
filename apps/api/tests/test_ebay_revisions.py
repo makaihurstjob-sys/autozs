@@ -5,7 +5,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.domain import EbayListing, EbayRevisionBatch, EbayRevisionBatchStatus, EbayRevisionJob, EbayRevisionJobStatus
+from app.models.domain import (
+    EbayListing,
+    EbayRevisionBatch,
+    EbayRevisionBatchStatus,
+    EbayRevisionJob,
+    EbayRevisionJobStatus,
+    ListingDraft,
+    Product,
+    SupplierProduct,
+)
 from app.services.ebay_revision_batches import (
     decode_ebay_revision_result,
     import_ebay_revision_result,
@@ -160,6 +169,50 @@ def test_price_revision_sheet_preserves_info_and_only_writes_guarded_columns() -
     assert content.startswith("\ufeff#INFO,Version=0.0.2,Template=Edit price and quantity\r\n")
     assert "Action,Item number,Start price,Quantity\r\n" in content
     assert "Revise,800123456789,28.53,\r\n" in content
+
+
+def test_pack_revision_sheet_includes_required_pack_title() -> None:
+    db = make_session()
+    product = Product(sku="SRC-PACK", title="Minimum order product")
+    db.add(product)
+    db.flush()
+    db.add_all(
+        [
+            SupplierProduct(
+                product_id=product.id,
+                source_url="https://www.homedepot.com/p/example/123",
+                last_price=14.19,
+                minimum_order_quantity=2,
+            ),
+            ListingDraft(product_id=product.id, title="(2X) Minimum order product | FREE SHIPPING", description="Pack"),
+        ]
+    )
+    listing = EbayListing(product_id=product.id, listing_id="800123456789", account_id="main-store", status="scheduled", price=20.53)
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=product.id,
+        ebay_listing_id=listing.id,
+        ebay_account_key="main-store",
+        target_price=36.53,
+        status=EbayRevisionJobStatus.queued.value,
+        guard_passed=True,
+        approval_required=False,
+        approved_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+
+    content, prepared_ids = build_ebay_price_revision_csv(
+        db,
+        account_key="main-store",
+        job_ids=[job.id],
+        template_csv="Action,Item number,Start price,Quantity\n",
+    )
+
+    assert prepared_ids == [job.id]
+    assert "Action,Item number,Start price,Quantity,Title\r\n" in content
+    assert "Revise,800123456789,36.53,,(2X) Minimum order product | FREE SHIPPING\r\n" in content
 
 
 def test_real_ebay_template_drops_prefilled_listing_row() -> None:

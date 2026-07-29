@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import csv
 from io import StringIO, TextIOWrapper
 from pathlib import Path
@@ -13,10 +14,12 @@ from app.core.database import SessionLocal
 from app.models.domain import EbayRevisionBatch, EbayRevisionBatchStatus, EbaySyncRun, EbaySyncRunStatus
 from app.services.ebay_revision_batches import import_ebay_revision_result
 from app.services.ebay_sync import import_listing_report_rows
+from app.services.ebay_traffic import import_traffic_file
+from app.services.orders import import_ebay_order_report_rows, parse_ebay_order_report
 
 
 REPORT_FILE_PATTERN = re.compile(
-    r"^ebay-(?P<report_type>active-listings)-(?P<account_key>[a-z0-9-]+)-run-(?P<run_id>\d+)\.(?P<extension>csv|tsv|txt|zip)$",
+    r"^ebay-(?P<report_type>active-listings|traffic|orders)-(?P<account_key>[a-z0-9-]+)-run-(?P<run_id>\d+)\.(?P<extension>csv|tsv|txt|zip)$",
     re.IGNORECASE,
 )
 REVISION_RESULT_PATTERN = re.compile(
@@ -69,6 +72,26 @@ def import_ebay_report_file(db: Session, path: Path, run_id: int, account_key: s
     if run.account_key != account_key:
         raise ValueError(f"Report account {account_key} does not match sync run {run.account_key}.")
     if run.status == EbaySyncRunStatus.completed.value:
+        return run
+    if run.report_type == "traffic":
+        import_traffic_file(
+            db,
+            account_key=account_key,
+            filename=path.name,
+            report_base64=base64.b64encode(path.read_bytes()).decode("ascii"),
+            run_id=run_id,
+        )
+        db.refresh(run)
+        return run
+    if run.report_type == "orders":
+        seen, upserted, unmatched = import_ebay_order_report_rows(
+            db,
+            rows=parse_ebay_order_report(path.read_bytes(), path.name),
+            account_key=account_key,
+            run_id=run_id,
+            filename=path.name,
+        )
+        db.refresh(run)
         return run
     run.status = EbaySyncRunStatus.running.value
     run.phase = "importing_report"

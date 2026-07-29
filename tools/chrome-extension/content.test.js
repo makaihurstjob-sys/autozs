@@ -253,6 +253,85 @@ async function runDelayedCaptureTest() {
   }
 }
 
+async function runIncompleteCaptureGuardTest() {
+  const body = new FakeElement("body");
+  let captureCalls = 0;
+  let imports = 0;
+  const failedMessages = [];
+
+  body.prepend = (element) => {
+    element.parentNode = body;
+    body.hosted = element;
+  };
+
+  const context = {
+    console,
+    URLSearchParams,
+    setInterval: () => 1,
+    clearInterval: () => {},
+    setTimeout: (callback) => {
+      callback();
+      return 1;
+    },
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+    },
+    chrome: {
+      runtime: {
+        sendMessage: async () => ({ ok: true }),
+      },
+    },
+    window: {
+      __ebayAutomationImportButton: false,
+      __ebayAutomationAutoImportStarted: false,
+      addEventListener: () => {},
+    },
+    location: { search: "?ea_auto_import=1&autozs_refresh_job=8&autozs_refresh_batch=batch-guard", replace: () => {} },
+    document: {
+      body,
+      hidden: false,
+      createElement: (tagName) => new FakeElement(tagName),
+      addEventListener: () => {},
+      getElementById: (id) => (body.hosted && body.hosted.id === id ? body.hosted : null),
+      querySelector: () => null,
+    },
+    readAppTheme: async () => "light",
+    checkLocalApi: async () => ({ status: "ok" }),
+    sourceRefreshContextFromLocation: () => ({ jobId: 8, batchKey: "batch-guard" }),
+    captureSourceProductFromPage: () => {
+      captureCalls += 1;
+      return {
+        source_url: "https://www.homedepot.com/p/Test/123",
+        title: "",
+        source_price: 19.99,
+        detected_shipping: 0,
+        image_urls: "",
+      };
+    },
+    importCapturedProduct: async () => {
+      imports += 1;
+      return { sku: "SHOULD-NOT-IMPORT", images: [] };
+    },
+    downloadProductImages: async () => ({ downloaded: 0, attempted: 0 }),
+    failSourceRefreshJob: async (_jobId, message) => {
+      failedMessages.push(message);
+      return { status: "queued" };
+    },
+  };
+
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  if (captureCalls !== 12) throw new Error(`Expected 12 hydration attempts, got ${captureCalls}`);
+  if (imports !== 0) throw new Error(`Expected incomplete capture not to import, got ${imports} import(s)`);
+  if (!failedMessages.some((message) => /did not finish loading/i.test(message))) {
+    throw new Error(`Expected incomplete capture failure, got ${JSON.stringify(failedMessages)}`);
+  }
+}
+
 async function runSourceRefreshPacingTest() {
   const body = new FakeElement("body");
   const delays = [];
@@ -281,9 +360,12 @@ async function runSourceRefreshPacingTest() {
     },
     chrome: {
       runtime: {
-        sendMessage: async (message) => {
+        sendMessage: (message) => {
           runtimeMessages.push(message);
-          return { ok: true };
+          if (message.type === "autozs-close-source-refresh-tab") {
+            throw new Error("Extension context invalidated.");
+          }
+          return Promise.resolve({ ok: true });
         },
       },
     },
@@ -350,7 +432,13 @@ async function runSourceRefreshPacingTest() {
   if (nextClaims !== 0) throw new Error("Expected the page not to claim the next refresh job directly.");
 }
 
-Promise.all([runContentTest(), runAutoImportTest(), runDelayedCaptureTest(), runSourceRefreshPacingTest()])
+Promise.all([
+  runContentTest(),
+  runAutoImportTest(),
+  runDelayedCaptureTest(),
+  runIncompleteCaptureGuardTest(),
+  runSourceRefreshPacingTest(),
+])
   .then(() => console.log("purchase-panel placement, auto-import, and delayed capture tests ok"))
   .catch((error) => {
     console.error(error);

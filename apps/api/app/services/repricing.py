@@ -42,7 +42,11 @@ def decide_reprice(
         return RepricingDecision(None, None, "Supplier price has not been captured yet")
 
     discount = max(0.0, min(gift_card_discount_percent, 100.0))
-    effective_supplier_cost = round(supplier_product.last_price * (1 - discount / 100), 2)
+    minimum_order_quantity = max(1, int(supplier_product.minimum_order_quantity or 1))
+    effective_supplier_cost = round(
+        supplier_product.last_price * minimum_order_quantity * (1 - discount / 100),
+        2,
+    )
     floor_price = calculate_floor_price(
         supplier_cost=effective_supplier_cost,
         supplier_shipping=max(supplier_product.last_shipping, 0.0),

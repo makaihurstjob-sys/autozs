@@ -5,10 +5,11 @@ from secrets import token_urlsafe
 from urllib.parse import quote, urlencode
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 
-from app.models.domain import EbayListing, Product
+from app.models.domain import EbayAccount, EbayListing, Product
 from app.services.importer import build_ebay_api_payload, build_listing_readiness
 from app.services.settings import read_pricing_settings, write_pricing_settings
 
@@ -18,6 +19,7 @@ DEFAULT_EBAY_SCOPES = [
     "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
     "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+    "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
 ]
 
 
@@ -169,6 +171,71 @@ def refresh_ebay_access_token(db: Session) -> dict:
     }
 
 
+def start_ebay_account_oauth(db: Session, account_key: str) -> dict:
+    account = _find_ebay_account(db, account_key)
+    settings = _account_oauth_settings(account)
+    missing = _missing_connection_fields(settings)
+    if missing:
+        return {
+            "authorization_url": "",
+            "state": "",
+            "scopes": DEFAULT_EBAY_SCOPES,
+            "environment": account.environment,
+            "missing": missing,
+        }
+    state = token_urlsafe(24)
+    account.oauth_state = state
+    db.commit()
+    return {
+        "authorization_url": build_ebay_authorization_url(settings, state=state),
+        "state": state,
+        "scopes": DEFAULT_EBAY_SCOPES,
+        "environment": account.environment,
+    }
+
+
+def complete_ebay_account_oauth(db: Session, account_key: str, code: str, state: str | None) -> dict:
+    account = _find_ebay_account(db, account_key)
+    settings = _account_oauth_settings(account)
+    missing = _missing_connection_fields(settings)
+    if missing:
+        raise ValueError(f"Missing eBay OAuth settings: {', '.join(missing)}")
+    expected_state = str(account.oauth_state or "")
+    if expected_state and state != expected_state:
+        raise ValueError("eBay OAuth state did not match the current connection request")
+
+    token_payload = _request_ebay_token(
+        settings,
+        {
+            "grant_type": "authorization_code",
+            "code": code.strip(),
+            "redirect_uri": account.redirect_uri,
+        },
+    )
+    return _save_ebay_account_token(db, account, token_payload, clear_state=True)
+
+
+def refresh_ebay_account_access_token(db: Session, account_key: str) -> dict:
+    account = _find_ebay_account(db, account_key)
+    settings = _account_oauth_settings(account)
+    missing = _missing_connection_fields(settings)
+    if missing:
+        raise ValueError(f"Missing eBay OAuth settings: {', '.join(missing)}")
+    refresh_token = str(account.refresh_token or "").strip()
+    if not refresh_token:
+        raise ValueError("Missing eBay refresh token; reconnect the eBay account first")
+
+    token_payload = _request_ebay_token(
+        settings,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": " ".join(DEFAULT_EBAY_SCOPES),
+        },
+    )
+    return _save_ebay_account_token(db, account, token_payload, clear_state=False)
+
+
 def publish_ebay_sandbox_listing(db: Session, product_id: int) -> dict:
     settings = read_pricing_settings(db)
     env = ebay_environment_config(str(settings.get("ebay_environment", "sandbox")))
@@ -297,6 +364,53 @@ def _request_ebay_token(settings: dict[str, float | bool | str], data: dict[str,
     if not payload.get("access_token"):
         raise ValueError("eBay token response did not include an access token")
     return payload
+
+
+def _find_ebay_account(db: Session, account_key: str) -> EbayAccount:
+    account = db.scalar(select(EbayAccount).where(EbayAccount.key == account_key))
+    if account is None:
+        raise LookupError("eBay account not found")
+    return account
+
+
+def _account_oauth_settings(account: EbayAccount) -> dict[str, float | bool | str]:
+    return {
+        "ebay_environment": account.environment,
+        "ebay_client_id": account.client_id,
+        "ebay_client_secret": account.client_secret,
+        "ebay_redirect_uri": account.redirect_uri,
+    }
+
+
+def _save_ebay_account_token(
+    db: Session,
+    account: EbayAccount,
+    token_payload: dict,
+    *,
+    clear_state: bool,
+) -> dict:
+    access_expires_at = _expires_at(token_payload.get("expires_in"))
+    refresh_expires_at = _expires_at(token_payload.get("refresh_token_expires_in"))
+    account.access_token = str(token_payload.get("access_token") or "")
+    account.token_expires_at = access_expires_at
+    if clear_state:
+        account.oauth_state = ""
+    refresh_token = str(token_payload.get("refresh_token") or "")
+    if refresh_token:
+        account.refresh_token = refresh_token
+    if refresh_expires_at:
+        account.refresh_token_expires_at = refresh_expires_at
+    db.commit()
+    db.refresh(account)
+    env = ebay_environment_config(account.environment)
+    return {
+        "environment": env.name,
+        "connected": True,
+        "token_type": str(token_payload.get("token_type") or "User Access Token"),
+        "access_token_expires_at": access_expires_at,
+        "refresh_token_expires_at": refresh_expires_at or account.refresh_token_expires_at or None,
+        "scopes": DEFAULT_EBAY_SCOPES,
+    }
 
 
 def _inventory_headers(access_token: str) -> dict[str, str]:

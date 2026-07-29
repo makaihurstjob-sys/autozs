@@ -17,7 +17,8 @@
   const context = syncContext();
   const onActiveListings = /^\/sh\/lst\/active/i.test(location.pathname || "");
   const onReportDownloads = /^\/sh\/reports\/downloads/i.test(location.pathname || "");
-  if (!context || (!onActiveListings && !onReportDownloads)) return;
+  const onTraffic = /^\/sh\/performance\/traffic/i.test(location.pathname || "");
+  if (!context || (!onActiveListings && !onReportDownloads && !onTraffic)) return;
   window.__autozsEbayReportRunnerStarted = true;
 
   const REPORT_CREATE_TIMEOUT_MS = 3 * 60 * 1000;
@@ -248,6 +249,161 @@
     return Array.from(root.querySelectorAll("button")).find((button) => visible(button) && clean(button.innerText || button.textContent) === text);
   }
 
+  function trafficNumber(value, rate = false) {
+    const text = clean(value).replace(/,/g, "");
+    if (!text || text === "--" || text === "-") return 0;
+    const match = text.match(/-?[\d.]+/);
+    const number = Number(match?.[0] || 0);
+    if (!Number.isFinite(number)) return 0;
+    return rate && text.includes("%") ? number / 100 : number;
+  }
+
+  function trafficTableSnapshot() {
+    const table = Array.from(document.querySelectorAll("table,[role='table']")).find((candidate) =>
+      /impressions/i.test(clean(candidate.innerText || candidate.textContent))
+      && /click-through rate/i.test(clean(candidate.innerText || candidate.textContent))
+    );
+    if (!table) return [];
+    const headers = Array.from(table.querySelectorAll("thead th,[role='columnheader']")).map((header) =>
+      clean(header.innerText || header.textContent).toLowerCase()
+    );
+    const indexOf = (pattern) => headers.findIndex((header) => pattern.test(header));
+    const indexes = {
+      available: indexOf(/^available items?$/i),
+      impressions: indexOf(/^impressions$/i),
+      top20Change: indexOf(/change in top 20 search slot impressions/i),
+      nonSearchChange: indexOf(/change in non-search impressions/i),
+      ebayViews: indexOf(/^ebay views$/i),
+      externalViews: indexOf(/^external views$/i),
+      sold: indexOf(/^quantity sold$/i),
+      ctr: indexOf(/^click-through rate$/i),
+      conversion: indexOf(/^sales conversion rate$/i),
+    };
+    return Array.from(table.querySelectorAll("tbody tr,[role='rowgroup'] [role='row']")).map((row) => {
+      const itemLinks = Array.from(row.querySelectorAll('a[href*="/itm/"]')).filter((candidate) =>
+        /\/itm\/\d{9,}/.test(candidate.getAttribute("href") || "")
+      );
+      const link = itemLinks.find((candidate) => clean(candidate.innerText || candidate.textContent)) || itemLinks[0];
+      const listingId = String(link?.getAttribute("href") || "").match(/\/itm\/(\d{9,})/)?.[1] || "";
+      const cells = Array.from(row.querySelectorAll("td,[role='cell'],[role='gridcell']")).map((cell) => clean(cell.innerText || cell.textContent));
+      if (!listingId || !cells.length) return null;
+      const at = (index) => index >= 0 ? cells[index] : "";
+      const ebayViews = trafficNumber(at(indexes.ebayViews));
+      const externalViews = trafficNumber(at(indexes.externalViews));
+      return {
+        listingId,
+        title: clean(link?.innerText || link?.textContent),
+        metrics: [
+          trafficNumber(at(indexes.impressions)),
+          trafficNumber(at(indexes.impressions)),
+          ebayViews + externalViews,
+          externalViews,
+          trafficNumber(at(indexes.ctr), true),
+          trafficNumber(at(indexes.conversion), true),
+          trafficNumber(at(indexes.sold)),
+          trafficNumber(at(indexes.available)),
+          trafficNumber(at(indexes.top20Change), true),
+          trafficNumber(at(indexes.nonSearchChange), true),
+        ],
+      };
+    }).filter(Boolean);
+  }
+
+  async function importTrafficTableSnapshot() {
+    const pageSize = Array.from(document.querySelectorAll("select")).find((select) =>
+      Array.from(select.options || []).some((option) => option.value === "200" || clean(option.textContent) === "200")
+    );
+    if (pageSize && pageSize.value !== "200") {
+      pageSize.value = "200";
+      pageSize.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    const rows = await waitFor(() => {
+      const current = trafficTableSnapshot();
+      return current.length ? current : null;
+    }, 30000, 500);
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - 29);
+    const metricKeys = [
+      "TOTAL_IMPRESSION_TOTAL",
+      "LISTING_IMPRESSION_TOTAL",
+      "LISTING_VIEWS_TOTAL",
+      "LISTING_VIEWS_SOURCE_OFF_EBAY",
+      "CLICK_THROUGH_RATE",
+      "SALES_CONVERSION_RATE",
+      "TRANSACTION",
+      "SELLER_HUB_AVAILABLE_ITEMS",
+      "SELLER_HUB_CHANGE_IN_TOP_20_SEARCH_SLOT_IMPRESSIONS",
+      "SELLER_HUB_CHANGE_IN_NON_SEARCH_IMPRESSIONS",
+    ];
+    const response = await fetch(`${API}/stats/traffic/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_key: context.accountKey,
+        account_id: context.accountKey,
+        marketplace_id: "EBAY_US",
+        dimension: "LISTING",
+        report: {
+          reportType: "SELLER_HUB_TRAFFIC",
+          startDate: start.toISOString(),
+          endDate: end.toISOString(),
+          lastUpdatedDate: end.toISOString(),
+          header: {
+            dimensionKeys: [{ key: "LISTING", localizedName: "Listing", dataType: "STRING" }],
+            metrics: metricKeys.map((key) => ({ key, localizedName: key, dataType: "NUMBER" })),
+          },
+          records: rows.map((row) => ({
+            dimensionValues: [{ value: row.listingId, applicable: true }],
+            metricValues: row.metrics.map((value) => ({ value, applicable: true })),
+          })),
+        },
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return { ...(await response.json()), rows };
+  }
+
+  async function runTrafficReportSync() {
+    setRunnerStatus("AutoZS is reading Seller Hub Traffic...", "working", 5);
+    const account = typeof reportEbayBrowserAccount === "function" ? await reportEbayBrowserAccount(context.accountKey) : null;
+    if (account && account.can_list === false) throw new Error(account.message || "The signed-in eBay account does not match this store.");
+    const run = await readRun();
+    if (["completed", "failed", "needs_review"].includes(run.status)) {
+      setRunnerStatus(run.message || `Traffic sync ${run.status}.`, run.status, run.status === "completed" ? 100 : 95);
+      if (run.status === "completed") setTimeout(closeReportRunnerTab, 800);
+      return;
+    }
+    await patchRun({
+      phase: "report_page_ready",
+      message: "Seller Hub Traffic opened and the signed-in account matched.",
+    });
+    setRunnerStatus("Reading every active listing metric from the signed-in Traffic table...", "working", 45);
+    const result = await importTrafficTableSnapshot();
+    await patchRun({
+      status: "completed",
+      phase: "completed",
+      message: `Imported Seller Hub traffic metrics for ${result.records_imported} active listing(s).`,
+      listings_seen: result.records_imported,
+      listings_upserted: result.records_imported,
+      increment_attempts: true,
+    });
+    setRunnerStatus(`Traffic updated for ${result.records_imported} active listing(s). Closing this tab.`, "complete", 100);
+    setTimeout(closeReportRunnerTab, 800);
+  }
+
+  if (onTraffic) {
+    try {
+      await runTrafficReportSync();
+    } catch (error) {
+      const message = error?.message || String(error);
+      setRunnerStatus(`AutoZS traffic sync needs attention: ${message}`, "error", 100);
+      patchRun({ status: "needs_review", message: `Automatic Seller Hub Traffic report failed: ${message}` }).catch(() => {});
+    }
+    return;
+  }
+
   if (onActiveListings) {
     try {
       await captureActiveListingViews();
@@ -267,7 +423,24 @@
     return true;
   }
 
+  function selectRadioChoice(valueToken, textPattern) {
+    if (selectRadioValue(valueToken)) return true;
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find(visible);
+    if (!dialog) return false;
+    const radios = Array.from(dialog.querySelectorAll('input[type="radio"]'));
+    const input = radios.find((radio) => {
+      const label = dialog.querySelector(`label[for="${CSS.escape(radio.id || "")}"]`);
+      const container = label || radio.closest("label,li,div");
+      return textPattern.test(clean(container?.innerText || container?.textContent));
+    });
+    if (!input) return false;
+    const label = dialog.querySelector(`label[for="${CSS.escape(input.id || "")}"]`);
+    (label || input).click();
+    return true;
+  }
+
   function reportRows() {
+    const typePattern = context.reportType === "orders" ? /all orders|awaiting shipment/i : /all active listings/i;
     return Array.from(document.querySelectorAll('[role="row"]')).map((row) => {
       const cells = Array.from(row.querySelectorAll('[role="gridcell"]')).map((cell) => clean(cell.innerText || cell.textContent));
       return {
@@ -279,30 +452,43 @@
         requested: cells[3] || "",
         status: cells[4] || "",
       };
-    }).filter((item) => item.cells.length >= 5 && /all active listings/i.test(item.type));
+    }).filter((item) => item.cells.length >= 5 && typePattern.test(item.type));
   }
 
-  async function requestActiveListingsReport() {
+  async function requestSellerHubReport() {
+    const isOrders = context.reportType === "orders";
+    const label = isOrders ? "Orders" : "Active Listings";
     const existingReferences = new Set(reportRows().map((row) => row.reference).filter(Boolean));
     const openButton = await waitFor(() => exactButton("Download report"));
     openButton.click();
     const sourceButton = await waitFor(() => Array.from(document.querySelectorAll('button[name="name"]')).find((button) => visible(button) && /select report source/i.test(clean(button.innerText))));
     sourceButton.click();
-    await waitFor(() => selectRadioValue('"SOURCE":"LISTINGS"'));
+    await waitFor(() => isOrders
+      ? selectRadioChoice('"SOURCE":"ORDERS"', /^orders$/i)
+      : selectRadioChoice('"SOURCE":"LISTINGS"', /^listings$/i));
     const typeButton = await waitFor(() => Array.from(document.querySelectorAll("button")).find((button) => visible(button) && /select report type/i.test(clean(button.innerText))));
     typeButton.click();
-    await waitFor(() => selectRadioValue('"TYPE":"ALL_LISTINGS"'));
+    await waitFor(() => isOrders
+      ? selectRadioChoice('"TYPE":"ALL_ORDERS"', /all orders/i)
+      : selectRadioChoice('"TYPE":"ALL_LISTINGS"', /all active listings/i));
+    if (isOrders) {
+      const dateButton = Array.from(document.querySelectorAll("button")).find((button) => visible(button) && /select date range|date range/i.test(clean(button.innerText)));
+      if (dateButton) {
+        dateButton.click();
+        await waitFor(() => selectRadioChoice("LAST_90_DAYS", /last 90 days|90 days/i));
+      }
+    }
     const dialog = await waitFor(() => Array.from(document.querySelectorAll('[role="dialog"]')).find((element) => visible(element) && /^Download report/i.test(clean(element.innerText))));
     const submit = await waitFor(() => {
       const button = exactButton("Download", dialog);
       return button && !button.disabled ? button : null;
     });
-    setRunnerStatus("Starting the eBay Active Listings report download...", "working", 45);
+    setRunnerStatus(`Starting the eBay ${label} report download...`, "working", 45);
     await prepareReportDownloadContext();
     submit.click();
     await patchRun({
       phase: "waiting_for_report",
-      message: "eBay is generating and downloading a fresh Active Listings report.",
+      message: `eBay is generating and downloading a fresh ${label} report.`,
       increment_attempts: true,
     });
     const createdRow = await waitFor(() => {
@@ -339,7 +525,8 @@
   }
 
   try {
-    setRunnerStatus("AutoZS is preparing the Active Listings report...", "working", 5);
+    const reportLabel = context.reportType === "orders" ? "Orders" : "Active Listings";
+    setRunnerStatus(`AutoZS is preparing the ${reportLabel} report...`, "working", 5);
     const account = typeof reportEbayBrowserAccount === "function" ? await reportEbayBrowserAccount(context.accountKey) : null;
     if (account && account.can_list === false) throw new Error(account.message || "The signed-in eBay account does not match this store.");
     let run = await readRun();
@@ -352,9 +539,9 @@
     await patchRun({ phase: "report_page_ready", message: "Seller Hub Reports opened and the account matched." });
     let reference = run.report_reference;
     if (!reference) {
-      setRunnerStatus("Requesting a fresh Active Listings report from eBay.", "working", 30);
-      await patchRun({ phase: "requesting_report", message: "Requesting a fresh Active Listings report from eBay." });
-      reference = await requestActiveListingsReport();
+      setRunnerStatus(`Requesting a fresh ${reportLabel} report from eBay.`, "working", 30);
+      await patchRun({ phase: "requesting_report", message: `Requesting a fresh ${reportLabel} report from eBay.` });
+      reference = await requestSellerHubReport();
     }
     if (!reference) {
       setRunnerStatus("Report downloaded. AutoZS is importing it now.", "working", 85);
@@ -367,6 +554,7 @@
   } catch (error) {
     const message = error?.message || String(error);
     setRunnerStatus(`AutoZS report sync needs attention: ${message}`, "error", 100);
-    patchRun({ status: "needs_review", message: `Automatic Active Listings report failed: ${message}` }).catch(() => {});
+    const reportLabel = context.reportType === "orders" ? "Orders" : "Active Listings";
+    patchRun({ status: "needs_review", message: `Automatic ${reportLabel} report failed: ${message}` }).catch(() => {});
   }
 })();

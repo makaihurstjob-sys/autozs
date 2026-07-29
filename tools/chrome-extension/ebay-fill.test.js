@@ -557,7 +557,7 @@ async function runAssistantTest() {
   if (detectedFinalButton !== finalScheduleButton) {
     throw new Error("Expected the exact final Schedule your listing button to be detected.");
   }
-  vm.runInContext("parseListingSchedule = () => new Date(); findScheduleDayField = () => ({}); scheduleDateFieldMatches = () => true;", context);
+  vm.runInContext("parseListingSchedule = () => new Date(); findScheduleDayField = () => ({}); scheduleDateFieldMatches = () => true; scheduleTimeMatches = () => true;", context);
   context.location.href = "https://www.ebay.com/lstng?draftId=123";
   context.document.querySelectorAll = (selector) => {
     if (selector === "button, [role='button']") return [finalScheduleButton];
@@ -756,6 +756,36 @@ async function runAssistantTest() {
   const directConditionOk = await vm.runInContext(`chooseVisibleCondition("New")`, context);
   if (!directConditionOk || !directConditionRadio.checked) {
     throw new Error("Expected eBay's current conditionId radio to be selected directly.");
+  }
+
+  const shadowConditionRadio = new FakeField({ id: "shadow-condition-1000", name: "conditionId", type: "radio", visible: false });
+  shadowConditionRadio.value = "1000";
+  shadowConditionRadio.checked = false;
+  shadowConditionRadio.click = () => { shadowConditionRadio.checked = true; };
+  const shadowConditionLabel = {
+    innerText: "New",
+    textContent: "New",
+    getBoundingClientRect: () => ({ width: 90, height: 32 }),
+    click: () => { shadowConditionRadio.checked = true; },
+  };
+  const conditionShadowRoot = {
+    querySelectorAll: (selector) => {
+      if (selector === "*") return [];
+      if (selector === 'input[type="radio"]') return [shadowConditionRadio];
+      if (selector === 'input[type="radio"]:checked, [aria-checked="true"], [aria-selected="true"]') {
+        return shadowConditionRadio.checked ? [shadowConditionRadio] : [];
+      }
+      return [];
+    },
+    querySelector: (selector) => selector === 'label[for="shadow-condition-1000"]' ? shadowConditionLabel : null,
+  };
+  shadowConditionRadio.getRootNode = () => conditionShadowRoot;
+  const conditionShadowHost = { id: "ebay-condition-panel", shadowRoot: conditionShadowRoot };
+  context.document.querySelectorAll = (selector) => selector === "*" ? [conditionShadowHost] : [];
+  context.document.querySelector = () => null;
+  const shadowConditionOk = await vm.runInContext(`chooseVisibleCondition("New")`, context);
+  if (!shadowConditionOk || !shadowConditionRadio.checked) {
+    throw new Error("Expected eBay's shadow-root condition radio to be selected automatically.");
   }
 
   const customBrandOption = new FakeButton("PLUMBFLEX");

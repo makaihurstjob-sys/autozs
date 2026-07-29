@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import PROJECT_ROOT
 from app.models.domain import EbayListing, ListingDraft, PriceSnapshot, Product, ProductImage, ProductStatus, SnapshotSource, SupplierProduct
 from app.services.settings import read_pricing_settings
+from app.services.suppliers import supplier_from_url
 
 
 @dataclass(frozen=True)
@@ -56,8 +57,21 @@ def normalize_source_url(url: str) -> str:
         parsed = urlparse(url.strip())
     except ValueError:
         return url.strip()
+    hostname = (parsed.hostname or "").lower()
+    known_product_page = (
+        (hostname == "homedepot.com" or hostname.endswith(".homedepot.com"))
+        and parsed.path.startswith("/p/")
+    ) or (
+        (hostname == "lowes.com" or hostname.endswith(".lowes.com"))
+        and parsed.path.startswith("/pd/")
+    )
+    if known_product_page:
+        netloc = hostname
+        if parsed.port:
+            netloc = f"{hostname}:{parsed.port}"
+        return urlunparse(parsed._replace(scheme=parsed.scheme.lower(), netloc=netloc, query="", fragment="")).rstrip("/")
     if not parsed.query:
-        return url.strip()
+        return urlunparse(parsed._replace(fragment="")).rstrip("/")
     query = urlencode(
         [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key not in INTERNAL_SOURCE_QUERY_PARAMS],
         doseq=True,
@@ -145,12 +159,33 @@ def calculate_listing_price(
     return ListingPriceDecision(final_price, margin_price, competitor_target, minimum_profit_price, safe_competitor_price, strategy, reason)
 
 
-def calculate_profit(sell_price: float | None, source_price: float | None, source_shipping: float, settings: dict[str, float | bool | str]) -> dict:
+def normalize_minimum_order_quantity(value: object) -> int:
+    try:
+        quantity = int(value or 1)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(quantity, 999))
+
+
+def source_order_subtotal(source_price: float | None, minimum_order_quantity: int = 1) -> float | None:
+    if source_price is None:
+        return None
+    return round(float(source_price) * normalize_minimum_order_quantity(minimum_order_quantity), 2)
+
+
+def calculate_profit(
+    sell_price: float | None,
+    source_price: float | None,
+    source_shipping: float,
+    settings: dict[str, float | bool | str],
+    minimum_order_quantity: int = 1,
+) -> dict:
     if sell_price is None or source_price is None:
         return {"fees": None, "profit": None}
     fee_rate = _fee_rate_total(settings)
     fees = round(sell_price * fee_rate, 2)
-    profit = round(sell_price - effective_supplier_cost(source_price, settings) - _shipping_cost(source_shipping) - fees, 2)
+    order_subtotal = source_order_subtotal(source_price, minimum_order_quantity)
+    profit = round(sell_price - effective_supplier_cost(order_subtotal, settings) - _shipping_cost(source_shipping) - fees, 2)
     return {"fees": fees, "profit": profit}
 
 
@@ -161,10 +196,16 @@ def effective_supplier_cost(source_price: float, settings: dict[str, float | boo
     return round(float(source_price) * (1 - discount / 100), 2)
 
 
-def effective_landed_cost(source_price: float | None, source_shipping: float | None, settings: dict[str, float | bool | str]) -> float | None:
+def effective_landed_cost(
+    source_price: float | None,
+    source_shipping: float | None,
+    settings: dict[str, float | bool | str],
+    minimum_order_quantity: int = 1,
+) -> float | None:
     if source_price is None:
         return None
-    return effective_supplier_cost(source_price, settings) + _shipping_cost(source_shipping)
+    order_subtotal = source_order_subtotal(source_price, minimum_order_quantity)
+    return effective_supplier_cost(order_subtotal, settings) + _shipping_cost(source_shipping)
 
 
 def _max_optional(*values: float | None) -> float | None:
@@ -184,7 +225,8 @@ def choose_product_draft_price(db: Session, product_id: int, mode: str) -> Produ
     supplier = product.supplier_products[0] if product.supplier_products else None
     source_price = supplier.last_price if supplier else None
     source_shipping = supplier.last_shipping if supplier else -1.0
-    landed_cost = effective_landed_cost(source_price, source_shipping, settings)
+    minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity if supplier else 1)
+    landed_cost = effective_landed_cost(source_price, source_shipping, settings, minimum_order_quantity)
     price_decision = calculate_listing_price(landed_cost, product.competitor_price, settings)
     if mode == "margin":
         selected_price = price_decision.margin_price
@@ -215,7 +257,7 @@ def choose_product_draft_price(db: Session, product_id: int, mode: str) -> Produ
     if draft is None:
         draft = ListingDraft(
             product_id=product.id,
-            title=_listing_title(product.title, settings, _infer_brand(product.title)),
+            title=_listing_title(product.title, settings, _infer_brand(product.title), minimum_order_quantity),
             description=_description_from_capture(product.title, None, settings),
         )
         db.add(draft)
@@ -265,17 +307,18 @@ def recalculate_all_draft_prices(db: Session, product_ids: list[int] | None = No
         supplier = product.supplier_products[0] if product.supplier_products else None
         source_price = supplier.last_price if supplier else None
         source_shipping = supplier.last_shipping if supplier else -1.0
-        landed_cost = effective_landed_cost(source_price, source_shipping, settings)
+        minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity if supplier else 1)
+        landed_cost = effective_landed_cost(source_price, source_shipping, settings, minimum_order_quantity)
         price_decision = calculate_listing_price(landed_cost, product.competitor_price, settings)
         draft = product.listing_drafts[0] if product.listing_drafts else None
         if draft is None:
             draft = ListingDraft(
                 product_id=product.id,
-                title=_listing_title(product.title, settings, _infer_brand(product.title)),
+                title=_listing_title(product.title, settings, _infer_brand(product.title), minimum_order_quantity),
                 description=_description_from_capture(product.title, None, settings),
             )
             db.add(draft)
-        draft.title = draft.title or _listing_title(product.title, settings, _infer_brand(product.title))
+        draft.title = _listing_title(product.title, settings, _infer_brand(product.title), minimum_order_quantity)
         draft.description = draft.description or _description_from_capture(product.title, None, settings)
         draft.source_price = source_price
         draft.calculated_price = price_decision.final_price
@@ -308,7 +351,25 @@ def recalculate_all_draft_prices(db: Session, product_ids: list[int] | None = No
 
 def extract_product_data(source_url: str, source_price_override: float | None = None) -> ImportedProductData:
     source_url = normalize_source_url(source_url)
+    supplier_key = supplier_from_url(source_url)
     warnings: list[str] = []
+    if supplier_key == "lowes":
+        title = _title_from_url(source_url)
+        warnings.append(
+            "Lowe's supplier scaffold is available, but automated capture, price refresh, and fulfillment are not enabled yet"
+        )
+        if source_price_override is None:
+            warnings.append("No source price captured; add a manual source price after Lowe's capture is implemented")
+        return ImportedProductData(
+            source_url=source_url,
+            supplier="lowes",
+            supplier_sku=_sku_from_url(source_url),
+            title=title[:512],
+            source_price=source_price_override,
+            description=_description_from_capture(title, None),
+            image_urls=[],
+            warnings=warnings,
+        )
     html_text = ""
     try:
         response = httpx.get(
@@ -357,7 +418,7 @@ def extract_product_data(source_url: str, source_price_override: float | None = 
 
     return ImportedProductData(
         source_url=source_url,
-        supplier="home_depot" if "homedepot.com" in source_url else "source_site",
+        supplier=supplier_key,
         supplier_sku=supplier_sku,
         title=title[:512],
         source_price=source_price,
@@ -399,11 +460,12 @@ def import_products(
             continue
         external_key = sha1(data.source_url.encode()).hexdigest()[:10]
         sku = f"SRC-{external_key.upper()}"
+        product_title = _source_product_title(data.title)
         product = _find_product_for_source(db, data.source_url, sku)
         if product is None:
             product = Product(
                 sku=sku,
-                title=data.title,
+                title=product_title,
                 status=ProductStatus.monitoring.value,
                 competitor_price=competitor_price,
                 desired_profit=float(settings["default_min_profit"]),
@@ -416,7 +478,7 @@ def import_products(
             db.add(product)
             db.flush()
         else:
-            product.title = data.title
+            product.title = product_title
             product.status = ProductStatus.monitoring.value
             if competitor_price is not None:
                 product.competitor_price = competitor_price
@@ -452,19 +514,25 @@ def import_products(
             supplier.last_shipping,
             "Supplier import refreshed from source URL",
         )
-        landed_cost = effective_landed_cost(effective_source_price, supplier.last_shipping, settings)
+        minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity)
+        landed_cost = effective_landed_cost(
+            effective_source_price,
+            supplier.last_shipping,
+            settings,
+            minimum_order_quantity,
+        )
         price_decision = calculate_listing_price(landed_cost, product.competitor_price, settings)
         draft = db.scalar(select(ListingDraft).where(ListingDraft.product_id == product.id))
         if draft is None:
             draft = ListingDraft(
                 product_id=product.id,
-                title=data.title,
-                description=_description_from_capture(data.title, data.description, settings),
+                title=product_title,
+                description=_description_from_capture(product_title, data.description, settings),
             )
             db.add(draft)
-        draft.title = _listing_title(data.title, settings, _infer_brand(data.title))
+        draft.title = _listing_title(product_title, settings, _infer_brand(product_title), minimum_order_quantity)
         if _should_replace_listing_description(draft.description, data.description, data_warnings):
-            draft.description = _description_from_capture(data.title, data.description, settings)
+            draft.description = _description_from_capture(product_title, data.description, settings)
         draft.source_price = effective_source_price
         draft.calculated_price = price_decision.final_price
         draft.margin_percent = float(settings["default_margin_percent"])
@@ -501,20 +569,24 @@ def import_captured_product(
     title: str,
     source_price: float | None = None,
     source_shipping: float | None = None,
+    source_in_stock: bool | None = None,
+    source_price_unavailable: bool | None = None,
     competitor_price: float | None = None,
     subscription_discount_percent: float | None = None,
+    minimum_order_quantity: int | None = None,
     description: str | None = None,
     image_urls: str | None = None,
 ) -> Product:
     source_url = normalize_source_url(source_url)
     settings = read_pricing_settings(db)
+    product_title = _source_product_title(title)
     external_key = sha1(source_url.encode()).hexdigest()[:10]
     sku = f"SRC-{external_key.upper()}"
     product = _find_product_for_source(db, source_url, sku)
     if product is None:
         product = Product(
             sku=sku,
-            title=title[:512],
+            title=product_title[:512],
             status=ProductStatus.monitoring.value,
             competitor_price=competitor_price,
             desired_profit=float(settings["default_min_profit"]),
@@ -527,7 +599,7 @@ def import_captured_product(
         db.add(product)
         db.flush()
     else:
-        product.title = title[:512]
+        product.title = product_title[:512]
         product.status = ProductStatus.monitoring.value
         if competitor_price is not None:
             product.competitor_price = competitor_price
@@ -537,7 +609,7 @@ def import_captured_product(
     if supplier is None:
         supplier = SupplierProduct(
             product_id=product.id,
-            supplier="home_depot" if "homedepot.com" in source_url else "source_site",
+            supplier=supplier_from_url(source_url),
             source_url=source_url,
             last_shipping=-1.0,
         )
@@ -546,13 +618,25 @@ def import_captured_product(
     supplier.supplier_sku = _sku_from_url(source_url)
     if source_price is not None:
         supplier.last_price = source_price
+        supplier.price_unavailable = False
+    elif source_price_unavailable is True:
+        supplier.last_price = None
+        supplier.price_unavailable = True
+    elif source_price_unavailable is False:
+        supplier.price_unavailable = False
     if source_shipping is not None:
         supplier.last_shipping = source_shipping
+    if source_in_stock is False:
+        supplier.last_shipping = -1.0
     if subscription_discount_percent is not None:
         supplier.subscription_discount_percent = subscription_discount_percent
-    supplier.in_stock = True
+    if minimum_order_quantity is not None:
+        supplier.minimum_order_quantity = normalize_minimum_order_quantity(minimum_order_quantity)
+    if source_in_stock is not None:
+        supplier.in_stock = source_in_stock
     supplier.updated_at = datetime.utcnow()
     effective_source_price = source_price if source_price is not None else supplier.last_price
+    effective_minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity)
     _log_supplier_snapshot(
         db,
         product.id,
@@ -560,18 +644,27 @@ def import_captured_product(
         supplier.last_shipping,
         "Supplier browser capture refreshed",
     )
-    landed_cost = effective_landed_cost(effective_source_price, supplier.last_shipping, settings)
+    landed_cost = effective_landed_cost(
+        effective_source_price,
+        supplier.last_shipping,
+        settings,
+        effective_minimum_order_quantity,
+    )
 
     if image_urls is not None:
         _sync_product_images(db, product.id, _filter_source_images(source_url, split_urls(image_urls)))
 
     draft = db.scalar(select(ListingDraft).where(ListingDraft.product_id == product.id))
     if draft is None:
-        draft = ListingDraft(product_id=product.id, title=_listing_title(title, settings, _infer_brand(title)), description="")
+        draft = ListingDraft(
+            product_id=product.id,
+            title=_listing_title(product_title, settings, _infer_brand(product_title), effective_minimum_order_quantity),
+            description="",
+        )
         db.add(draft)
     price_decision = calculate_listing_price(landed_cost, product.competitor_price, settings)
-    draft.title = _listing_title(title, settings, _infer_brand(title))
-    draft.description = _description_from_capture(title, description, settings)
+    draft.title = _listing_title(product_title, settings, _infer_brand(product_title), effective_minimum_order_quantity)
+    draft.description = _description_from_capture(product_title, description, settings)
     draft.source_price = effective_source_price
     draft.calculated_price = price_decision.final_price
     draft.margin_percent = float(settings["default_margin_percent"])
@@ -603,8 +696,11 @@ def update_product_from_capture(
     title: str | None = None,
     source_price: float | None = None,
     source_shipping: float | None = None,
+    source_in_stock: bool | None = None,
+    source_price_unavailable: bool | None = None,
     competitor_price: float | None = None,
     subscription_discount_percent: float | None = None,
+    minimum_order_quantity: int | None = None,
     description: str | None = None,
     image_urls: str | None = None,
 ) -> Product | None:
@@ -616,22 +712,36 @@ def update_product_from_capture(
     if product is None:
         return None
     settings = read_pricing_settings(db)
+    captured_title = _source_product_title(title) if title else None
     if title:
-        product.title = title[:512]
+        product.title = captured_title[:512]
     if competitor_price is not None:
         product.competitor_price = competitor_price
 
     supplier = product.supplier_products[0] if product.supplier_products else None
     if supplier and source_price is not None:
         supplier.last_price = source_price
+        supplier.price_unavailable = False
+    elif supplier and source_price_unavailable is True:
+        supplier.last_price = None
+        supplier.price_unavailable = True
+    elif supplier and source_price_unavailable is False:
+        supplier.price_unavailable = False
     if supplier and source_shipping is not None:
         supplier.last_shipping = source_shipping
+    if supplier and source_in_stock is False:
+        supplier.last_shipping = -1.0
+    if supplier and source_in_stock is not None:
+        supplier.in_stock = source_in_stock
     if supplier and subscription_discount_percent is not None:
         supplier.subscription_discount_percent = subscription_discount_percent
+    if supplier and minimum_order_quantity is not None:
+        supplier.minimum_order_quantity = normalize_minimum_order_quantity(minimum_order_quantity)
     if supplier:
         supplier.updated_at = datetime.utcnow()
     effective_source_price = source_price if source_price is not None else (supplier.last_price if supplier else None)
     effective_source_shipping = source_shipping if source_shipping is not None else (supplier.last_shipping if supplier else -1.0)
+    effective_minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity if supplier else 1)
     if supplier:
         _log_supplier_snapshot(
             db,
@@ -640,7 +750,12 @@ def update_product_from_capture(
             effective_source_shipping,
             "Supplier capture update refreshed",
         )
-    landed_cost = effective_landed_cost(effective_source_price, effective_source_shipping, settings)
+    landed_cost = effective_landed_cost(
+        effective_source_price,
+        effective_source_shipping,
+        settings,
+        effective_minimum_order_quantity,
+    )
 
     if image_urls is not None:
         source_url = supplier.source_url if supplier else ""
@@ -648,12 +763,18 @@ def update_product_from_capture(
 
     draft = product.listing_drafts[0] if product.listing_drafts else None
     if draft is None:
-        draft = ListingDraft(product_id=product.id, title=_listing_title(product.title, settings, _infer_brand(product.title)), description="")
+        draft = ListingDraft(
+            product_id=product.id,
+            title=_listing_title(product.title, settings, _infer_brand(product.title), effective_minimum_order_quantity),
+            description="",
+        )
         db.add(draft)
     if title:
-        draft.title = _listing_title(title, settings, _infer_brand(title))
+        draft.title = _listing_title(captured_title, settings, _infer_brand(captured_title), effective_minimum_order_quantity)
+    elif minimum_order_quantity is not None:
+        draft.title = _listing_title(draft.title or product.title, settings, _infer_brand(product.title), effective_minimum_order_quantity)
     if description is not None:
-        draft.description = _description_from_capture(title or product.title, description, settings)
+        draft.description = _description_from_capture(captured_title or product.title, description, settings)
     draft.source_price = effective_source_price
     draft.margin_percent = float(settings["default_margin_percent"])
     draft.ebay_fee_rate = float(settings["default_ebay_fee_rate"])
@@ -750,7 +871,7 @@ def _find_product_for_source(db: Session, source_url: str, sku: str) -> Product 
     )
     if not products:
         return None
-    return max(products, key=_product_source_match_score)
+    return max(products, key=lambda product: (_product_source_match_score(product), product.id))
 
 
 def _product_source_match_score(product: Product) -> tuple[int, int, int, int, int, int]:
@@ -854,17 +975,19 @@ def build_ebay_listing_package(db: Session, product_id: int, listing_schedule_at
     settings = read_pricing_settings(db)
     source_price = supplier.last_price if supplier else None
     source_shipping = supplier.last_shipping if supplier else -1.0
-    landed_cost = effective_landed_cost(source_price, source_shipping, settings)
+    minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity if supplier else 1)
+    order_subtotal = source_order_subtotal(source_price, minimum_order_quantity)
+    landed_cost = effective_landed_cost(source_price, source_shipping, settings, minimum_order_quantity)
     price_decision = calculate_listing_price(
         landed_cost,
         product.competitor_price,
         settings,
     )
-    active_profit = calculate_profit(draft.calculated_price if draft else None, source_price, source_shipping, settings)
-    margin_profit = calculate_profit(price_decision.margin_price, source_price, source_shipping, settings)
-    competitor_profit = calculate_profit(price_decision.competitor_target_price, source_price, source_shipping, settings)
-    minimum_profit_target_profit = calculate_profit(price_decision.minimum_profit_price, source_price, source_shipping, settings)
-    safe_competitor_profit = calculate_profit(price_decision.safe_competitor_price, source_price, source_shipping, settings)
+    active_profit = calculate_profit(draft.calculated_price if draft else None, source_price, source_shipping, settings, minimum_order_quantity)
+    margin_profit = calculate_profit(price_decision.margin_price, source_price, source_shipping, settings, minimum_order_quantity)
+    competitor_profit = calculate_profit(price_decision.competitor_target_price, source_price, source_shipping, settings, minimum_order_quantity)
+    minimum_profit_target_profit = calculate_profit(price_decision.minimum_profit_price, source_price, source_shipping, settings, minimum_order_quantity)
+    safe_competitor_profit = calculate_profit(price_decision.safe_competitor_price, source_price, source_shipping, settings, minimum_order_quantity)
     minimum_profit = float(settings["default_min_profit"])
     profit_gap = (
         round(minimum_profit - active_profit["profit"], 2)
@@ -872,11 +995,21 @@ def build_ebay_listing_package(db: Session, product_id: int, listing_schedule_at
         else None
     )
     warnings = _listing_profit_warnings(active_profit["profit"], minimum_profit, price_decision)
+    if minimum_order_quantity > 1:
+        warnings.insert(
+            0,
+            f"Source requires a minimum order of {minimum_order_quantity}; cost and title represent one {minimum_order_quantity}-unit pack.",
+        )
     offers_enabled = bool(settings.get("default_offers_enabled", False))
     listing_schedule_mode = "scheduled" if listing_schedule_at else str(settings.get("default_listing_schedule_mode", "now"))
     listing_schedule_at = listing_schedule_at or _default_listing_schedule_at(settings)
     item_specifics = listing_item_specifics(product, supplier)
-    title = _listing_title(draft.title if draft else product.title, settings, item_specifics.get("Brand"))
+    title = _listing_title(
+        draft.title if draft else product.title,
+        settings,
+        item_specifics.get("Brand"),
+        minimum_order_quantity,
+    )
     description = _apply_description_template(
         title,
         draft.description if draft else _description_from_capture(product.title, None, settings),
@@ -917,9 +1050,11 @@ def build_ebay_listing_package(db: Session, product_id: int, listing_schedule_at
         "image_upload_status": image_upload_status,
         "source_url": supplier.source_url if supplier else None,
         "source_price": source_price,
+        "minimum_order_quantity": minimum_order_quantity,
+        "source_order_subtotal": order_subtotal,
         "source_shipping": source_shipping,
-        "landed_cost": effective_landed_cost(source_price, source_shipping, settings),
-        "effective_source_cost": effective_supplier_cost(source_price, settings) if source_price is not None else None,
+        "landed_cost": landed_cost,
+        "effective_source_cost": effective_supplier_cost(order_subtotal, settings) if order_subtotal is not None else None,
         "gift_card_discount_enabled": bool(settings.get("default_gift_card_discount_enabled", False)),
         "gift_card_discount_percent": float(settings.get("default_gift_card_discount_percent", 0.0)),
         "competitor_price": product.competitor_price,
@@ -1226,28 +1361,11 @@ def _infer_brand(title: str) -> str | None:
         if lower_title.startswith(prefix.lower()):
             return prefix
 
-    tokens = clean_title.split()
-    brand_tokens: list[str] = []
-    stop_words = {
-        "in",
-        "ft",
-        "gal",
-        "gallon",
-        "qt",
-        "oz",
-        "pack",
-        "count",
-        "with",
-        "for",
-    }
-    for token in tokens:
-        normalized = re.sub(r"[^A-Za-z0-9]", "", token).lower()
-        if not normalized or normalized in stop_words or any(char.isdigit() for char in token):
-            break
-        brand_tokens.append(token)
-        if len(brand_tokens) >= 3:
-            break
-    return " ".join(brand_tokens) if brand_tokens else None
+    first_token = clean_title.split()[0]
+    normalized = re.sub(r"[^A-Za-z0-9-]", "", first_token)
+    if not normalized or any(char.isdigit() for char in normalized):
+        return None
+    return first_token
 
 
 def _infer_model_number(title: str, source_url: str | None) -> str | None:
@@ -1370,7 +1488,7 @@ def _title_from_url(url: str) -> str:
     slug = path_parts[1] if len(path_parts) > 1 and path_parts[0] == "p" else path_parts[-1]
     slug = re.sub(r"-\d+$", "", slug)
     title = unquote(slug).replace("-", " ").strip().title()
-    return re.sub(r"\bHdx\b", "HDX", title)
+    return _source_product_title(re.sub(r"\bHdx\b", "HDX", title))
 
 
 def _sku_from_url(url: str) -> str | None:
@@ -1619,9 +1737,40 @@ def _ebay_title(title: str) -> str:
     return re.sub(r"\s+", " ", title).strip()[:80]
 
 
-def _listing_title(title: str, settings: dict[str, float | bool | str], brand: str | None = None) -> str:
+def _source_product_title(title: str) -> str:
+    return _strip_trailing_model_identifier(re.sub(r"\s+", " ", title or "").strip())[:512]
+
+
+def _strip_trailing_model_identifier(title: str) -> str:
+    clean = re.sub(r"\s+", " ", title or "").strip()
+    if " " not in clean:
+        return clean
+    base, candidate = clean.rsplit(" ", 1)
+    token = candidate.strip("()[]{}.,:;")
+    normalized = token.replace("-", "")
+    if not normalized or not any(character.isdigit() for character in normalized):
+        return clean
+    protected_suffixes = ("pack", "count", "piece", "pieces", "pc", "pcs", "oz", "in", "ft", "gal", "volt")
+    if token.lower().endswith(protected_suffixes):
+        return clean
+    numeric_identifier = bool(re.fullmatch(r"\d{5,12}", normalized))
+    mixed_identifier = (
+        len(normalized) >= 5
+        and normalized.isalnum()
+        and any(character.isalpha() for character in normalized)
+        and any(character.isdigit() for character in normalized)
+    )
+    return base.rstrip(" -|") if numeric_identifier or mixed_identifier else clean
+
+
+def _listing_title(
+    title: str,
+    settings: dict[str, float | bool | str],
+    brand: str | None = None,
+    minimum_order_quantity: int = 1,
+) -> str:
     original = re.sub(r"\s+", " ", title or "").strip()
-    clean = original
+    clean = re.sub(r"^\(\s*\d+\s*[xX]\s*\)\s*", "", original).strip()
     suffix = _normalized_title_suffix(str(settings.get("default_title_suffix", "") or ""))
     if suffix:
         clean = _remove_title_suffix(clean, suffix)
@@ -1629,15 +1778,19 @@ def _listing_title(title: str, settings: dict[str, float | bool | str], brand: s
         stripped = re.sub(rf"^\s*{re.escape(brand)}\b[\s:-]*", "", clean, flags=re.I).strip()
         if len(stripped) >= 12:
             clean = stripped
-    clean = clean or original
+    clean = _strip_trailing_model_identifier(clean)
+    clean = clean or re.sub(r"^\(\s*\d+\s*[xX]\s*\)\s*", "", original).strip()
+    quantity_prefix = f"({normalize_minimum_order_quantity(minimum_order_quantity)}X) " if normalize_minimum_order_quantity(minimum_order_quantity) > 1 else ""
     if suffix and suffix.lower().strip() not in clean.lower():
-        if len(clean) + len(suffix) <= 80:
+        if len(quantity_prefix) + len(clean) + len(suffix) <= 80:
             clean = f"{clean}{suffix}"
         else:
-            max_base = 80 - len(suffix)
+            max_base = 80 - len(quantity_prefix) - len(suffix)
             if max_base >= 50:
                 clean = f"{_truncate_title_at_word(clean, max_base)}{suffix}"
-    return clean[:80]
+    if len(quantity_prefix) + len(clean) > 80:
+        clean = _truncate_title_at_word(clean, 80 - len(quantity_prefix))
+    return f"{quantity_prefix}{clean}"[:80]
 
 
 def _normalized_title_suffix(value: str) -> str:

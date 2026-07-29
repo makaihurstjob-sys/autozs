@@ -9,12 +9,14 @@ from app.models.domain import AutomationRun, EbayListing, Product, ProductStatus
 from app.services.ebay_revisions import enqueue_ebay_price_revisions
 from app.services.importer import recalculate_all_draft_prices
 from app.services.settings import read_pricing_settings
+from app.services.suppliers import supplier_supports
 
 
 LEASE_MINUTES = 10
 AUTO_REFRESH_LISTING_STATUSES = {"scheduled", "listed", "live", "active"}
 TRANSIENT_BROWSER_ERROR = re.compile(
-    r"failed to fetch|network\s*error|load failed|home depot showed an error page|please refresh page",
+    r"failed to fetch|network\s*error|load failed|home depot showed an error page|please refresh page|"
+    r"product data did not finish loading|incomplete .*capture",
     re.IGNORECASE,
 )
 MAX_TRANSIENT_ATTEMPTS = 3
@@ -144,6 +146,31 @@ def create_source_refresh_batch(
         supplier = product.supplier_products[0] if product.supplier_products else None
         if supplier is None or not supplier.source_url:
             continue
+        if supplier.in_stock is False and not force:
+            # Out-of-stock products have no usable delivery quote. Automatic
+            # polling must not continually reopen them; a manual forced refresh
+            # remains available when the user wants to check for restocking.
+            continue
+        if supplier.price_unavailable and not force:
+            # Some Home Depot products intentionally hide their price until
+            # they are placed in the cart. Automatic polling cannot reveal it,
+            # so leave these for an explicit manual cart-price check.
+            continue
+        if not supplier_supports(supplier.supplier, "automatic_price_refresh"):
+            continue
+        if not force:
+            latest_job = db.scalar(
+                select(SourceRefreshJob)
+                .where(SourceRefreshJob.product_id == product.id)
+                .order_by(SourceRefreshJob.id.desc())
+            )
+            if latest_job is not None and latest_job.status == SourceRefreshJobStatus.failed.value:
+                failed_at = latest_job.completed_at or latest_job.updated_at
+                if failed_at is not None and failed_at > cutoff:
+                    # The browser already exhausted this refresh attempt recently.
+                    # Wait for the normal refresh interval instead of creating a new
+                    # job every scheduler poll; force=True remains the manual escape.
+                    continue
         if force or supplier.updated_at <= cutoff or supplier.last_price is None:
             due.append((product, supplier))
     due.sort(key=lambda item: (item[1].updated_at, item[0].id))

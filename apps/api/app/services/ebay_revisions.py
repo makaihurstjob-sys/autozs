@@ -41,7 +41,14 @@ def _revision_evidence(db: Session, product_id: int, target_price: float, old_pr
     settings = read_pricing_settings(db)
     source_price = supplier.last_price if supplier is not None else None
     source_shipping = supplier.last_shipping if supplier is not None else 0.0
-    projected_profit = calculate_profit(target_price, source_price, source_shipping, settings)["profit"]
+    minimum_order_quantity = max(1, int(supplier.minimum_order_quantity or 1)) if supplier is not None else 1
+    projected_profit = calculate_profit(
+        target_price,
+        source_price,
+        source_shipping,
+        settings,
+        minimum_order_quantity,
+    )["profit"]
     minimum_profit = float(settings.get("default_min_profit", 0.0) or 0.0)
     guard_enabled = bool(settings.get("default_min_profit_guard_enabled", False))
     max_change = float(settings.get("ebay_revision_max_change_percent", 25.0) or 25.0)
@@ -58,6 +65,12 @@ def _revision_evidence(db: Session, product_id: int, target_price: float, old_pr
     if source_shipping is None or source_shipping < 0:
         guard_passed = False
         reasons.append("Supplier shipping is unknown")
+    if minimum_order_quantity > 1:
+        reasons.append(
+            f"Source requires {minimum_order_quantity} units per order; projected cost uses {minimum_order_quantity} x ${source_price:.2f}"
+            if source_price is not None
+            else f"Source requires {minimum_order_quantity} units per order"
+        )
     if projected_profit is None:
         guard_passed = False
         reasons.append("Projected profit could not be calculated")
@@ -436,6 +449,12 @@ def serialize_ebay_revision_job(db: Session, job: EbayRevisionJob) -> dict:
         "target_price": job.target_price,
         "old_source_price": _revision_old_source_price(db, job),
         "source_price": job.source_price,
+        "minimum_order_quantity": max(1, int(supplier.minimum_order_quantity or 1)) if supplier is not None else 1,
+        "source_order_subtotal": (
+            round(float(job.source_price) * max(1, int(supplier.minimum_order_quantity or 1)), 2)
+            if job.source_price is not None and supplier is not None
+            else job.source_price
+        ),
         "source_shipping": job.source_shipping,
         "source_url": supplier.source_url if supplier is not None else None,
         "projected_profit": job.projected_profit,

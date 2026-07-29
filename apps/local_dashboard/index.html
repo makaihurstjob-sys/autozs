@@ -55,6 +55,25 @@
         top: 0;
         z-index: 20;
       }
+      .source-import-progress {
+        background: transparent;
+        height: 4px;
+        left: 0;
+        overflow: hidden;
+        pointer-events: none;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 100;
+      }
+      .source-import-progress > span {
+        background: var(--accent);
+        display: block;
+        height: 100%;
+        transform: scaleX(0);
+        transform-origin: left center;
+        transition: transform 300ms ease;
+      }
       .brand {
         align-items: center;
         display: flex;
@@ -451,6 +470,7 @@
       .ship-free { background: #e6f6ec; color: #126c35; }
       .ship-paid { background: #fff0e6; color: #a14612; }
       .ship-unknown { background: var(--warn); color: #8d4b12; }
+      .ship-unavailable { background: #ffe5e1; color: #9b2f20; }
       .stage-ready { background: #e6f6ec; color: #126c35; }
       .stage-capture { background: #fff4df; color: #8d4b12; }
       .stage-images { background: #e9f1ff; color: #2456a6; }
@@ -459,6 +479,7 @@
       body[data-theme="dark"] .ship-free { background: #193524; color: #7fe0a0; }
       body[data-theme="dark"] .ship-paid { background: #3a2418; color: #ffb084; }
       body[data-theme="dark"] .ship-unknown { background: #3c2c13; color: #ffc777; }
+      body[data-theme="dark"] .ship-unavailable { background: #44231f; color: #ff9d8c; }
       body[data-theme="dark"] .stage-ready { background: #193524; color: #7fe0a0; }
       body[data-theme="dark"] .stage-capture { background: #3c2c13; color: #ffc777; }
       body[data-theme="dark"] .stage-images { background: #172a45; color: #9ec4ff; }
@@ -515,6 +536,77 @@
       }
       .product-card.shipping-unknown {
         border-left-color: #d99a28;
+      }
+      .product-card.listing-product-card {
+        border-left-width: 1px;
+        border-left-color: var(--line);
+      }
+      .product-card.importing-product-card {
+        border-left-color: var(--accent);
+        cursor: default;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .product-card.importing-product-card .product-row {
+        grid-template-columns: minmax(0, 1fr) max-content;
+        min-height: 76px;
+      }
+      .product-import-placeholder {
+        align-items: center;
+        background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+        border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+        border-radius: 6px;
+        display: flex;
+        flex: 0 0 48px;
+        height: 48px;
+        justify-content: center;
+        overflow: hidden;
+        width: 48px;
+      }
+      .product-import-placeholder svg {
+        height: 24px;
+        width: 24px;
+      }
+      .product-build-progress {
+        border-top: 1px solid var(--line);
+        display: grid;
+        gap: 7px;
+        margin-top: 10px;
+        padding-top: 10px;
+      }
+      .product-build-progress-copy {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+      }
+      .product-build-progress-copy strong {
+        color: var(--text);
+        font-size: 12px;
+      }
+      .product-build-progress-copy span {
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .product-build-progress-track {
+        background: color-mix(in srgb, var(--accent) 14%, var(--line));
+        border-radius: 999px;
+        height: 4px;
+        overflow: hidden;
+      }
+      .product-build-progress-fill {
+        background: var(--accent);
+        border-radius: inherit;
+        height: 100%;
+        min-width: 3%;
+        transition: width .35s ease;
+      }
+      .product-card.import-failed {
+        border-left-color: var(--danger);
+      }
+      .product-card.import-failed .product-build-progress-fill {
+        background: var(--danger);
       }
       .product-card.is-focused {
         border-color: #2f80ed;
@@ -612,6 +704,7 @@
       }
       .order-card.order-in-progress { border-left-color: #2f80ed; }
       .order-card.order-completed { border-left-color: #28a957; }
+      .order-card.order-refunded { border-left-color: #a78bfa; }
       .order-card.order-blocked { border-left-color: var(--danger); }
       .order-row {
         align-items: center;
@@ -691,10 +784,12 @@
       .order-status-pending { background: #fff4df; color: #8d4b12; }
       .order-status-progress { background: #e9f1ff; color: #2456a6; }
       .order-status-completed { background: #e6f6ec; color: #126c35; }
+      .order-status-refunded { background: #f0eaff; color: #6340a5; }
       .order-status-blocked { background: #ffece5; color: #a64022; }
       body[data-theme="dark"] .order-status-pending { background: #3c2c13; color: #ffc777; }
       body[data-theme="dark"] .order-status-progress { background: #172a45; color: #9ec4ff; }
       body[data-theme="dark"] .order-status-completed { background: #193524; color: #7fe0a0; }
+      body[data-theme="dark"] .order-status-refunded { background: #30264a; color: #c9b6ff; }
       body[data-theme="dark"] .order-status-blocked { background: #3a1f17; color: #ff9d7f; }
       .calendar-shell {
         display: grid;
@@ -712,11 +807,13 @@
         margin: 0;
       }
       .calendar-layout {
+        align-items: start;
         display: grid;
         gap: 14px;
         grid-template-columns: minmax(560px, 1fr) minmax(260px, 340px);
       }
       .calendar-grid {
+        align-self: start;
         background: var(--capture-bg);
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -943,6 +1040,10 @@
         padding: 8px 0;
       }
       .filter-trigger:hover { color: var(--ink); }
+      .filter-trigger.filter-collapse-trigger {
+        border-left: 1px solid var(--line);
+        padding-left: 10px;
+      }
       .filter-trigger svg {
         fill: none;
         height: 18px;
@@ -1796,6 +1897,48 @@
       .report-card.wide {
         grid-column: 1 / -1;
       }
+      .traffic-freshness {
+        align-items: center;
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-bottom: 14px;
+        padding: 12px 14px;
+      }
+      .traffic-freshness.stale { border-color: #d99a28; }
+      .traffic-funnel {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .traffic-funnel div {
+        background: var(--soft);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px;
+        text-align: center;
+      }
+      .traffic-funnel span { color: var(--muted); display: block; font-size: 12px; }
+      .traffic-funnel strong { display: block; font-size: 22px; margin-top: 6px; }
+      .traffic-ranking-note { color: var(--muted); font-size: 12px; margin: -3px 0 10px; }
+      .report-card table a,
+      .report-card table a:visited {
+        color: var(--ink);
+        text-decoration-color: color-mix(in srgb, var(--muted) 65%, transparent);
+        text-underline-offset: 3px;
+      }
+      .report-card table a:hover {
+        color: var(--accent);
+        text-decoration-color: currentColor;
+      }
+      .report-card table a:focus-visible {
+        border-radius: 3px;
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
       .report-list {
         display: grid;
         gap: 9px;
@@ -2406,6 +2549,224 @@
         justify-content: space-between;
         min-height: 20px;
       }
+      .customer-service-shell {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: minmax(240px, 32%) minmax(0, 1fr);
+        min-height: 620px;
+      }
+      .conversation-list,
+      .conversation-panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .conversation-list {
+        align-content: start;
+        display: grid;
+      }
+      .conversation-list-item {
+        background: transparent;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0;
+        color: var(--text);
+        padding: 14px;
+        text-align: left;
+      }
+      .conversation-list-item.active {
+        background: var(--capture-bg);
+        box-shadow: inset 4px 0 0 var(--accent);
+      }
+      .conversation-panel {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+      }
+      .conversation-head,
+      .conversation-compose {
+        border-bottom: 1px solid var(--line);
+        padding: 14px;
+      }
+      .conversation-compose {
+        border-bottom: 0;
+        border-top: 1px solid var(--line);
+      }
+      .conversation-messages {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 520px;
+        overflow: auto;
+        padding: 16px;
+      }
+      .chat-message {
+        align-items: flex-end;
+        display: flex;
+        gap: 6px;
+        max-width: calc(78% + 34px);
+      }
+      .chat-message.buyer {
+        align-self: flex-start;
+      }
+      .chat-message.human,
+      .chat-message.automatic {
+        align-self: flex-end;
+      }
+      .chat-message.system {
+        align-self: center;
+      }
+      .chat-bubble {
+        border-radius: 12px;
+        max-width: 100%;
+        padding: 10px 12px;
+        white-space: pre-wrap;
+      }
+      .chat-bubble.buyer {
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+      }
+      .chat-bubble.human {
+        background: #1c5d74;
+        color: #f5fbff;
+      }
+      .chat-bubble.automatic {
+        background: #55481d;
+        color: #fff7ce;
+      }
+      .chat-bubble.system {
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        text-align: center;
+      }
+      .chat-copy-button {
+        align-items: center;
+        background: transparent;
+        border: 0;
+        border-radius: 6px;
+        color: var(--muted);
+        display: inline-flex;
+        flex: 0 0 30px;
+        height: 30px;
+        justify-content: center;
+        opacity: 0;
+        padding: 0;
+        pointer-events: none;
+        transform: translateY(-2px);
+        transition: background-color .15s ease, color .15s ease, opacity .15s ease;
+        width: 30px;
+      }
+      .chat-copy-button:hover,
+      .chat-copy-button:focus-visible {
+        background: var(--capture-bg);
+        color: var(--text);
+      }
+      .chat-message:hover .chat-copy-button,
+      .chat-message:focus-within .chat-copy-button {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .chat-copy-button svg {
+        fill: none;
+        height: 16px;
+        pointer-events: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+        width: 16px;
+      }
+      @media (hover: none) {
+        .chat-copy-button {
+          opacity: .7;
+          pointer-events: auto;
+        }
+      }
+      .chat-meta {
+        display: block;
+        font-size: 10px;
+        margin-top: 6px;
+        opacity: .75;
+      }
+      .conversation-compose textarea {
+          min-height: 90px;
+          width: 100%;
+        }
+      .quick-reply-builder {
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        margin-bottom: 12px;
+        padding: 12px;
+      }
+      .quick-reply-builder select,
+      .quick-reply-builder input {
+        width: 100%;
+      }
+      .quick-reply-fields {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .quick-reply-field {
+        display: grid;
+        gap: 4px;
+      }
+      .quick-reply-field span {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: capitalize;
+      }
+      .quick-reply-note {
+        color: #f1b18e;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .template-library-summary {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .customer-template-library {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        display: grid;
+        gap: 12px;
+        margin-bottom: 12px;
+        padding: 14px;
+      }
+      .customer-template-library-head {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+      }
+      .customer-template-library-head select {
+        min-width: min(520px, 55vw);
+      }
+      .customer-template-preview {
+        background: var(--capture-bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        line-height: 1.5;
+        margin: 0;
+        max-height: 280px;
+        overflow: auto;
+        padding: 14px;
+        white-space: pre-wrap;
+      }
+      @media (max-width: 780px) {
+        .customer-service-shell { grid-template-columns: 1fr; }
+        .conversation-list { max-height: 220px; overflow: auto; }
+        .quick-reply-fields { grid-template-columns: 1fr; }
+        .customer-template-library-head { align-items: stretch; flex-direction: column; }
+        .customer-template-library-head select { min-width: 0; width: 100%; }
+      }
       .empty-state {
         align-items: center;
         background: var(--capture-bg);
@@ -2454,7 +2815,8 @@
         .calendar-grid { min-width: 0; }
         .calendar-day { min-height: 92px; padding: 7px; }
         .detail-block.wide, .detail-block.large, .detail-block.medium, .detail-block.small { grid-column: auto; }
-        .chart-summary, .price-grid { grid-template-columns: 1fr; }
+        .chart-summary, .price-grid, .traffic-funnel { grid-template-columns: 1fr; }
+        .traffic-freshness { align-items: stretch; flex-direction: column; }
         main { padding: 14px; }
         nav { position: static; }
         header { align-items: flex-start; flex-direction: column; padding: 14px; }
@@ -2471,6 +2833,7 @@
     </style>
   </head>
   <body>
+    <div id="source-import-progress" class="source-import-progress" aria-hidden="true"><span></span></div>
     <header>
       <div class="brand">
         <img class="brand-logo" src="assets/autozs-logo.png" alt="AutoZS" />
@@ -2479,7 +2842,7 @@
             <h1>AutoZS</h1>
             <div class="poll-status" id="poll-status"><span class="poll-dot"></span><span id="poll-label">Live</span></div>
           </div>
-          <div class="muted">Home Depot to eBay automation dashboard</div>
+          <div class="muted">Supplier-to-eBay automation dashboard</div>
           <div class="header-runtime">
             <div class="header-store" id="header-store-selector"></div>
             <div class="header-stats" id="header-stats"></div>
@@ -2550,6 +2913,9 @@
       let orderFilterMenuOpen = false;
       let selectedOrderIds = new Set();
       let orderDetailsOpenState = new Map();
+      let selectedConversationId = null;
+      let customerTemplateDrafts = {};
+      let selectedCustomerTemplateLibraryKey = "";
       let calendarMonth = null;
       let calendarSelectedDate = null;
       let refreshPriorityFilter = "needs";
@@ -2558,10 +2924,12 @@
       let statsAccount = "all";
       let statsSection = "performance-summary";
       let marketingAccountKey = "global";
-      let autoDownloadImages = localStorage.getItem("autoDownloadImagesAfterImport") !== "false";
+      let autoDownloadImages = true;
       let lastExtensionImportItems = [];
+      let extensionAutoImportBatch = null;
+      let pendingProductImports = [];
       let lastEbayOAuthState = "";
-      let state = { candidates: [], savedSellers: [], products: [], captureQueue: { total: 0, items: [] }, listingQueue: [], listingJobs: [], ebayListings: [], ebayRevisionJobs: [], sourceRefreshJobs: [], automationRuns: [], snapshots: [], refreshQueue: { items: [], total: 0, needs_refresh: 0, stale_after_days: 7 }, orders: [], settings: {}, ebayConnection: null, ebayAccounts: [], ebayBrowserAccount: null, workers: [], statsOverview: null, priceHistory: {} };
+      let state = { candidates: [], savedSellers: [], products: [], captureQueue: { total: 0, items: [] }, listingQueue: [], listingJobs: [], ebayListings: [], ebayRevisionJobs: [], sourceRefreshJobs: [], automationRuns: [], snapshots: [], refreshQueue: { items: [], total: 0, needs_refresh: 0, stale_after_days: 7 }, orders: [], giftCards: [], supplierOrders: [], customerConversations: [], customerTemplates: [], financeOverview: null, settings: {}, ebayConnection: null, ebayAccounts: [], ebayBrowserAccount: null, workers: [], listingViewsSummary: null, statsOverview: null, trafficOverview: null, priceHistory: {} };
       let lastStateSignature = "";
       let refreshInFlight = false;
       let pendingSilentRender = false;
@@ -2666,11 +3034,18 @@
           sourceRefreshJobs: nextState.sourceRefreshJobs?.map((job) => [job.id, job.batch_key, job.status, job.captured_price, job.updated_at]).slice(0, 100),
           orders: nextState.orders?.length || 0,
           orderUpdated: latest(nextState.orders || []),
+          giftCards: nextState.giftCards?.map((card) => [card.id, card.current_balance, card.status, card.updated_at]),
+          supplierOrders: nextState.supplierOrders?.map((order) => [order.id, order.status, order.total, order.tracking_number, order.updated_at]),
+          customerConversations: nextState.customerConversations?.map((conversation) => [conversation.id, conversation.status, conversation.last_message_at, conversation.messages?.length]),
+          customerTemplates: nextState.customerTemplates?.length || 0,
+          finance: nextState.financeOverview,
           ebayAccounts: nextState.ebayAccounts,
           ebayBrowserAccount: nextState.ebayBrowserAccount,
           workers: nextState.workers?.map((worker) => [worker.worker_id, worker.status, worker.last_seen_at, worker.seconds_since_seen, worker.updated_at]),
           settings: nextState.settings,
+          listingViews: nextState.listingViewsSummary,
           stats: nextState.statsOverview,
+          traffic: nextState.trafficOverview,
         });
       }
 
@@ -2684,7 +3059,14 @@
       }
 
       function shouldDeferSilentRender() {
-        return userIsEditing() || recentlyInteracted();
+        const selection = window.getSelection?.();
+        const selectionInsideMessages = Boolean(
+          selection &&
+          !selection.isCollapsed &&
+          selection.rangeCount &&
+          selection.getRangeAt(0).commonAncestorContainer?.parentElement?.closest?.(".conversation-messages")
+        );
+        return userIsEditing() || recentlyInteracted() || selectionInsideMessages;
       }
 
       function updatePollStatus(label, className = "") {
@@ -2711,7 +3093,7 @@
         refreshInFlight = true;
         try {
           if (silent) updatePollStatus("Syncing", "syncing");
-          const [candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, statsOverview] = await Promise.all([
+          const [candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, giftCards, supplierOrders, customerConversations, customerTemplates, financeOverview, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, listingViewsSummary, statsOverview, trafficOverview] = await Promise.all([
             request("/research/candidates"),
             request("/research/sellers"),
             request("/products"),
@@ -2727,14 +3109,26 @@
             request("/repricing/snapshots"),
             request("/repricing/source-refresh-queue"),
             request("/orders"),
+            request("/gift-cards"),
+            request("/supplier-orders"),
+            request("/customer-service/conversations"),
+            request("/customer-service/templates"),
+            request("/finance/overview"),
             request("/settings"),
             request("/ebay/connection"),
             request("/ebay/accounts"),
             request("/ebay/browser-account"),
             request("/workers"),
-            request(`/stats/overview?range=${encodeURIComponent(statsRange)}&grain=${encodeURIComponent(statsGrain)}&account=${encodeURIComponent(statsAccount)}`)
+            request("/ebay/listing-views/summary"),
+            request(`/stats/overview?range=${encodeURIComponent(statsRange)}&grain=${encodeURIComponent(statsGrain)}&account=${encodeURIComponent(statsAccount)}`),
+            request(`/stats/traffic?range=${encodeURIComponent(statsRange)}&grain=${encodeURIComponent(statsGrain)}&account=${encodeURIComponent(statsAccount)}`)
           ]);
-          const nextState = { candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, statsOverview, priceHistory: state.priceHistory || {} };
+          if (statsOverview?.selected_account && statsOverview.selected_account !== statsAccount) {
+            statsAccount = statsOverview.selected_account;
+          }
+          const nextState = { candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, giftCards, supplierOrders, customerConversations, customerTemplates, financeOverview, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, listingViewsSummary, statsOverview, trafficOverview, priceHistory: state.priceHistory || {} };
+          reconcilePendingProductImports(nextState);
+          updateExtensionAutoImportProgress(nextState);
           updateEbaySyncView(nextState);
           const nextSignature = stateSignature(nextState);
           if (silent && nextSignature === lastStateSignature) {
@@ -3169,6 +3563,7 @@
           ["Scheduled", ebayListingItems().filter(listingIsScheduled).length],
           ["Listings", ebayListingItems().filter(listingIsLive).length],
           ["Orders", state.orders.length],
+          ["30D Views", Number(state.listingViewsSummary?.views_30d || 0).toLocaleString()],
         ].map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
         const workerClass = worker ? `worker-${worker.status || "offline"}` : "worker-offline";
         container.innerHTML = `${stats}<span class="header-stat ${workerClass}" title="${escAttr(workerStatusTitle(worker))}"><strong>${esc(workerLabel)}</strong></span>`;
@@ -3330,6 +3725,7 @@
             </div>
             <div class="job-activity-filter-row">
               <div class="job-activity-workloads" aria-label="Job workload totals">
+                <span><strong>${workloads.imports}</strong> draft imports</span>
                 <span><strong>${workloads.listings}</strong> listing jobs</span>
                 <span><strong>${workloads.prices}</strong> source-price checks</span>
                 <span><strong>${workloads.revisions}</strong> eBay revisions</span>
@@ -3344,6 +3740,7 @@
 
       function jobActivityEntries() {
         const entries = [
+          ...((state.captureQueue && state.captureQueue.items) || []).map(productCaptureActivityEntry),
           ...(state.listingJobs || []).map(listingJobActivityEntry),
           ...latestSourceRefreshJobs(state.sourceRefreshJobs || []).map(sourceRefreshJobActivityEntry),
           ...(state.ebayRevisionJobs || []).map(ebayRevisionJobActivityEntry),
@@ -3356,6 +3753,28 @@
             return jobActivityTimeValue(b.updatedAt) - jobActivityTimeValue(a.updatedAt);
           })
           .slice(0, 40);
+      }
+
+      function productCaptureActivityEntry(item) {
+        const completedParts = [
+          item.source_price !== null && item.source_price !== undefined,
+          Number(item.source_shipping) >= 0,
+          Number(item.local_image_count || 0) > 0 && Number(item.local_image_count || 0) >= Number(item.image_count || 0),
+        ].filter(Boolean).length;
+        return {
+          kind: "Draft import",
+          id: item.product_id,
+          group: "queued",
+          status: "importing",
+          title: item.title || `Product ${item.product_id}`,
+          subtitle: `${item.sku || "New draft"} · source capture`,
+          meta: [item.reason || "Building product draft", item.updated_at ? `Updated ${formatDateTime(item.updated_at)}` : ""].filter(Boolean),
+          message: "",
+          updatedAt: item.updated_at,
+          productId: item.product_id,
+          viewStatus: "all",
+          progress: Math.max(10, Math.min(90, Math.round((completedParts / 3) * 100))),
+        };
       }
 
       function latestSourceRefreshJobs(jobs = []) {
@@ -3436,7 +3855,7 @@
           meta: [
             `eBay ${money(job.old_price)} → ${money(job.target_price)}`,
             job.source_price !== null && job.source_price !== undefined
-              ? `${sourceRefreshPriceDelta(job.old_source_price, job.source_price)}${Number(job.source_shipping || 0) > 0 ? ` + ${money(job.source_shipping)} shipping` : ""}`
+              ? `${sourceRefreshPriceDelta(job.old_source_price, job.source_price)}${Number(job.minimum_order_quantity || 1) > 1 ? ` each - ${job.minimum_order_quantity} units = ${money(job.source_order_subtotal)}` : ""}${Number(job.source_shipping || 0) > 0 ? ` + ${money(job.source_shipping)} shipping` : ""}`
               : "Source price missing",
             job.projected_profit !== null && job.projected_profit !== undefined ? `Projected profit ${money(job.projected_profit)}` : "Profit unavailable",
             job.minimum_profit !== null && job.minimum_profit !== undefined ? `Minimum ${money(job.minimum_profit)}` : "",
@@ -3522,11 +3941,12 @@
       function jobActivityWorkloadCounts(entries = jobActivityEntries()) {
         return entries.reduce((counts, entry) => {
           if (!["running", "queued", "attention"].includes(entry.group)) return counts;
-          if (entry.kind === "Listing") counts.listings += 1;
+          if (entry.kind === "Draft import") counts.imports += 1;
+          else if (entry.kind === "Listing") counts.listings += 1;
           else if (entry.kind === "Price refresh") counts.prices += 1;
           else counts.revisions += 1;
           return counts;
-        }, { listings: 0, prices: 0, revisions: 0 });
+        }, { imports: 0, listings: 0, prices: 0, revisions: 0 });
       }
 
       function jobActivityImportantCount() {
@@ -3553,6 +3973,7 @@
           </div>
           <div class="job-activity-meta">${entry.meta.map((item) => `<span>${esc(item)}</span>`).join("")}</div>
           ${entry.message ? `<div class="job-activity-message">${esc(entry.message)}</div>` : ""}
+          ${entry.progress === null || entry.progress === undefined ? "" : `<div class="draft-progress"><span style="width:${Number(entry.progress)}%"></span></div><div class="draft">${Number(entry.progress)}% imported</div>`}
           <div class="job-activity-actions">
             ${entry.runnerUrl ? `<button class="secondary" onclick="openJobActivityRunner(${jsArg(entry.runnerUrl)}, ${Number(entry.id)}, ${jsArg(entry.revisionBatch?.status === "waiting_results" ? "revision result" : "job")})">${entry.revisionBatch?.status === "waiting_results" ? "Retry result" : "View"}</button>` : entry.productId ? `<button class="secondary" onclick="viewJobActivityProduct(${Number(entry.productId)}, ${jsArg(entry.viewStatus)})">View</button>` : ""}
             ${["needs_review", "paused", "failed"].includes(entry.revisionJob?.status) && entry.revisionJob?.guard_passed ? `<button onclick="approveEbayRevision(${Number(entry.id)})">${entry.revisionJob.status === "failed" ? "Retry" : entry.revisionJob.status === "paused" ? "Resume" : "Approve"}</button>` : ""}
@@ -3709,12 +4130,14 @@
       function supplierSettingsHtml() {
         const suppliers = settingJson("supplier_settings_json", {});
         const homeDepot = suppliers.home_depot || {};
+        const lowes = suppliers.lowes || {};
         return `
           <div class="settings-view-head"><div><h2>Supplier Settings</h2><p class="muted">Defaults used when AutoZS captures, prices, and prepares products from each supplier.</p></div></div>
           <div class="settings-supplier-layout">
             <aside class="settings-supplier-list">
               <h3>Suppliers</h3>
               <button class="active">${homeDepotLogoSvg()} Home Depot US</button>
+              <button disabled title="Lowe's automation is not enabled yet">Lowe's US <span class="status needs-data">Coming soon</span></button>
             </aside>
             <div class="settings-supplier-content">
               <div class="settings-section">
@@ -3724,6 +4147,14 @@
                   <label class="settings-field"><span>Default item country</span><select id="supplier-country"><option>United States</option></select></label>
                   <label class="settings-field"><span>Source ZIP code</span><input id="supplier-zipcode" inputmode="numeric" value="${esc(homeDepot.zipcode || "")}" placeholder="Supplier delivery ZIP" /></label>
                   <label class="settings-field"><span>Shipping method</span><select id="supplier-shipping-method"><option ${homeDepot.shipping_method === "Cheapest with tracking" ? "selected" : ""}>Cheapest with tracking</option><option ${homeDepot.shipping_method === "Fastest available" ? "selected" : ""}>Fastest available</option></select></label>
+                </div>
+              </div>
+              <div class="settings-section">
+                <h3>Lowe's scaffold</h3>
+                <p class="muted">Lowe's supplier records and canonical product URLs are supported. Browser capture, automatic price refresh, and fulfillment remain disabled until the live workflow is implemented.</p>
+                <div class="settings-form-grid">
+                  <label class="settings-field"><span>Status</span><input value="${esc(lowes.status === "coming_soon" ? "Coming soon" : "Disabled")}" disabled /></label>
+                  <label class="settings-field"><span>Default product quantity</span><input value="${esc(lowes.default_quantity ?? 1)}" disabled /></label>
                 </div>
               </div>
               <div class="settings-section">
@@ -3869,7 +4300,11 @@
           `<span class="status ${account.connected ? "stage-ready" : account.configured ? "stage-ready" : "stage-needs"}">${account.connected ? "Connected" : account.configured && !account.writes_enabled ? "Browser ready" : account.configured ? "Configured" : "Needs setup"}</span>`,
           `<span class="status ${account.writes_enabled ? "stage-shipping" : "stage-ready"}">${account.writes_enabled ? "Writes on" : "Browser-assisted"}</span>`,
           account.missing?.length ? `<div class="draft">${esc(account.missing.slice(0, 3).join(" | "))}</div>` : `<span class="status stage-ready">Ready</span>`,
-          `<div class="actions"><button class="secondary" onclick="openStoreSetup('${escAttr(account.key)}')">Edit</button><button class="danger" onclick="deleteEbayAccount('${escAttr(account.key)}')">Delete</button></div>`
+          `<div class="actions">
+            ${account.client_id ? `<button onclick="startEbayAccountOAuth('${escAttr(account.key)}')">${account.connected ? "Reconnect analytics" : "Connect analytics"}</button><button class="secondary" onclick="finishEbayAccountOAuth('${escAttr(account.key)}')">Paste OAuth result</button>${account.connected ? `<button class="secondary" onclick="refreshEbayAccountOAuth('${escAttr(account.key)}')">Refresh token</button>` : ""}` : `<button onclick="openStoreSetup('${escAttr(account.key)}')">Set up analytics</button>`}
+            <button class="secondary" onclick="openStoreSetup('${escAttr(account.key)}')">Edit</button>
+            <button class="danger" onclick="deleteEbayAccount('${escAttr(account.key)}')">Delete</button>
+          </div>`
         ]);
         return `
           <div class="detail-block wide">
@@ -4068,6 +4503,7 @@
       function addProductsSupplierOptions(selected = "source_site") {
         const suppliers = [
           ["home_depot", "Home Depot"],
+          ["lowes", "Lowe's (coming soon)"],
           ["amazon", "Amazon"],
           ["walmart", "Walmart"],
           ["aliexpress", "AliExpress"],
@@ -4077,20 +4513,25 @@
       }
 
       function supplierName(key) {
-        return ({ home_depot: "Home Depot", amazon: "Amazon", walmart: "Walmart", aliexpress: "AliExpress", source_site: "Other source" })[key] || "Other source";
+        return ({ home_depot: "Home Depot", lowes: "Lowe's", amazon: "Amazon", walmart: "Walmart", aliexpress: "AliExpress", source_site: "Other source" })[key] || "Other source";
       }
 
       function inferredAddProductsSupplier(raw) {
         const text = String(raw || "").toLowerCase();
+        const entries = text.split(/[\n,]+/).map((value) => value.trim()).filter(Boolean);
+        if (!entries.length) return "home_depot";
         if (text.includes("homedepot.com")) return "home_depot";
+        if (text.includes("lowes.com")) return "lowes";
         if (text.includes("amazon.")) return "amazon";
         if (text.includes("walmart.com")) return "walmart";
         if (text.includes("aliexpress.")) return "aliexpress";
+        if (entries.every((entry) => /^[a-z0-9-]+$/i.test(entry))) return "home_depot";
         return "source_site";
       }
 
       function addProductsSupplierNote(key) {
         if (key === "home_depot") return "Detected from the link. Home Depot items can be completed with the AutoZS Chrome extension when server capture is blocked.";
+        if (key === "lowes") return "Creates a Lowe's placeholder source record. Automated browser capture, price refresh, and fulfillment are coming later.";
         if (key === "source_site") return "AutoZS will create a source record from the URL. Use the browser capture tools later if price, images, or description need filling.";
         return `${supplierName(key)} is saved as the supplier. Browser capture may still be needed for full product details.`;
       }
@@ -4112,14 +4553,13 @@
         }
         const isMultiple = addProductsView === "multiple";
         const storesReady = availableEbayStores().length > 0;
-        const supplier = "source_site";
+        const supplier = "home_depot";
         return `<div class="add-products-dialog" role="dialog" aria-modal="true" aria-label="${addProductsModalTitle()}">
           <button class="add-products-close" onclick="closeAddProducts()" aria-label="Close add products">&times;</button>
           <h2 class="add-products-heading">${addProductsModalTitle()}</h2>
           <p class="add-products-subtitle">Publish to <strong>${storesReady ? "your selected eBay store" : "an eBay store profile"}</strong></p>
           ${isMultiple ? addProductsMultipleHtml(supplier) : addProductsSingleHtml(supplier)}
           <div class="add-products-footer">
-            <label class="muted"><input id="add-products-auto-download" type="checkbox" ${autoDownloadImages ? "checked" : ""} onchange="setAutoDownloadImages(this.checked)" /> Download images after import</label>
             ${storesReady ? "" : `<span class="needs-data">Add an eBay store profile in Settings before importing.</span>`}
             <button class="secondary" onclick="closeAddProducts()">Cancel</button>
             <button ${storesReady ? "" : "disabled"} onclick="submitAddProductsImport()">Add as draft</button>
@@ -4133,7 +4573,6 @@
           <label class="add-products-field"><span>Supplier URL or Product ID</span><input id="add-products-single-url" placeholder="Paste a supplier product URL or Home Depot product ID" oninput="handleAddProductUrlInput()" autofocus /></label>
           <div class="add-products-meta">
             <label class="add-products-field"><span>Supplier source</span><select id="add-products-supplier" onchange="handleAddProductsSupplierChange()">${addProductsSupplierOptions(supplier)}</select></label>
-            <p id="add-products-supplier-note" class="supplier-note">${addProductsSupplierNote(supplier)}</p>
           </div>
         </div>`;
       }
@@ -4148,7 +4587,7 @@
           ${urlsTab ? `<label class="add-products-field"><span>Supplier URLs or Home Depot product IDs</span><textarea id="add-products-batch-urls" class="add-products-textarea" placeholder="Paste one supplier URL or Home Depot product ID per line" oninput="handleAddProductUrlInput()"></textarea><span id="add-products-url-count" class="muted">One product per line</span></label>` : addProductsCsvHtml()}
           <div class="add-products-meta">
             <label class="add-products-field"><span>eBay store</span><select id="add-products-store">${addProductsStoreOptions()}</select></label>
-            <label class="add-products-field"><span>Supplier source</span><select id="add-products-supplier" onchange="handleAddProductsSupplierChange()">${addProductsSupplierOptions(supplier)}</select><span id="add-products-supplier-note" class="supplier-note">${addProductsSupplierNote(supplier)}</span></label>
+            <label class="add-products-field"><span>Supplier source</span><select id="add-products-supplier" onchange="handleAddProductsSupplierChange()">${addProductsSupplierOptions(supplier)}</select></label>
           </div>
         </div>`;
       }
@@ -4386,30 +4825,130 @@
         return urls;
       }
 
+      function normalizedImportSourceUrl(value) {
+        try {
+          const url = new URL(String(value || "").trim());
+          url.hash = "";
+          url.search = "";
+          return `${url.hostname.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+        } catch (_error) {
+          return String(value || "").trim().toLowerCase().replace(/[?#].*$/, "").replace(/\/+$/, "");
+        }
+      }
+
+      function importTitleFromUrl(value, index) {
+        try {
+          const url = new URL(value);
+          const parts = url.pathname.split("/").filter(Boolean);
+          const productIndex = parts.indexOf("p");
+          const slug = productIndex >= 0 ? parts[productIndex + 1] : parts[parts.length - 2] || parts[parts.length - 1];
+          if (slug && !/^\d+$/.test(slug)) {
+            return decodeURIComponent(slug).replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+          }
+        } catch (_error) {}
+        return `Product ${index + 1}`;
+      }
+
+      function createPendingProductImports(urls, supplier, storeKey) {
+        const startedAt = Date.now();
+        return urls.map((sourceUrl, index) => ({
+          key: `product-import-${startedAt}-${index}`,
+          source_url: sourceUrl,
+          supplier,
+          store_key: storeKey,
+          title: importTitleFromUrl(sourceUrl, index),
+          status: "Creating draft record",
+          progress: 8,
+          product_id: null,
+          failed: false,
+        }));
+      }
+
+      function reconcilePendingProductImports(nextState) {
+        if (!pendingProductImports.length) return;
+        const products = nextState.products || [];
+        pendingProductImports = pendingProductImports.filter((pending) => {
+          const realProductExists = products.some((product) => {
+            if (pending.product_id && Number(product.id) === Number(pending.product_id)) return true;
+            const sourceUrl = supplier(product)?.source_url;
+            return sourceUrl && normalizedImportSourceUrl(sourceUrl) === normalizedImportSourceUrl(pending.source_url);
+          });
+          return !realProductExists;
+        });
+      }
+
       async function submitAddProductsImport() {
         const storeKey = document.getElementById("add-products-store")?.value || "";
-        const supplier = document.getElementById("add-products-supplier")?.value || "source_site";
+        const supplierSelect = document.getElementById("add-products-supplier");
+        let supplierKey = supplierSelect?.value || "home_depot";
         const raw = addProductsView === "multiple" && addProductsBatchTab === "csv"
           ? addProductsCsvUrls.join("\n")
           : currentAddProductsInput()?.value || "";
+        const inferredSupplier = inferredAddProductsSupplier(raw);
+        if (inferredSupplier !== "source_site") supplierKey = inferredSupplier;
         let urls;
         try {
-          urls = normalizeAddProductsUrls(raw, supplier);
+          urls = normalizeAddProductsUrls(raw, supplierKey);
         } catch (error) {
           return message(error.message);
         }
         if (!urls.length) return message("Paste at least one supplier URL or upload a CSV first.");
         if (!storeKey) return message("Add an eBay store profile in Settings before importing products.");
-        const result = await request("/products/import", { method: "POST", body: JSON.stringify({ urls: urls.join("\n"), supplier_override: supplier }) });
-        (result.products || []).forEach((product) => localStorage.setItem(`${PRODUCT_EBAY_STORE_STORAGE_PREFIX}${product.id}`, storeKey));
-        const imageResult = await maybeDownloadImportedImages(result.products || []);
-        lastExtensionImportItems = extensionItemsFromImportResult(result);
-        const missing = lastExtensionImportItems.length;
+        const optimisticImports = createPendingProductImports(urls, supplierKey, storeKey);
+        pendingProductImports = [...optimisticImports, ...pendingProductImports];
         addProductsView = null;
         addProductsCsvUrls = [];
         active = "Products";
-        await refreshAll();
-        message(importResultMessage(result, imageResult, missing));
+        productWorkflowFilter = "all";
+        productShippingFilter = "all";
+        render();
+        message(`Creating ${urls.length} product draft${urls.length === 1 ? "" : "s"}...`);
+        try {
+          const result = await request("/products/import", { method: "POST", body: JSON.stringify({ urls: urls.join("\n"), supplier_override: supplierKey }) });
+          const importedProducts = result.products || [];
+          optimisticImports.forEach((pending, index) => {
+            const matchedProduct = importedProducts.find((candidate) => (
+              normalizedImportSourceUrl(supplier(candidate)?.source_url) === normalizedImportSourceUrl(pending.source_url)
+            ));
+            const product = matchedProduct || (importedProducts.length === optimisticImports.length ? importedProducts[index] : null);
+            if (product) {
+              pending.product_id = product.id;
+              pending.title = product.title || pending.title;
+              pending.status = "Draft created · preparing source data";
+              pending.progress = 24;
+              localStorage.setItem(`${PRODUCT_EBAY_STORE_STORAGE_PREFIX}${product.id}`, storeKey);
+            }
+          });
+          render();
+          optimisticImports.forEach((pending) => {
+            if (!pending.failed) {
+              pending.status = "Downloading and preparing images";
+              pending.progress = 42;
+            }
+          });
+          render();
+          const imageResult = await maybeDownloadImportedImages(importedProducts);
+          lastExtensionImportItems = extensionItemsFromImportResult(result);
+          const missing = lastExtensionImportItems.length;
+          optimisticImports.forEach((pending) => {
+            if (!pending.failed) {
+              pending.status = missing ? "Queued for Home Depot browser capture" : "Finalizing eBay-ready draft";
+              pending.progress = missing ? 58 : 88;
+            }
+          });
+          render();
+          await refreshAll();
+          if (missing) beginExtensionAutoImport(lastExtensionImportItems);
+          message(importResultMessage(result, imageResult, missing));
+        } catch (error) {
+          optimisticImports.forEach((pending) => {
+            pending.failed = true;
+            pending.status = `Import failed: ${error.message}`;
+            pending.progress = 100;
+          });
+          render();
+          message(`Product import failed: ${error.message}`);
+        }
       }
 
       function importHtml() {
@@ -4466,7 +5005,7 @@
         const warningText = (result.warnings || []).join(" ");
         const blocked = /Home Depot blocked/i.test(warningText);
         if (missing) {
-          return `Imported ${result.imported} product(s). ${missing} ready for extension import. Open them with Auto Import, then click Import to Website on each Home Depot page.`;
+          return `Imported ${result.imported} product(s). Auto-importing ${missing} Home Depot product${missing === 1 ? "" : "s"} in the background, one tab at a time.`;
         }
         if (blocked) {
           return `Imported ${result.imported} product(s). ${imageResult} Home Depot blocked server capture, but saved source data was reused.`;
@@ -4540,10 +5079,34 @@
       function openLastExtensionImportBatch() {
         const items = lastExtensionImportItems.filter((item) => item.source_url);
         if (!items.length) return message("No recent Home Depot imports need extension capture.");
-        items.forEach((item, index) => {
-          setTimeout(() => window.open(autoImportUrl(item.source_url), "_blank", "noopener,noreferrer"), index * 650);
-        });
-        message(`Opening ${items.length} Home Depot page(s) with extension auto-import enabled. Use Import to Website on any tab that does not start automatically.`);
+        beginExtensionAutoImport(items);
+        message(`Auto-importing ${items.length} Home Depot product${items.length === 1 ? "" : "s"} in the background, one tab at a time.`);
+      }
+
+      function beginExtensionAutoImport(items) {
+        const productIds = [...new Set((items || []).map((item) => Number(item.product_id)).filter(Boolean))];
+        if (!productIds.length) return;
+        extensionAutoImportBatch = { productIds, total: productIds.length };
+        setSourceImportProgress(0.03);
+        window.postMessage({ source: "autozs-dashboard", type: "autozs-start-product-capture" }, location.origin);
+      }
+
+      function setSourceImportProgress(value) {
+        const fill = document.querySelector("#source-import-progress > span");
+        if (!fill) return;
+        fill.style.transform = `scaleX(${Math.max(0, Math.min(1, Number(value) || 0))})`;
+      }
+
+      function updateExtensionAutoImportProgress(nextState) {
+        if (!extensionAutoImportBatch) return;
+        const pendingIds = new Set((nextState.captureQueue?.items || []).map((item) => Number(item.product_id)));
+        const remaining = extensionAutoImportBatch.productIds.filter((id) => pendingIds.has(id)).length;
+        const completed = extensionAutoImportBatch.total - remaining;
+        setSourceImportProgress(Math.max(0.03, completed / extensionAutoImportBatch.total));
+        if (remaining) return;
+        setSourceImportProgress(1);
+        extensionAutoImportBatch = null;
+        setTimeout(() => setSourceImportProgress(0), 1200);
       }
 
       function clearExtensionImportPanel() {
@@ -4593,10 +5156,8 @@
       function openCaptureBatch(limit = 5) {
         const items = activeCaptureQueueItems().slice(0, limit);
         if (!items.length) return message("No source URLs need capture right now.");
-        items.forEach((item, index) => {
-          setTimeout(() => window.open(autoImportUrl(item.source_url), "_blank", "noopener,noreferrer"), index * 650);
-        });
-        message(`Opening ${items.length} source tab(s) with extension auto-import enabled. Use Import to Website on any tab that does not start automatically.`);
+        beginExtensionAutoImport(items);
+        message(`Auto-importing ${items.length} source product${items.length === 1 ? "" : "s"} in the background, one tab at a time.`);
       }
 
       function copyCaptureQueueUrls() {
@@ -4788,15 +5349,16 @@
       }
 
       function productsHtml() {
-        if (!state.products.length) return `<p class="muted">No products yet.</p>`;
+        if (!state.products.length && !pendingProductImports.length) return `<p class="muted">No products yet.</p>`;
         const scheduleProducts = scheduleFilteredProducts();
         const shippingCounts = productShippingCounts(scheduleProducts);
         const workflowCounts = productWorkflowCounts(scheduleProducts);
         const products = visibleProducts();
+        const pendingCards = pendingProductImports.map(pendingProductCardHtml).join("");
         return `
           ${productsFilterMenuHtml(workflowCounts, shippingCounts, scheduleProducts.length)}
           ${productSelectionToolbarHtml(products)}
-          ${products.length ? `<div class="product-list">${products.map(productCardHtml).join("")}</div>` : `<p class="muted">No products match these filters.</p>`}`;
+          ${pendingCards || products.length ? `<div class="product-list">${pendingCards}${products.map(productCardHtml).join("")}</div>` : `<p class="muted">No products match these filters.</p>`}`;
       }
 
       function filterTriggerSvg() {
@@ -4827,19 +5389,26 @@
           images: "Needs images",
           ready: "eBay ready",
           source: "No source",
+          unavailable: "Unavailable",
         }[productWorkflowFilter] || "Workflow: All";
         const shipping = {
           all: "Shipping: All",
           free: "Free shipping",
           paid: "Paid shipping",
           unknown: "Shipping unknown",
+          unavailable: "Delivery unavailable",
         }[productShippingFilter] || "Shipping: All";
         return `${workflow} / ${shipping}`;
       }
 
       function productsFilterMenuHtml(workflowCounts, shippingCounts, visibleProductCount) {
+        const anyExpanded = visibleProducts().some((product) => productDetailsAreOpen(product, productWorkflowState(product)));
         return `<div class="filter-shell ${productFilterMenuOpen ? "filter-shell-open" : ""}">
           <button class="filter-trigger" onclick="toggleProductFilterMenu()" aria-expanded="${productFilterMenuOpen ? "true" : "false"}">${filterTriggerSvg()} Add Filter</button>
+          <button class="filter-trigger filter-collapse-trigger" type="button" onclick="toggleAllProductDrawers()" aria-label="${anyExpanded ? "Collapse" : "Expand"} all visible product details">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="${anyExpanded ? "m7 14 5-5 5 5" : "m7 10 5 5 5-5"}"/></svg>
+            ${anyExpanded ? "Collapse All" : "Expand All"}
+          </button>
           <span class="filter-summary">${esc(productsFilterSummary())}</span>
           <div class="filter-menu ${productFilterMenuOpen ? "open" : ""}">
             ${filterSearchHtml()}
@@ -4850,11 +5419,13 @@
             ${filterMenuOption("Needs images", productWorkflowFilter === "images", "setProductWorkflowFilter('images')", workflowCounts.images)}
             ${filterMenuOption("eBay ready", productWorkflowFilter === "ready", "setProductWorkflowFilter('ready')", workflowCounts.ready)}
             ${filterMenuOption("No source", productWorkflowFilter === "source", "setProductWorkflowFilter('source')", workflowCounts.source)}
+            ${filterMenuOption("Unavailable", productWorkflowFilter === "unavailable", "setProductWorkflowFilter('unavailable')", workflowCounts.unavailable)}
             <div class="filter-menu-section">Shipping</div>
             ${filterMenuOption("All shipping", productShippingFilter === "all", "setProductShippingFilter('all')", visibleProductCount)}
             ${filterMenuOption("Free", productShippingFilter === "free", "setProductShippingFilter('free')", shippingCounts.free)}
             ${filterMenuOption("Paid", productShippingFilter === "paid", "setProductShippingFilter('paid')", shippingCounts.paid)}
             ${filterMenuOption("Unknown", productShippingFilter === "unknown", "setProductShippingFilter('unknown')", shippingCounts.unknown)}
+            ${filterMenuOption("Unavailable", productShippingFilter === "unavailable", "setProductShippingFilter('unavailable')", shippingCounts.unavailable)}
           </div>
         </div>`;
       }
@@ -4992,6 +5563,14 @@
         render();
       }
 
+      function toggleAllProductDrawers() {
+        captureProductDetailsOpenState();
+        const products = visibleProducts();
+        const anyExpanded = products.some((product) => productDetailsAreOpen(product, productWorkflowState(product)));
+        products.forEach((product) => productDetailsOpenState.set(Number(product.id), !anyExpanded));
+        render();
+      }
+
       function cardClickShouldToggle(event) {
         return !event.target.closest("button, input, select, label, a, details");
       }
@@ -5061,6 +5640,73 @@
         }, { products: 0, missing: 0 });
       }
 
+      function pendingProductCardHtml(pending) {
+        const supplierName = pending.supplier === "home_depot" ? "Home Depot" : pending.supplier === "lowes" ? "Lowe's" : "Supplier";
+        const logo = pending.supplier === "home_depot" ? homeDepotLogoSvg() : sourceLogoSvg();
+        return `<div class="product-card importing-product-card ${pending.failed ? "import-failed" : ""}">
+          <div class="product-row">
+            <div class="product-main">
+              <div class="product-import-placeholder">${logo}</div>
+              <div>
+                <div class="product-title">${esc(pending.title)}</div>
+                <div class="product-sku"><span>New draft</span><span class="meta-separator">|</span><span>Supplier: ${esc(supplierName)}</span></div>
+              </div>
+            </div>
+            <div class="product-card-context">
+              <span class="status ${pending.failed ? "stage-capture" : "stage-images"}">${pending.failed ? "Needs attention" : "Importing"}</span>
+              ${pending.failed ? `<button class="secondary" type="button" onclick="dismissPendingProductImport('${escAttr(pending.key)}')">Dismiss</button>` : ""}
+            </div>
+          </div>
+          ${productBuildProgressMarkup(pending.status, pending.progress)}
+        </div>`;
+      }
+
+      function dismissPendingProductImport(key) {
+        pendingProductImports = pendingProductImports.filter((pending) => pending.key !== key);
+        render();
+      }
+
+      function productBuildProgressMarkup(label, progress) {
+        const percent = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+        return `<div class="product-build-progress">
+          <div class="product-build-progress-copy"><strong>${esc(label)}</strong><span>${percent}%</span></div>
+          <div class="product-build-progress-track" role="progressbar" aria-label="${escAttr(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+            <div class="product-build-progress-fill" style="width:${percent}%"></div>
+          </div>
+        </div>`;
+      }
+
+      function productBuildProgressState(product) {
+        const queueItem = (state.captureQueue?.items || []).find((item) => Number(item.product_id) === Number(product.id));
+        const workflow = productWorkflowState(product);
+        if (workflow.key === "unavailable" || workflow.key === "price_unavailable") return null;
+        if (!queueItem && workflow.key === "ready") return null;
+        const draft = product.listing_drafts?.[0];
+        const images = imageDownloadCountsForProduct(product);
+        const hasPrice = sourcePrice(product) !== null && sourcePrice(product) !== undefined;
+        const hasShipping = sourceShipping(product) !== null && sourceShipping(product) !== undefined;
+        const hasDescription = Boolean(draft?.description) && !/Product details are summarized from the source listing|Source product details captured/i.test(draft.description);
+        let progress = 18;
+        if (hasPrice) progress += 22;
+        if (hasShipping) progress += 14;
+        if (hasDescription) progress += 16;
+        if (images.total) progress += 10;
+        if (images.total && !images.missing) progress += 15;
+        progress = Math.min(progress, 96);
+        let label = "Building product draft";
+        if (workflow.key === "capture") label = "Capturing Home Depot product data";
+        else if (workflow.key === "shipping") label = "Confirming source shipping";
+        else if (workflow.key === "images") label = images.total ? `Preparing product images · ${images.downloaded}/${images.total}` : "Finding product images";
+        else if (workflow.key === "ready") label = "Finishing eBay-ready draft";
+        if (queueItem?.reason) label = queueItem.reason;
+        return { label, progress };
+      }
+
+      function productBuildProgressHtml(product) {
+        const progress = productBuildProgressState(product);
+        return progress ? productBuildProgressMarkup(progress.label, progress.progress) : "";
+      }
+
       function productCardHtml(product) {
         const draft = product.listing_drafts && product.listing_drafts[0];
         const updated = product.supplier_products[0]?.updated_at ? new Date(product.supplier_products[0].updated_at).toLocaleDateString() : "-";
@@ -5081,6 +5727,7 @@
               <div class="product-card-context">${productStoreSelectorHtml(product)}</div>
               ${productCardPrimaryActionHtml(product)}
             </div>
+            ${productBuildProgressHtml(product)}
             ${productDrawerHtml(product, draft, workflow)}
           </div>`;
       }
@@ -5116,7 +5763,7 @@
         const profit = estimatedProfit(draft?.calculated_price, product);
         const imageCounts = imageDownloadCountsForProduct(product);
         return `<div class="compact-facts">
-          ${compactFactHtml("Source", money(sourcePrice(product)), sourceTooltip(product))}
+          ${compactFactHtml("Source", supplier(product)?.price_unavailable ? "Unavailable" : money(sourcePrice(product)), sourceTooltip(product))}
           ${compactFactHtml("Shipping", shippingBadgeHtml(product), shippingTooltip(product))}
           ${compactFactHtml("Draft", money(draft?.calculated_price), draftTooltip(product))}
           ${compactFactHtml("Profit", money(profit), profitTooltip(product))}
@@ -5221,7 +5868,7 @@
         return products.reduce((counts, product) => {
           counts[shippingState(product).key] += 1;
           return counts;
-        }, { free: 0, paid: 0, unknown: 0 });
+        }, { free: 0, paid: 0, unknown: 0, unavailable: 0 });
       }
 
       function availableEbayStores() {
@@ -5261,6 +5908,20 @@
       }
 
       function productCardPrimaryActionHtml(product) {
+        if (supplier(product)?.in_stock === false) {
+          return `<div class="product-card-primary-action">
+            <button class="secondary" disabled title="This supplier product cannot be delivered to the configured location">
+              Unavailable
+            </button>
+          </div>`;
+        }
+        if (supplier(product)?.price_unavailable) {
+          return `<div class="product-card-primary-action">
+            <button class="secondary" onclick="openSource(${product.id})" title="Add this item to the supplier cart to reveal its price">
+              Check cart price
+            </button>
+          </div>`;
+        }
         if (isScheduledProduct(product)) {
           return `<div class="product-card-primary-action">
             <button class="secondary" disabled title="This product has already moved into the scheduled listings flow">
@@ -5283,7 +5944,7 @@
         return products.reduce((counts, product) => {
           counts[productWorkflowState(product).key] += 1;
           return counts;
-        }, { capture: 0, shipping: 0, images: 0, ready: 0, source: 0 });
+        }, { capture: 0, shipping: 0, images: 0, ready: 0, source: 0, unavailable: 0, price_unavailable: 0 });
       }
 
       function shippingFilterButton(key, label, className) {
@@ -5314,6 +5975,7 @@
         const currentSupplier = supplier(product);
         if (!currentSupplier) return "Unknown";
         if (currentSupplier.supplier === "home_depot" || /homedepot\.com/i.test(currentSupplier.source_url || "")) return "Home Depot";
+        if (currentSupplier.supplier === "lowes" || /lowes\.com/i.test(currentSupplier.source_url || "")) return "Lowe's";
         return currentSupplier.supplier || "Source";
       }
 
@@ -5389,13 +6051,20 @@
       }
 
       function productWorkflowState(product) {
-        const hasSourceUrl = Boolean(supplier(product)?.source_url);
+        const currentSupplier = supplier(product);
+        const hasSourceUrl = Boolean(currentSupplier?.source_url);
         const hasSourcePrice = sourcePrice(product) !== null && sourcePrice(product) !== undefined;
         const draft = product.listing_drafts && product.listing_drafts[0];
         const hasDraftPrice = draft?.calculated_price !== null && draft?.calculated_price !== undefined;
         const hasImages = Boolean((product.images || []).length);
         if (!hasSourceUrl) {
           return { key: "source", label: "No source", className: "stage-source", summary: "Attach a source URL" };
+        }
+        if (currentSupplier?.in_stock === false) {
+          return { key: "unavailable", label: "Unavailable", className: "ship-unavailable", summary: "Supplier delivery unavailable" };
+        }
+        if (currentSupplier?.price_unavailable) {
+          return { key: "price_unavailable", label: "Price unavailable", className: "stage-capture", summary: "Check supplier cart for price" };
         }
         if (!hasSourcePrice || !hasDraftPrice) {
           return { key: "capture", label: "Needs capture", className: "stage-capture", summary: "Needs browser capture" };
@@ -5685,7 +6354,7 @@
         const updated = job?.updated_at ? new Date(job.updated_at).toLocaleDateString() : "-";
         const watchOnly = listingJobIsWatchOnly(item);
         const isFocused = Number(item.product_id) === Number(focusedProductId);
-        return `<div class="product-card shipping-${shipping.key} ${watchOnly ? "watch-only" : ""} ${isFocused ? "is-focused" : ""}" data-product-card-id="${escAttr(item.product_id)}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
+        return `<div class="product-card listing-product-card shipping-${shipping.key} ${watchOnly ? "watch-only" : ""} ${isFocused ? "is-focused" : ""}" data-product-card-id="${escAttr(item.product_id)}" onclick="toggleListingDrawerFromCard(event, ${item.product_id})">
           <div class="${watchOnly ? "product-card-watch-content" : ""}">
             <div class="product-row listing-product-row">
               ${listingLeadingControlsHtml(item, summary)}
@@ -5746,6 +6415,7 @@
               ["eBay price", money(item.price)],
               ["Estimated profit", money(item.estimated_profit)],
               ["Views", listingViewsHtml(item)],
+              ["Orders", listingOrdersHtml(item)],
               ["Relist", listingRenewalDate(item) ? formatSchedule(listingRenewalDate(item)) : "-"],
             ])}
             ${listingIssuesHtml(item)}
@@ -5834,6 +6504,7 @@
           ${compactFactHtml("Start", listingStartCompactHtml(item))}
           ${compactFactHtml("Relist", listingRenewalHtml(item), listingRenewalDate(item) ? `Renews ${formatSchedule(listingRenewalDate(item))}` : "")}
           ${compactFactHtml("Views", listingViewsHtml(item), listingViewsTooltip(item))}
+          ${compactFactHtml("Orders", listingOrdersHtml(item), listingOrdersTooltip(item))}
         </div>`;
       }
 
@@ -5850,15 +6521,49 @@
         return `Measured ${formatSchedule(item.listing_views_measured_at)}.${candidate}`;
       }
 
+      function listingOrderStats(item) {
+        const productId = Number(item.product_id);
+        const matched = (state.orders || []).map((order) => {
+          const items = (order.items || []).filter((orderItem) => Number(orderItem.product_id) === productId);
+          return { order, items };
+        }).filter((entry) => entry.items.length);
+        return {
+          orders: matched.length,
+          units: matched.reduce((sum, entry) => sum + entry.items.reduce((itemSum, orderItem) => itemSum + Number(orderItem.quantity || 0), 0), 0),
+          revenue: matched.reduce((sum, entry) => sum + entry.items.reduce((itemSum, orderItem) => itemSum + Number(orderItem.sale_price || 0) * Number(orderItem.quantity || 0), 0), 0),
+        };
+      }
+
+      function listingOrdersHtml(item) {
+        return esc(listingOrderStats(item).orders);
+      }
+
+      function listingOrdersTooltip(item) {
+        const stats = listingOrderStats(item);
+        return stats.orders
+          ? `${stats.orders} imported eBay order${stats.orders === 1 ? "" : "s"} · ${stats.units} unit${stats.units === 1 ? "" : "s"} · ${money(stats.revenue)} item revenue.`
+          : "No imported eBay orders match this listing yet.";
+      }
+
       function supplierNameFromUrl(url) {
         if (/homedepot\.com/i.test(url || "")) return "Home Depot";
+        if (/lowes\.com/i.test(url || "")) return "Lowe's";
         return "Source";
       }
 
       function ebayListingPrimaryActionHtml(item) {
         const job = item.listing_job;
+        const product = (state.products || []).find((candidate) => Number(candidate.id) === Number(item.product_id));
+        const workflow = product ? productWorkflowState(product) : { key: "" };
         if (listingIsTombstoned(item)) {
           return `<button onclick="importProductToEbay(${item.product_id})" title="Create a fresh eBay draft because the previous draft was tombstoned">Reimport</button>`;
+        }
+        if (product && workflow.key === "price_unavailable") {
+          return `
+            <div class="needs-data">The supplier does not show a product-page price. Add it to the cart, then capture it again after the price appears.</div>
+            <div class="actions">
+              <button class="secondary" onclick="openSource(${product.id})">Open Source</button>
+            </div>`;
         }
         if ((listingIsLive(item) || listingIsScheduled(item)) && (item.listing_id || extractListingIdFromJob(job))) {
           return `<button class="secondary" onclick="openEbayListingDraft(${item.product_id})" title="Open this confirmed eBay listing">View Listing</button>`;
@@ -6913,6 +7618,10 @@
       function shippingState(product) {
         const source = sourcePrice(product);
         if (source === null || source === undefined) return { key: "unknown", label: "Shipping unknown", className: "ship-unknown" };
+        const supplier = product.supplier_products && product.supplier_products[0];
+        if (supplier && supplier.in_stock === false) {
+          return { key: "unavailable", label: "Delivery unavailable", className: "ship-unavailable" };
+        }
         const shipping = sourceShipping(product);
         if (shipping === null || shipping === undefined) return { key: "unknown", label: "Shipping unknown", className: "ship-unknown" };
         if (shipping > 0) return { key: "paid", label: `Paid ${money(shipping)}`, className: "ship-paid" };
@@ -7174,6 +7883,7 @@
           ["performance-summary", "Performance Summary"],
           ["seller-level", "Seller Level"],
           ["sales", "Sales"],
+          ["profit-loss", "Profit / Loss"],
           ["traffic", "Traffic"],
           ["service-metrics", "Service Metrics"],
           ["payments-summary", "Payments Summary"],
@@ -7190,24 +7900,50 @@
       }
 
       function statsControlsHtml(stats) {
-        const accounts = stats.available_accounts?.length ? stats.available_accounts : ["all"];
+        const accounts = statsAccountOptions(stats);
         return `<div class="stats-controls">
           <label><span class="muted">Range</span><select onchange="updateStatsFilter('range', this.value)">
             ${[["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"], ["all", "All time"]].map(([value, label]) => `<option value="${value}" ${statsRange === value ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <label><span class="muted">Grain</span><select onchange="updateStatsFilter('grain', this.value)">
-            <option value="day" ${statsGrain === "day" ? "selected" : ""}>Daily</option>
-            <option value="month" ${statsGrain === "month" ? "selected" : ""}>Monthly</option>
-          </select></label>
           <label><span class="muted">Account</span><select onchange="updateStatsFilter('account', this.value)">
-            ${accounts.map((account) => `<option value="${escAttr(account)}" ${statsAccount === account ? "selected" : ""}>${esc(account === "all" ? "All accounts" : account)}</option>`).join("")}
+            ${accounts.map((account) => `<option value="${escAttr(account.key)}" ${statsAccount === account.key ? "selected" : ""}>${esc(account.label)}</option>`).join("")}
           </select></label>
         </div>`;
+      }
+
+      function statsAccountOptions(stats = state.statsOverview || {}) {
+        const configured = state.ebayAccounts || [];
+        const configuredByAlias = new Map();
+        configured.forEach((account) => {
+          [account.key, account.account_id].filter(Boolean).forEach((alias) => configuredByAlias.set(alias, account));
+        });
+        const seen = new Set();
+        const options = [{ key: "all", label: "All stores" }];
+        (stats.available_accounts || []).forEach((raw) => {
+          if (!raw || raw === "all") return;
+          const account = configuredByAlias.get(raw);
+          const key = account?.key || raw;
+          if (seen.has(key)) return;
+          seen.add(key);
+          options.push({ key, label: account ? ebayStoreDisplayName(account) : raw });
+        });
+        configured.forEach((account) => {
+          if (seen.has(account.key)) return;
+          seen.add(account.key);
+          options.push({ key: account.key, label: ebayStoreDisplayName(account) });
+        });
+        return options;
+      }
+
+      function statsAccountLabel(value) {
+        if (!value || value === "all") return "All stores";
+        return statsAccountOptions().find((account) => account.key === value)?.label || value;
       }
 
       function statsReportHtml(stats, totals) {
         if (statsSection === "seller-level") return sellerLevelReportHtml(stats, totals);
         if (statsSection === "sales") return salesReportHtml(stats, totals);
+        if (statsSection === "profit-loss") return profitLossReportHtml();
         if (statsSection === "traffic") return trafficReportHtml(stats, totals);
         if (statsSection === "service-metrics") return serviceMetricsReportHtml(stats, totals);
         if (statsSection === "payments-summary") return paymentsSummaryReportHtml(stats, totals);
@@ -7219,17 +7955,31 @@
       }
 
       function performanceSummaryReportHtml(stats, totals) {
+        const traffic = state.trafficOverview || {};
+        const summary = traffic.summary || {};
+        const lastUpdated = traffic.last_updated_at ? new Date(traffic.last_updated_at).toLocaleString() : "Not synced";
         return `<div class="report-grid">
           <div class="report-card wide">
             <h3>Performance summary</h3>
-            ${reportPlaceholder("Import the eBay Performance Summary report to show real sales, traffic, conversion, listing impressions, and account-level performance. AutoZS is not showing projected performance stats here.")}
+            <p class="muted">Actual eBay activity for ${esc(statsAccountLabel(stats.selected_account))}. Traffic is refreshed by the Chrome extension; order revenue comes from imported eBay orders. No projected catalog fees are included.</p>
+            <div class="stats-grid">
+              ${statCardHtml("Impressions", compactNumber(summary.total_impressions))}
+              ${statCardHtml("Listing views", compactNumber(summary.total_views))}
+              ${statCardHtml("Click-through rate", trafficPercent(summary.click_through_rate))}
+              ${statCardHtml("Quantity sold", statsQuantitySold())}
+              ${statCardHtml("Imported order revenue", money(totals.order_revenue))}
+              ${statCardHtml("Active listings", compactNumber(totals.active_listings))}
+            </div>
+            <div class="order-detail-line"><span>Traffic report updated</span><strong>${esc(lastUpdated)}</strong></div>
+            <div class="order-detail-line"><span>Traffic update schedule</span><strong>Automatic daily sync</strong></div>
           </div>
           <div class="report-card">
-            <h3>Tracked listings</h3>
+            <h3>Current store snapshot</h3>
             ${reportRowsHtml([
               ["Active listings", totals.active_listings ?? 0],
               ["Order revenue from imported orders", money(totals.order_revenue)],
-              ["Catalog value", money(totals.catalog_revenue)],
+              ["Current listed value", money(totals.listed_value)],
+              ["Measured listings", compactNumber(summary.listings_measured)],
             ])}
           </div>
         </div>`;
@@ -7238,40 +7988,38 @@
       function sellerLevelReportHtml(stats, totals) {
         return `<div class="report-grid">
           <div class="report-card">
-            <h3>Seller level</h3>
-            ${reportRowsHtml([
-              ["Account", stats.selected_account === "all" ? "All accounts" : stats.selected_account],
-              ["Active listings tracked", totals.active_listings ?? 0],
-              ["Listed value", money(totals.listed_value)],
-              ["Low-profit products", totals.low_profit_products ?? 0],
-            ])}
-          </div>
-          <div class="report-card">
-            <h3>Standards import</h3>
-            ${reportPlaceholder("Paste or import the eBay Seller Level report here next. It should feed seller level, transaction defect rate, late shipment rate, cases closed without seller resolution, and tracking uploaded on time.")}
-          </div>
-          <div class="report-card wide">
-            <h3>Account coverage</h3>
-            ${table(["Account", "Scope", "Listings", "Order revenue"], (stats.available_accounts || ["all"]).map((account) => [
-              esc(account === "all" ? "All accounts" : account),
-              account === "all" ? "Global rollup" : "Store",
-              account === stats.selected_account || stats.selected_account === "all" ? esc(totals.active_listings ?? 0) : "-",
-              account === stats.selected_account || stats.selected_account === "all" ? money(totals.order_revenue) : "-",
-            ]))}
-          </div>
-        </div>`;
+              <h3>Seller level</h3>
+              ${reportRowsHtml([
+                ["Store", statsAccountLabel(stats.selected_account)],
+                ["Active listings tracked", totals.active_listings ?? 0],
+                ["Listed value", money(totals.listed_value)],
+              ])}
+            </div>
+            <div class="report-card">
+              <h3>Seller standards</h3>
+              ${reportPlaceholder("Seller Level has not been imported yet. The future Chrome report will supply seller rating, transaction defects, late shipments, cases closed without seller resolution, and tracking uploaded on time. AutoZS will not estimate these values.")}
+            </div>
+            <div class="report-card wide">
+              <h3>Account coverage</h3>
+              ${table(["Store", "Scope", "Listings", "Order revenue"], statsAccountOptions(stats).map((account) => [
+                esc(account.label),
+                account.key === "all" ? "Combined rollup" : "eBay store",
+                account.key === stats.selected_account || stats.selected_account === "all" ? esc(totals.active_listings ?? 0) : "-",
+                account.key === stats.selected_account || stats.selected_account === "all" ? money(totals.order_revenue) : "-",
+              ]))}
+            </div>
+          </div>`;
       }
 
       function salesReportHtml(stats, totals) {
         const quantitySold = statsQuantitySold();
-        const sellingCosts = Number(totals.catalog_fees || 0);
         const totalSales = Number(totals.order_revenue || 0);
-        const netSales = Math.max(0, totalSales - sellingCosts);
+        const trafficListings = state.trafficOverview?.best_listings || [];
         return `<div>
           <div class="stats-grid">
-            ${statCardHtml("Total sales", money(totalSales))}
-            ${statCardHtml("Selling costs", money(sellingCosts))}
-            ${statCardHtml("Net sales", money(netSales))}
+            ${statCardHtml("Imported order revenue", money(totalSales))}
+            ${statCardHtml("Recorded eBay fees", "Not imported")}
+            ${statCardHtml("Shipping label costs", "Not imported")}
             ${statCardHtml("Quantity sold", quantitySold)}
           </div>
           <div class="report-grid">
@@ -7284,40 +8032,324 @@
               ])}
             </div>
             <div class="report-card">
-              <h3>Selling costs breakdown</h3>
+              <h3>Recorded selling costs</h3>
               ${reportRowsHtml([
-                ["eBay fees", money(totals.catalog_fees)],
-                ["Shipping labels", reportMissingValue()],
-                ["Total selling costs", money(totals.catalog_fees)],
+                ["eBay fees actually charged", reportMissingValue()],
+                ["Shipping labels actually purchased", reportMissingValue()],
+                ["Status", "Waiting for transaction and shipping-label imports"],
               ])}
             </div>
             <div class="report-card wide">
-              <h3>Listing insights</h3>
-              ${statsTopProductsTable(stats.top_products || [])}
+              <h3>Best-performing listings</h3>
+              <p class="traffic-ranking-note">Ranked by sales, listing views, and impressions from the latest eBay Traffic report.</p>
+              ${trafficListings.length ? trafficListingTable(trafficListings) : reportPlaceholder("No listing-level eBay traffic has been imported yet.")}
             </div>
           </div>
         </div>`;
       }
 
-      function trafficReportHtml(stats, totals) {
+      function profitLossReportHtml() {
+        const finance = state.financeOverview || {};
+        const periods = finance.periods || [];
+        const accounts = finance.accounts || [];
+        const subscriptions = finance.subscriptions || [];
         return `<div class="report-grid">
+          <div class="report-card wide">
+            <div class="settings-view-head">
+              <div><h3>Profit / loss</h3><p class="muted">Cash-basis supplier costs use the actual acquisition cost of gift-card value consumed, plus any backup-card amount.</p></div>
+              <div class="actions">
+                <button class="secondary" onclick="addFinancialAccountSnapshot()">Add balance snapshot</button>
+                <button class="secondary" onclick="addSubscriptionExpense()">Add subscription</button>
+              </div>
+            </div>
+            ${table(["Period", "Orders", "Revenue", "Supplier cost", "Operating expenses", "Profit"], periods.map((row) => [
+              `<strong>${esc(row.period)}</strong>`,
+              esc(row.orders),
+              money(row.revenue),
+              money(row.supplier_cost),
+              money(row.operating_expenses),
+              `<strong>${money(row.profit)}</strong>`
+            ]))}
+          </div>
           <div class="report-card">
-            <h3>Traffic summary</h3>
+            <h3>Balances</h3>
             ${reportRowsHtml([
-              ["Active listings", totals.active_listings ?? 0],
-              ["Catalog products", totals.imported_products ?? 0],
-              ["Source snapshots", totals.source_snapshots ?? 0],
+              ["Bank", money(finance.bank_balance)],
+              ["Credit card", money(finance.credit_card_balance)],
+              ["eBay available", money(finance.ebay_available)],
+              ["eBay held", money(finance.ebay_held)],
+              ["Gift-card face balance", money(finance.gift_card_face_balance)],
+              ["Gift-card cash basis", money(finance.gift_card_cash_basis)],
             ])}
           </div>
           <div class="report-card">
-            <h3>eBay traffic metrics</h3>
-            ${reportPlaceholder("Import the Traffic report to fill impressions, click-through rate, listing views, quantity sold, sales conversion rate, and promoted listing traffic.")}
+            <h3>Connected balance sources</h3>
+            ${accounts.length ? accounts.map((account) => `<div class="order-detail-line"><span>${esc(account.name)} · ${esc(account.account_type)}${account.mask ? ` ••••${esc(account.mask)}` : ""}</span><strong>${money(account.current_balance)}</strong></div>`).join("") : reportPlaceholder("No balance snapshots yet. The account endpoint is ready for your existing Plaid app; connect it after supplying that app's API contract.")}
           </div>
           <div class="report-card wide">
-            <h3>Pipeline mix</h3>
-            ${mixReportBodyHtml(stats.pipeline_mix || [])}
+            <h3>Subscriptions</h3>
+            ${subscriptions.length ? table(["Name", "Amount", "Cadence", "Next charge", "Status"], subscriptions.map((item) => [
+              esc(item.name),
+              money(item.amount),
+              esc(item.cadence),
+              item.next_charge_at ? esc(new Date(item.next_charge_at).toLocaleDateString()) : "-",
+              esc(item.status)
+            ])) : reportPlaceholder("Add recurring software and service costs here so they can be reconciled against imported card transactions.")}
           </div>
         </div>`;
+      }
+
+      async function addFinancialAccountSnapshot() {
+        const accountType = prompt("Account type: bank, credit_card, or ebay", "bank");
+        if (!["bank", "credit_card", "ebay", "gift_card", "other"].includes(accountType || "")) return message("Enter a supported account type.");
+        const name = prompt("Account name", accountType === "ebay" ? "eBay funds" : "Business account");
+        if (!name) return;
+        const externalId = prompt("Stable external ID from the source app", `${accountType}:${name}`);
+        if (!externalId) return;
+        const currentBalance = Number(prompt("Current balance", "0"));
+        const availableBalance = Number(prompt("Available balance (0 if unavailable)", String(currentBalance || 0)));
+        const heldBalance = accountType === "ebay" ? Number(prompt("Funds currently held by eBay", "0")) : null;
+        await request("/finance/accounts", {
+          method: "POST",
+          body: JSON.stringify({
+            provider: accountType === "ebay" ? "ebay_chrome" : "plaid_bridge",
+            external_id: externalId,
+            account_type: accountType,
+            name,
+            current_balance: currentBalance,
+            available_balance: availableBalance,
+            held_balance: heldBalance,
+            last_synced_at: new Date().toISOString()
+          })
+        });
+        await refreshAll();
+        message("Balance snapshot saved.");
+      }
+
+      async function addSubscriptionExpense() {
+        const name = prompt("Subscription name", "");
+        if (!name) return;
+        const amount = Number(prompt("Charge amount", "0"));
+        const cadence = prompt("Cadence: weekly, monthly, or annual", "monthly");
+        if (!Number.isFinite(amount) || amount < 0 || !["weekly", "monthly", "annual"].includes(cadence || "")) return message("Enter a valid amount and cadence.");
+        await request("/finance/subscriptions", {
+          method: "POST",
+          body: JSON.stringify({ name, amount, cadence, category: "software", status: "active" })
+        });
+        await refreshAll();
+        message("Subscription added.");
+      }
+
+      function trafficReportHtml(stats, totals) {
+        const traffic = state.trafficOverview || {};
+        const summary = traffic.summary || {};
+        const hasAnalytics = traffic.data_source === "ebay_analytics_api";
+        const hasSellerHubReport = traffic.data_source === "seller_hub_traffic_report";
+        const freshness = traffic.last_updated_at ? new Date(traffic.last_updated_at).toLocaleString() : "Never";
+        const freshnessCopy = hasSellerHubReport
+          ? `Seller Hub Traffic report imported automatically by the Chrome extension · updated ${freshness}`
+          : hasAnalytics
+          ? `Official eBay Analytics data · updated ${freshness}`
+          : traffic.data_source === "active_listing_view_scrape"
+            ? `Rolling listing views from Seller Hub · updated ${freshness}. Run the Chrome traffic sync to add impressions, CTR, conversion, and listing-level performance.`
+            : "No eBay traffic measurement has completed yet.";
+        return `<div>
+          <div class="traffic-freshness ${traffic.stale ? "stale" : ""}">
+            <div><strong>${traffic.stale ? "Traffic data needs a refresh" : "Traffic data is current"}</strong><div class="muted">${esc(freshnessCopy)}</div></div>
+            <button onclick="syncTrafficMetrics()">Sync eBay traffic</button>
+          </div>
+          <div class="stats-grid">
+            ${statCardHtml("Total impressions", compactNumber(summary.total_impressions))}
+            ${statCardHtml("Listing page views", compactNumber(summary.total_views))}
+            ${statCardHtml("Click-through rate", trafficPercent(summary.click_through_rate))}
+            ${statCardHtml("Transactions", compactNumber(summary.transactions))}
+            ${statCardHtml("Sales conversion", trafficPercent(summary.sales_conversion_rate))}
+            ${statCardHtml("Measured listings", compactNumber(summary.listings_measured))}
+            ${statCardHtml("Promoted impression share", summary.promoted_impressions ? trafficPercent(summary.promoted_share) : "Not reported")}
+            ${statCardHtml("Traffic sales", summary.sales_amount ? money(summary.sales_amount) : "Not reported")}
+          </div>
+          <div class="report-grid">
+            <div class="report-card wide">
+              <h3>Daily listing views</h3>
+              <p class="traffic-ranking-note">Listing-page views reported for each day in the selected range.</p>
+              ${dailyViewsBarSvg(traffic.trend || [])}
+            </div>
+            <div class="report-card wide">
+              <h3>Performance trend</h3>
+              ${trafficTrendSvg(traffic.trend || [])}
+              <div class="legend"><span><i style="background:#2f80ed"></i>Impressions</span><span><i style="background:#28a957"></i>Views</span><span><i style="background:#f08a3e"></i>Transactions</span></div>
+            </div>
+            <div class="report-card">
+              <h3>Conversion funnel</h3>
+              <div class="traffic-funnel">
+                <div><span>Impressions</span><strong>${compactNumber(summary.total_impressions)}</strong></div>
+                <div><span>Views</span><strong>${compactNumber(summary.total_views)}</strong><small>${trafficPercent(summary.click_through_rate)} CTR</small></div>
+                <div><span>Sold</span><strong>${compactNumber(summary.transactions)}</strong><small>${trafficPercent(summary.sales_conversion_rate)} conversion</small></div>
+              </div>
+            </div>
+            <div class="report-card">
+              <h3>Where views come from</h3>
+              ${trafficSourceMixHtml(traffic.source_breakdown || [])}
+            </div>
+            <div class="report-card wide">
+              <h3>Best-performing listings</h3>
+              <p class="traffic-ranking-note">Ranked by transactions, then listing views and impressions.</p>
+              ${trafficListingTable(traffic.best_listings || [])}
+            </div>
+            <div class="report-card wide">
+              <h3>Biggest traffic opportunities</h3>
+              <p class="traffic-ranking-note">High-impression listings with weak click-through or listings receiving views without converting.</p>
+              ${trafficListingTable(traffic.opportunities || [])}
+            </div>
+            <div class="report-card wide">
+              <h3>Worst-performing traffic</h3>
+              <p class="traffic-ranking-note">Prioritizes high exposure with the lowest click-through and conversion.</p>
+              ${trafficListingTable(traffic.worst_listings || [])}
+            </div>
+            <div class="report-card wide">
+              <h3>Every eBay traffic metric tracked</h3>
+              ${trafficMetricCatalogHtml(traffic.available_metrics || [], summary)}
+            </div>
+          </div>
+        </div>`;
+      }
+
+      async function syncTrafficMetrics() {
+        message("Queueing a fresh Seller Hub Traffic report for the Chrome extension...");
+        try {
+          const result = await request(`/stats/traffic/sync?range=${encodeURIComponent(statsRange)}&account=${encodeURIComponent(statsAccount)}`, { method: "POST" });
+          await refreshAll();
+          message(result.queued
+            ? "Seller Hub Traffic sync queued. The Chrome extension will download, import, and close the report tab automatically."
+            : `eBay traffic updated: ${result.records_imported} metric row(s) across ${result.accounts_synced.length} account(s).`);
+        } catch (error) {
+          message(`Traffic sync could not be queued: ${error.message}`);
+        }
+      }
+
+      function compactNumber(value) {
+        const number = Number(value || 0);
+        return Number.isFinite(number) ? new Intl.NumberFormat(undefined, { maximumFractionDigits: number % 1 ? 1 : 0 }).format(number) : "0";
+      }
+
+      function trafficPercent(value) {
+        const number = Number(value || 0);
+        const normalized = Math.abs(number) > 1 ? number : number * 100;
+        return `${normalized.toFixed(2)}%`;
+      }
+
+      function trafficTrendSvg(rows) {
+        if (!rows.length) return reportPlaceholder("The Seller Hub download provides current listing totals. Day-by-day history will build as the Chrome extension imports scheduled snapshots.");
+        const width = 920;
+        const height = 260;
+        const pad = 36;
+        const keys = ["total_impressions", "total_views", "transactions"];
+        const colors = { total_impressions: "#2f80ed", total_views: "#28a957", transactions: "#f08a3e" };
+        const max = Math.max(1, ...rows.flatMap((row) => keys.map((key) => Number(row[key] || 0))));
+        const x = (index) => rows.length === 1 ? width / 2 : pad + (index * (width - pad * 2)) / (rows.length - 1);
+        const y = (value) => height - pad - (Number(value || 0) / max) * (height - pad * 2);
+        const paths = keys.map((key) => {
+          const points = rows.map((row, index) => `${index ? "L" : "M"} ${x(index).toFixed(1)} ${y(row[key]).toFixed(1)}`).join(" ");
+          const dots = rows.map((row, index) => `<circle cx="${x(index).toFixed(1)}" cy="${y(row[key]).toFixed(1)}" r="3" fill="${colors[key]}"><title>${esc(row.label)} · ${esc(key.replaceAll("_", " "))}: ${compactNumber(row[key])}</title></circle>`).join("");
+          return `<path d="${points}" fill="none" stroke="${colors[key]}" stroke-width="3"/>${dots}`;
+        }).join("");
+        return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="eBay impressions views and transactions trend">
+          <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="var(--line)"/>
+          <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="var(--line)"/>
+          <text x="${pad}" y="18" fill="var(--muted)" font-size="12">${compactNumber(max)}</text>
+          <text x="${width - pad}" y="${height - 8}" fill="var(--muted)" font-size="12" text-anchor="end">${esc(rows[rows.length - 1]?.label || "")}</text>
+          ${paths}
+        </svg>`;
+      }
+
+      function dailyViewsBarSvg(rows) {
+        if (!rows.length) return reportPlaceholder("Daily view bars will appear as scheduled Seller Hub Traffic snapshots are imported.");
+        const width = 920;
+        const height = 270;
+        const padLeft = 48;
+        const padRight = 20;
+        const padTop = 24;
+        const padBottom = 54;
+        const chartWidth = width - padLeft - padRight;
+        const chartHeight = height - padTop - padBottom;
+        const max = Math.max(1, ...rows.map((row) => Number(row.total_views || 0)));
+        const slotWidth = chartWidth / Math.max(rows.length, 1);
+        const barWidth = Math.max(4, Math.min(34, slotWidth * 0.68));
+        const bars = rows.map((row, index) => {
+          const value = Number(row.total_views || 0);
+          const barHeight = (value / max) * chartHeight;
+          const x = padLeft + index * slotWidth + (slotWidth - barWidth) / 2;
+          const y = padTop + chartHeight - barHeight;
+          const label = String(row.label || "");
+          const shortLabel = label.length >= 10 ? label.slice(5) : label;
+          const showLabel = rows.length <= 16 || index % Math.ceil(rows.length / 12) === 0 || index === rows.length - 1;
+          return `<g>
+            <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(barHeight, value ? 2 : 0).toFixed(1)}" rx="3" fill="#28a957">
+              <title>${esc(label)} · ${compactNumber(value)} view${value === 1 ? "" : "s"}</title>
+            </rect>
+            ${showLabel ? `<text x="${(x + barWidth / 2).toFixed(1)}" y="${height - 27}" fill="var(--muted)" font-size="10" text-anchor="middle" transform="rotate(-35 ${(x + barWidth / 2).toFixed(1)} ${height - 27})">${esc(shortLabel)}</text>` : ""}
+          </g>`;
+        }).join("");
+        return `<svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily eBay listing views bar chart">
+          <line x1="${padLeft}" y1="${padTop + chartHeight}" x2="${width - padRight}" y2="${padTop + chartHeight}" stroke="var(--line)"/>
+          <line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${padTop + chartHeight}" stroke="var(--line)"/>
+          <text x="${padLeft - 8}" y="${padTop + 4}" fill="var(--muted)" font-size="11" text-anchor="end">${compactNumber(max)}</text>
+          <text x="${padLeft - 8}" y="${padTop + chartHeight + 4}" fill="var(--muted)" font-size="11" text-anchor="end">0</text>
+          ${bars}
+        </svg>`;
+      }
+
+      function trafficSourceMixHtml(rows) {
+        const views = rows.filter((row) => Number(row.views || 0) > 0);
+        const total = views.reduce((sum, row) => sum + Number(row.views || 0), 0);
+        if (!views.length) return reportPlaceholder("View-source details will appear when eBay includes them in the Seller Hub Traffic report.");
+        return mixHtml(views.map((row, index) => [
+          row.label,
+          Number(row.views || 0),
+          total,
+          ["#2f80ed", "#28a957", "#a46be8", "#f08a3e", "#d95f76"][index % 5],
+        ]));
+      }
+
+      function trafficListingTable(rows) {
+        return table(["Listing", "Impressions", "Views", "CTR", "Sold", "Conversion"], rows.map((row) => [
+          `<a href="https://www.ebay.com/itm/${encodeURIComponent(row.listing_id)}" target="_blank" rel="noopener noreferrer"><strong>${esc(row.title || row.listing_id)}</strong></a><div class="draft">${esc(row.listing_id)}${row.sku ? ` · ${esc(row.sku)}` : ""}</div>`,
+          compactNumber(row.total_impressions),
+          compactNumber(row.total_views),
+          trafficPercent(row.click_through_rate),
+          compactNumber(row.transactions),
+          trafficPercent(row.sales_conversion_rate),
+        ]));
+      }
+
+      function trafficMetricCatalogHtml(metrics, summary) {
+        const fieldByMetric = {
+          TOTAL_IMPRESSION_TOTAL: "total_impressions",
+          LISTING_IMPRESSION_TOTAL: "listing_impressions",
+          LISTING_IMPRESSION_SEARCH_RESULTS_PAGE: "search_impressions",
+          LISTING_IMPRESSION_STORE: "store_impressions",
+          LISTING_VIEWS_TOTAL: "total_views",
+          LISTING_VIEWS_SOURCE_DIRECT: "direct_views",
+          LISTING_VIEWS_SOURCE_OFF_EBAY: "off_ebay_views",
+          LISTING_VIEWS_SOURCE_OTHER_EBAY: "other_ebay_views",
+          LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE: "search_views",
+          LISTING_VIEWS_SOURCE_STORE: "store_views",
+          CLICK_THROUGH_RATE: "click_through_rate",
+          SALES_CONVERSION_RATE: "sales_conversion_rate",
+          TRANSACTION: "transactions",
+          PROMOTED_IMPRESSIONS: "promoted_impressions",
+          PROMOTED_VIEWS: "promoted_views",
+          PROMOTED_TRANSACTIONS: "promoted_transactions",
+          SALES_AMOUNT: "sales_amount",
+        };
+        return table(["Metric", "Current range", "eBay key"], metrics.map((metric) => {
+          const field = fieldByMetric[metric.key];
+          const value = field ? summary[field] : metric.value;
+          const display = ["CLICK_THROUGH_RATE", "SALES_CONVERSION_RATE"].includes(metric.key)
+            ? trafficPercent(value)
+            : metric.key === "SALES_AMOUNT" ? money(value) : compactNumber(value);
+          return [esc(metric.label), display, `<code>${esc(metric.key)}</code>`];
+        }));
       }
 
       function serviceMetricsReportHtml(stats, totals) {
@@ -7326,7 +8358,7 @@
             <h3>Service metrics</h3>
             ${reportRowsHtml([
               ["Orders tracked", state.orders.length],
-              ["Open fulfillment tasks", state.orders.filter((order) => normalizedOrderStatus(order) !== "completed").length],
+              ["Open fulfillment tasks", state.orders.filter((order) => !["completed", "refunded"].includes(normalizedOrderStatus(order))).length],
               ["Customer updates drafted", (state.orders || []).reduce((count, order) => count + (order.customer_updates || []).length, 0)],
             ])}
           </div>
@@ -7339,19 +8371,21 @@
 
       function paymentsSummaryReportHtml(stats, totals) {
         const revenue = Number(totals.order_revenue || 0);
+        const finance = state.financeOverview || {};
         return `<div class="report-grid">
           <div class="report-card">
             <h3>Payments summary</h3>
             ${reportRowsHtml([
               ["Gross order revenue", money(revenue)],
-              ["Estimated selling fees", money(totals.catalog_fees)],
-              ["Projected net", money(Math.max(0, revenue - Number(totals.catalog_fees || 0)))],
-              ["Account scope", stats.selected_account === "all" ? "All accounts" : stats.selected_account],
+              ["eBay available funds", money(finance.ebay_available)],
+              ["eBay held funds", money(finance.ebay_held)],
+              ["Actual eBay fees", reportMissingValue()],
+              ["Store scope", statsAccountLabel(stats.selected_account)],
             ])}
           </div>
           <div class="report-card">
             <h3>eBay payments import</h3>
-            ${reportPlaceholder("Import Payments Summary to fill available funds, processing funds, on-hold funds, completed payouts, fees, refunds, claims, and adjustments.")}
+            ${reportPlaceholder("Payments Summary has not been imported. Until it is, AutoZS will not subtract estimated fees or present a projected net as an actual payment result.")}
           </div>
         </div>`;
       }
@@ -7387,20 +8421,59 @@
       }
 
       function paymentReportsHtml() {
+        const rows = reportRunRows();
         return `<div class="report-grid">
-          <div class="report-card">
-            <h3>Reports</h3>
-            ${reportPlaceholder("This is where generated eBay report files will be tracked by account, report type, date range, status, and last import time.")}
+          <div class="report-card wide">
+            <h3>Report and job history</h3>
+            <p class="muted">The latest successful or attempted update for each data source. This is the central place to verify whether listings, traffic, orders, prices, and revisions are current.</p>
+            ${table(["Data source", "Store", "Last run", "Status", "Result"], rows)}
           </div>
           <div class="report-card">
-            <h3>Needed report types</h3>
+            <h3>Not configured yet</h3>
             ${reportRowsHtml([
-              ["Performance", "Summary, Seller Level, Sales, Traffic, Service Metrics"],
-              ["Payments", "Summary, All Transactions, Payouts, Reports, Taxes"],
-              ["Marketing", "Campaign summary, promoted listings, budgets, ad rates"],
+              ["Seller Level", "Needs Chrome report import"],
+              ["Service Metrics", "Needs Chrome report import"],
+              ["Payments and fees", "Needs transaction report import"],
+              ["Payouts", "Needs payout report import"],
+              ["Taxes", "Deferred until tax reporting is configured"],
             ])}
           </div>
         </div>`;
+      }
+
+      function reportRunRows() {
+        const dateValue = (item) => item?.completed_at || item?.updated_at || item?.measured_at || item?.created_at || null;
+        const newest = (items) => [...(items || [])].filter(Boolean).sort((a, b) => new Date(dateValue(b) || 0) - new Date(dateValue(a) || 0))[0];
+        const syncRuns = state.ebaySyncRuns || [];
+        const latestOrders = newest(syncRuns.filter((run) => run.report_type === "orders"));
+        const latestListings = newest(state.ebayListings || []);
+        const latestTraffic = state.trafficOverview?.last_updated_at ? {
+          updated_at: state.trafficOverview.last_updated_at,
+          status: state.trafficOverview.stale ? "stale" : "completed",
+          message: `${compactNumber(state.trafficOverview.summary?.listings_measured)} listings measured`,
+        } : null;
+        const latestViews = state.listingViewsSummary?.measured_at ? {
+          measured_at: state.listingViewsSummary.measured_at,
+          status: "completed",
+          message: `${compactNumber(state.listingViewsSummary.views_30d)} views in 30 days`,
+        } : null;
+        const latestSource = newest(state.sourceRefreshJobs || []);
+        const latestRevision = newest(state.ebayRevisionBatches || []);
+        const row = (label, item, result, store = "Main Store") => [
+          `<strong>${esc(label)}</strong>`,
+          esc(store),
+          item ? esc(new Date(dateValue(item)).toLocaleString()) : "Never",
+          item ? badge(item.status || "completed") : badge("not configured"),
+          esc(result || item?.message || "No run recorded"),
+        ];
+        return [
+          row("Active listings", latestListings, latestListings ? `${state.ebayListings.length} listings tracked` : "", statsAccountLabel(statsAccount)),
+          row("Traffic report", latestTraffic, latestTraffic?.message, statsAccountLabel(statsAccount)),
+          row("Listing views", latestViews, latestViews?.message, statsAccountLabel(statsAccount)),
+          row("Orders report", latestOrders, latestOrders?.message, statsAccountLabel(latestOrders?.account_key || statsAccount)),
+          row("Supplier price checks", latestSource, latestSource?.message, "All suppliers"),
+          row("eBay price revisions", latestRevision, latestRevision?.message, statsAccountLabel(latestRevision?.account_key || statsAccount)),
+        ];
       }
 
       function taxesReportHtml() {
@@ -7565,7 +8638,236 @@
       }
 
       function customerServiceHtml() {
-        return `<div class="empty-state">To be worked on</div>`;
+        const conversations = state.customerConversations || [];
+        const templates = state.customerTemplates || [];
+        if (!selectedConversationId && conversations.length) selectedConversationId = conversations[0].id;
+        const selected = conversations.find((conversation) => Number(conversation.id) === Number(selectedConversationId)) || conversations[0];
+        return `<div class="traffic-freshness">
+            <div><strong>Customer Service</strong><div class="muted">eBay messages imported and sent through the Windows Chrome extension. Blue replies are human; gold replies are automatic.</div>
+              <div class="template-library-summary">${templates.length} quick-chat templates across ${new Set(templates.map((template) => template.category)).size} categories. Only explicitly safe order events can be automatic.</div>
+            </div>
+            <button class="secondary" onclick="window.open('https://www.ebay.com/mys/messages','_blank','noopener,noreferrer')">Open eBay inbox</button>
+          </div>
+          ${customerTemplateLibraryHtml()}
+          ${conversations.length ? `<div class="customer-service-shell">
+            <div class="conversation-list">
+              ${conversations.map((conversation) => `<button class="conversation-list-item ${Number(conversation.id) === Number(selected?.id) ? "active" : ""}" onclick="selectConversation(${conversation.id})">
+                <strong>${esc(conversation.buyer_username || "eBay buyer")}</strong>
+                <div>${esc(conversation.subject || "No subject")}</div>
+                <small class="muted">${conversation.last_message_at ? esc(new Date(conversation.last_message_at).toLocaleString()) : "No messages yet"}</small>
+              </button>`).join("")}
+            </div>
+            ${customerConversationPanelHtml(selected)}
+          </div>` : `<div class="empty-state">No eBay conversations have been imported yet. The inbox data model and Chrome send queue are ready; the next extension phase will capture the signed-in eBay inbox.</div>`}`;
+      }
+
+      function customerTemplateLibraryHtml() {
+        const templates = state.customerTemplates || [];
+        if (!templates.length) return "";
+        if (!selectedCustomerTemplateLibraryKey) selectedCustomerTemplateLibraryKey = templates[0].key;
+        const selected = templates.find((template) => template.key === selectedCustomerTemplateLibraryKey) || templates[0];
+        const categories = [...new Set(templates.map((template) => template.category))];
+        const options = categories.map((category) => `<optgroup label="${escAttr(category)}">${
+          templates.filter((template) => template.category === category).map((template) =>
+            `<option value="${escAttr(template.key)}" ${template.key === selected.key ? "selected" : ""}>${template.number}. ${esc(template.title)}</option>`
+          ).join("")
+        }</optgroup>`).join("");
+        return `<section class="customer-template-library">
+          <div class="customer-template-library-head">
+            <div>
+              <strong>Quick-chat template library</strong>
+              <div class="muted">${esc(selected.category)} · Template ${selected.number} · ${selected.automation === "automatic" ? "Automatic-safe" : "Human review"}</div>
+            </div>
+            <select onchange="selectCustomerLibraryTemplate(this.value)">${options}</select>
+          </div>
+          ${selected.review_note ? `<div class="quick-reply-note">${esc(selected.review_note)}</div>` : ""}
+          <pre class="customer-template-preview">${esc(selected.body)}</pre>
+        </section>`;
+      }
+
+      function selectCustomerLibraryTemplate(templateKey) {
+        selectedCustomerTemplateLibraryKey = templateKey;
+        render();
+      }
+
+      function customerConversationPanelHtml(conversation) {
+        const messages = conversation?.messages || [];
+        return `<div class="conversation-panel">
+          <div class="conversation-head">
+            <strong>${esc(conversation?.buyer_username || "eBay buyer")}</strong>
+            <div>${esc(conversation?.subject || "")}</div>
+            <small class="muted">${esc(conversation?.account_id || "")}${conversation?.order_id ? ` · AutoZS order #${esc(conversation.order_id)}` : ""}</small>
+          </div>
+          <div class="conversation-messages">
+            ${messages.length ? messages.map(customerMessageBubbleHtml).join("") : `<div class="empty-state">No messages in this conversation.</div>`}
+          </div>
+          <div class="conversation-compose">
+            ${customerTemplateBuilderHtml(conversation)}
+            <textarea id="customer-reply-${conversation.id}" placeholder="Write a reply to this customer"></textarea>
+            <div class="actions">
+              <button onclick="sendCustomerReply(${conversation.id}, 'human')">Queue message</button>
+              <button class="secondary" onclick="sendCustomerReply(${conversation.id}, 'automatic', false)">Save automatic draft</button>
+            </div>
+            <small class="muted">Queued replies are sent only by the signed-in Chrome extension. Automatic drafts remain drafts until approved.</small>
+          </div>
+        </div>`;
+      }
+
+      function customerTemplateBuilderHtml(conversation) {
+        const templates = state.customerTemplates || [];
+        const draft = customerTemplateDrafts[conversation.id] || {};
+        const selected = templates.find((template) => template.key === draft.key);
+        const categories = [...new Set(templates.map((template) => template.category))];
+        const options = categories.map((category) => `<optgroup label="${escAttr(category)}">${
+          templates.filter((template) => template.category === category).map((template) =>
+            `<option value="${escAttr(template.key)}" ${template.key === draft.key ? "selected" : ""}>${template.number}. ${esc(template.title)}</option>`
+          ).join("")
+        }</optgroup>`).join("");
+        return `<div class="quick-reply-builder">
+          <strong>Quick chat</strong>
+          <select onchange="selectCustomerTemplate(${conversation.id}, this.value)">
+            <option value="">Choose a template...</option>
+            ${options}
+          </select>
+          ${selected ? `<div>
+              <strong>${selected.automation === "automatic" ? "Automatic-safe" : "Human review"}</strong>
+              <div class="muted">${esc(selected.category)} · Template ${selected.number}</div>
+            </div>
+            ${selected.review_note ? `<div class="quick-reply-note">${esc(selected.review_note)}</div>` : ""}
+            <div class="quick-reply-fields">${selected.placeholders.map((placeholder) => customerTemplateFieldHtml(conversation, placeholder, draft.variables || {})).join("")}</div>
+            <div class="actions">
+              <button class="secondary" onclick="applyCustomerTemplate(${conversation.id})">Refresh preview</button>
+              <button class="secondary" onclick="clearCustomerTemplate(${conversation.id})">Clear template</button>
+            </div>` : `<small class="muted">Choose a categorized reply, fill its required details, review it, then queue it as a human reply.</small>`}
+        </div>`;
+      }
+
+      function customerTemplateFieldHtml(conversation, placeholder, variables) {
+        const defaults = {
+          buyer_first_name: conversation.buyer_first_name || "",
+          seller_first_name: localStorage.getItem("customerServiceSellerFirstName") || "Makail"
+        };
+        const value = variables[placeholder] ?? defaults[placeholder] ?? "";
+        return `<label class="quick-reply-field">
+          <span>${esc(placeholder.replaceAll("_", " "))}</span>
+          <input value="${escAttr(value)}" oninput="updateCustomerTemplateVariable(${conversation.id}, '${escAttr(placeholder)}', this.value)" />
+        </label>`;
+      }
+
+      function selectCustomerTemplate(conversationId, templateKey) {
+        const conversation = (state.customerConversations || []).find((item) => Number(item.id) === Number(conversationId));
+        const template = (state.customerTemplates || []).find((item) => item.key === templateKey);
+        if (!conversation || !template) {
+          delete customerTemplateDrafts[conversationId];
+          return render();
+        }
+        const variables = {
+          buyer_first_name: conversation.buyer_first_name || "",
+          seller_first_name: localStorage.getItem("customerServiceSellerFirstName") || "Makail"
+        };
+        customerTemplateDrafts[conversationId] = { key: templateKey, variables };
+        render();
+        applyCustomerTemplate(conversationId);
+      }
+
+      function updateCustomerTemplateVariable(conversationId, placeholder, value) {
+        const draft = customerTemplateDrafts[conversationId];
+        if (!draft) return;
+        draft.variables = { ...(draft.variables || {}), [placeholder]: value };
+        if (placeholder === "seller_first_name" && value.trim()) {
+          localStorage.setItem("customerServiceSellerFirstName", value.trim());
+        }
+        applyCustomerTemplate(conversationId);
+      }
+
+      function applyCustomerTemplate(conversationId) {
+        const draft = customerTemplateDrafts[conversationId];
+        const template = (state.customerTemplates || []).find((item) => item.key === draft?.key);
+        const input = document.getElementById(`customer-reply-${conversationId}`);
+        if (!template || !input) return;
+        let body = template.body;
+        Object.entries(draft.variables || {}).forEach(([placeholder, value]) => {
+          if (String(value || "").trim()) {
+            body = body.replaceAll(`[[${placeholder}]]`, String(value).trim());
+          }
+        });
+        input.value = body;
+      }
+
+      function clearCustomerTemplate(conversationId) {
+        delete customerTemplateDrafts[conversationId];
+        render();
+      }
+
+      function customerMessageBubbleHtml(messageItem) {
+        const style = messageItem.direction === "inbound" ? "buyer" : ["automatic", "system"].includes(messageItem.origin) ? messageItem.origin : "human";
+        const label = messageItem.direction === "inbound" ? "Buyer" : messageItem.origin === "automatic" ? "AutoZS automatic" : "You";
+        const when = messageItem.sent_at || messageItem.created_at;
+        return `<div class="chat-message ${style}">
+          <button class="chat-copy-button" type="button" aria-label="Copy message" title="Copy message" onclick="copyCustomerMessage(${Number(messageItem.id)}, this, event)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>
+          </button>
+          <div class="chat-bubble ${style}">${esc(messageItem.body)}
+            <span class="chat-meta">${esc(label)} · ${esc(messageItem.status)}${when ? ` · ${esc(new Date(when).toLocaleString())}` : ""}</span>
+          </div>
+        </div>`;
+      }
+
+      async function copyCustomerMessage(messageId, button, event) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        const messageItem = (state.customerConversations || [])
+          .flatMap((conversation) => conversation.messages || [])
+          .find((item) => Number(item.id) === Number(messageId));
+        if (!messageItem?.body) return message("This message has no text to copy.");
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(messageItem.body);
+          } else {
+            const helper = document.createElement("textarea");
+            helper.value = messageItem.body;
+            helper.setAttribute("readonly", "");
+            helper.style.cssText = "position:fixed;left:-9999px;top:0";
+            document.body.appendChild(helper);
+            helper.select();
+            if (!document.execCommand("copy")) throw new Error("Clipboard copy was rejected.");
+            helper.remove();
+          }
+          const originalLabel = button?.getAttribute("aria-label") || "Copy message";
+          if (button) {
+            button.setAttribute("aria-label", "Copied");
+            button.title = "Copied";
+            button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>';
+            window.setTimeout(() => {
+              if (!button?.isConnected) return;
+              button.setAttribute("aria-label", originalLabel);
+              button.title = originalLabel;
+              button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>';
+            }, 1600);
+          }
+          message("Message copied.");
+        } catch (error) {
+          message(`Could not copy message: ${error.message}`);
+        }
+      }
+
+      function selectConversation(conversationId) {
+        selectedConversationId = Number(conversationId);
+        render();
+      }
+
+      async function sendCustomerReply(conversationId, origin, queueImmediately = true) {
+        const input = document.getElementById(`customer-reply-${conversationId}`);
+        const body = input?.value.trim();
+        if (!body) return message("Write a customer reply first.");
+        const unresolved = [...body.matchAll(/\[\[([a-z0-9_]+)\]\]/gi)].map((match) => match[1]);
+        if (unresolved.length) return message(`Fill the quick-chat fields first: ${[...new Set(unresolved)].join(", ")}.`);
+        await request(`/customer-service/conversations/${conversationId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ body, origin, queue_immediately: queueImmediately })
+        });
+        await refreshAll();
+        message(queueImmediately ? "Reply queued for the signed-in Chrome extension." : "Automatic reply saved as a draft.");
       }
 
       function calendarHtml() {
@@ -7922,7 +9224,10 @@
       }
 
       async function updateStatsFilter(kind, value) {
-        if (kind === "range") statsRange = value;
+        if (kind === "range") {
+          statsRange = value;
+          statsGrain = value === "all" ? "month" : "day";
+        }
         if (kind === "grain") statsGrain = value;
         if (kind === "account") statsAccount = value;
         await refreshAll();
@@ -8277,20 +9582,69 @@
         const orders = filteredOrders();
         const counts = orderStatusCounts();
         return `
+          <div class="traffic-freshness">
+            <div><strong>eBay order intake</strong><div class="muted">The Windows Chrome extension checks Seller Hub automatically every 30 minutes and imports each order once.</div></div>
+            <button onclick="syncEbayOrders()">Sync eBay orders</button>
+          </div>
+          ${giftCardTrackerHtml()}
           ${ordersFilterMenuHtml(counts)}
           ${orderSelectionToolbarHtml(orders)}
           ${orders.length
             ? `<div class="product-list">${orders.map(orderCardHtml).join("")}</div>`
-            : `<div class="empty-state">No orders match this filter.</div>`}`;
+            : `<div class="empty-state">No imported eBay orders match this filter yet.</div>`}`;
+      }
+
+      function giftCardTrackerHtml() {
+        const cards = state.giftCards || [];
+        const activeCards = cards.filter((card) => card.status === "active");
+        const balance = activeCards.reduce((total, card) => total + Number(card.current_balance || 0), 0);
+        const acquisitionCost = activeCards.reduce((total, card) => total + Number(card.acquisition_cost || 0), 0);
+        const queued = (state.supplierOrders || []).filter((order) => ["queued", "placing"].includes(order.status)).length;
+        return `<div class="detail-block wide">
+          <div class="settings-view-head">
+            <div>
+              <h2>Supplier fulfillment</h2>
+              <p class="muted">${activeCards.length} active gift card${activeCards.length === 1 ? "" : "s"} · ${money(balance)} available · ${queued} approved checkout${queued === 1 ? "" : "s"} queued</p>
+            </div>
+            <button class="secondary" onclick="addGiftCard()">Add gift card</button>
+          </div>
+          <div class="compact-facts">
+            ${compactFactHtml("Available balance", money(balance))}
+            ${compactFactHtml("Acquisition cost", money(acquisitionCost))}
+            ${compactFactHtml("Prepared", esc((state.supplierOrders || []).filter((order) => ["draft", "needs_review"].includes(order.status)).length))}
+            ${compactFactHtml("Placed", esc((state.supplierOrders || []).filter((order) => ["placed", "shipped", "delivered"].includes(order.status)).length))}
+          </div>
+          <p class="muted">Gift-card numbers and PINs are saved only in Windows Credential Manager on this computer. The AutoZS database stores the balance and last four digits, never the checkout secret.</p>
+        </div>`;
+      }
+
+      async function syncEbayOrders() {
+        const accountKey = selectedEbayStoreKey();
+        if (!accountKey) return message("Add or select an eBay store before syncing orders.");
+        try {
+          const run = await request(`/orders/sync?account_key=${encodeURIComponent(accountKey)}`, { method: "POST" });
+          message(run.status === "running"
+            ? "The Chrome extension is importing eBay orders now."
+            : "Order sync queued. The Windows Chrome extension will run it in the background.");
+          await refreshAll({ silent: true });
+        } catch (error) {
+          message(`Order sync could not start: ${error.message}`);
+        }
       }
 
       function primaryOrderTask(order) {
         return (order.fulfillment_tasks || [])[0] || null;
       }
 
+      function primarySupplierOrder(order) {
+        const nested = order.supplier_orders || [];
+        return nested[0] || (state.supplierOrders || []).find((entry) => Number(entry.order_id) === Number(order.id)) || null;
+      }
+
       function normalizedOrderStatus(order) {
         const taskStatus = primaryOrderTask(order)?.status;
-        if (["open", "in_progress", "completed", "blocked"].includes(taskStatus)) return taskStatus;
+        if (["open", "in_progress", "completed", "refunded", "blocked"].includes(taskStatus)) return taskStatus;
+        if (order.status === "refunded") return "refunded";
         if (["completed", "shipped"].includes(order.status)) return "completed";
         return "open";
       }
@@ -8300,6 +9654,7 @@
           open: { label: "Pending", className: "order-status-pending", cardClass: "order-pending" },
           in_progress: { label: "Ordered", className: "order-status-progress", cardClass: "order-in-progress" },
           completed: { label: "Completed", className: "order-status-completed", cardClass: "order-completed" },
+          refunded: { label: "Refunded", className: "order-status-refunded", cardClass: "order-refunded" },
           blocked: { label: "Needs review", className: "order-status-blocked", cardClass: "order-blocked" },
         }[normalizedOrderStatus(order)];
       }
@@ -8309,7 +9664,7 @@
           counts.all += 1;
           counts[normalizedOrderStatus(order)] += 1;
           return counts;
-        }, { all: 0, open: 0, in_progress: 0, completed: 0, blocked: 0 });
+        }, { all: 0, open: 0, in_progress: 0, completed: 0, refunded: 0, blocked: 0 });
       }
 
       function filteredOrders() {
@@ -8323,6 +9678,7 @@
           open: "Pending",
           in_progress: "Ordered",
           completed: "Completed",
+          refunded: "Refunded",
           blocked: "Needs review",
         }[orderStatusFilter] || "All orders";
         return `<div class="filter-shell ${orderFilterMenuOpen ? "filter-shell-open" : ""}">
@@ -8335,6 +9691,7 @@
             ${filterMenuOption("Pending", orderStatusFilter === "open", "setOrderStatusFilter('open')", counts.open)}
             ${filterMenuOption("Ordered", orderStatusFilter === "in_progress", "setOrderStatusFilter('in_progress')", counts.in_progress)}
             ${filterMenuOption("Completed", orderStatusFilter === "completed", "setOrderStatusFilter('completed')", counts.completed)}
+            ${filterMenuOption("Refunded", orderStatusFilter === "refunded", "setOrderStatusFilter('refunded')", counts.refunded)}
             ${filterMenuOption("Needs review", orderStatusFilter === "blocked", "setOrderStatusFilter('blocked')", counts.blocked)}
           </div>
         </div>`;
@@ -8453,7 +9810,7 @@
 
       function orderShipByHtml(order) {
         if (!order.ship_by) return "-";
-        const overdue = normalizedOrderStatus(order) !== "completed" && new Date(order.ship_by).getTime() < Date.now();
+        const overdue = !["completed", "refunded"].includes(normalizedOrderStatus(order)) && new Date(order.ship_by).getTime() < Date.now();
         return `<span class="status ${overdue ? "order-status-blocked" : "order-status-progress"}">${esc(compactDate(order.ship_by))}</span>`;
       }
 
@@ -8488,6 +9845,7 @@
                 <option value="open" ${normalizedOrderStatus(order) === "open" ? "selected" : ""}>Pending</option>
                 <option value="in_progress" ${normalizedOrderStatus(order) === "in_progress" ? "selected" : ""}>Ordered</option>
                 <option value="completed" ${normalizedOrderStatus(order) === "completed" ? "selected" : ""}>Completed</option>
+                <option value="refunded" ${normalizedOrderStatus(order) === "refunded" ? "selected" : ""}>Refunded</option>
                 <option value="blocked" ${normalizedOrderStatus(order) === "blocked" ? "selected" : ""}>Needs review</option>
               </select>
             </label>
@@ -8514,6 +9872,9 @@
       function orderDrawerHtml(order, status, open) {
         const task = primaryOrderTask(order);
         const updates = order.customer_updates || [];
+        const supplierOrder = primarySupplierOrder(order);
+        const tracking = supplierOrder?.tracking_number || "Not added";
+        const arrival = supplierOrder?.estimated_delivery ? new Date(supplierOrder.estimated_delivery).toLocaleString() : "Not available yet";
         return `<details class="order-drawer" data-order-details-id="${order.id}" ${open ? "open" : ""} ontoggle="rememberOrderDetailsOpenState(${order.id}, this.open)">
           <summary>${esc(status.label)} order · ${esc(order.ebay_order_id)}</summary>
           <div class="order-drawer-panel">
@@ -8522,23 +9883,119 @@
               <div class="order-detail-line"><span>eBay order ID</span><strong>${esc(order.ebay_order_id)}</strong></div>
               <div class="order-detail-line"><span>Store</span><strong>${esc(order.account_id || "-")}</strong></div>
               <div class="order-detail-line"><span>Buyer</span><strong>${esc(order.buyer_username || "-")}</strong></div>
-              <div class="order-detail-line"><span>Tracking</span><strong>Not added</strong></div>
+              <div class="order-detail-line"><span>Tracking</span><strong>${esc(tracking)}</strong></div>
               <div class="order-detail-line"><span>Customer updates</span><strong>${updates.length}</strong></div>
             </div>
             <div class="order-detail-block">
               <h3>Fulfillment</h3>
+              <div class="order-detail-line"><span>Supplier checkout</span><strong>${esc(supplierOrder?.status || "Not prepared")}</strong></div>
+              <div class="order-detail-line"><span>Supplier total</span><strong>${supplierOrder ? money(supplierOrder.total) : "Not prepared"}</strong></div>
+              <div class="order-detail-line"><span>Gift card / card</span><strong>${supplierOrder ? `${money(supplierOrder.gift_card_amount)} / ${money(supplierOrder.card_amount)}` : "Not allocated"}</strong></div>
               <div class="order-detail-line"><span>Task</span><strong>${esc(task?.note || "No fulfillment task")}</strong></div>
               <div class="order-detail-line"><span>Exception</span><strong>${esc(task?.exception_reason || "None")}</strong></div>
-              <div class="order-detail-line"><span>Estimated arrival</span><strong>Not available yet</strong></div>
-              <div class="order-detail-line"><span>Fee / tax</span><strong>Not available yet</strong></div>
+              <div class="order-detail-line"><span>Estimated arrival</span><strong>${esc(arrival)}</strong></div>
+              <div class="order-detail-line"><span>Supplier sales tax</span><strong>${supplierOrder ? money(supplierOrder.sales_tax) : "Not available yet"}</strong></div>
+              ${supplierOrder?.failure_reason ? `<div class="needs-data">${esc(supplierOrder.failure_reason)}</div>` : ""}
             </div>
             <div class="order-detail-actions">
+              <button onclick="openEbayOrderRefund(${order.id})">Open eBay refund</button>
+              ${!supplierOrder || ["draft", "needs_review"].includes(supplierOrder.status) ? `<button onclick="prepareSupplierOrder(${order.id})">${supplierOrder ? "Update checkout plan" : "Prepare supplier order"}</button>` : ""}
+              ${supplierOrder?.status === "draft" ? `<button onclick="approveSupplierOrder(${supplierOrder.id})">Approve checkout</button>` : ""}
               <button onclick="draftOrderUpdate(${order.id})">Draft buyer update</button>
               ${task ? `<button class="secondary" onclick="editOrderTaskNote(${order.id})">Edit fulfillment note</button>` : ""}
               ${normalizedOrderStatus(order) === "blocked" && task ? `<button class="secondary" onclick="editOrderException(${order.id})">Edit exception</button>` : ""}
             </div>
           </div>
         </details>`;
+      }
+
+      function openEbayOrderRefund(orderId) {
+        const order = (state.orders || []).find((entry) => Number(entry.id) === Number(orderId));
+        if (!order?.ebay_order_id) return message("This order does not have an eBay order ID.");
+        const orderNumber = encodeURIComponent(order.ebay_order_id);
+        window.open(`https://www.ebay.com/sh/ord/details?srn=${orderNumber}`, "_blank", "noopener,noreferrer");
+        message("Opened the signed-in eBay order details. Choose the cancellation or refund action there.");
+      }
+
+      async function addGiftCard() {
+        const label = prompt("Gift-card label", "Home Depot gift card");
+        if (!label) return;
+        const faceValue = Number(prompt("Face value", "25"));
+        const acquisitionCost = Number(prompt("What did this gift card cost?", String(faceValue || 25)));
+        if (!Number.isFinite(faceValue) || faceValue < 0 || !Number.isFinite(acquisitionCost) || acquisitionCost < 0) {
+          return message("Enter valid gift-card values.");
+        }
+        const card = await request("/gift-cards", {
+          method: "POST",
+          body: JSON.stringify({
+            supplier: "home_depot",
+            label,
+            last_four: "",
+            face_value: faceValue,
+            acquisition_cost: acquisitionCost,
+            secret_ref: ""
+          })
+        });
+        const cardNumber = prompt("Home Depot gift-card number (saved only in Windows Credential Manager)", "");
+        const pin = cardNumber ? prompt("Home Depot gift-card PIN (saved only in Windows Credential Manager)", "") : "";
+        if (cardNumber && pin) {
+          const response = await fetch(`http://127.0.0.1:8000/gift-cards/${card.id}/credential`, {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ card_number: cardNumber, pin })
+          });
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            await refreshAll();
+            return message(`Gift card ledger added, but the local credential was not saved: ${error.detail || response.status}`);
+          }
+        }
+        await refreshAll();
+        message(cardNumber && pin
+          ? "Gift card added. Its number and PIN are secured in Windows Credential Manager."
+          : "Gift card ledger added without a checkout credential.");
+      }
+
+      async function prepareSupplierOrder(orderId) {
+        const order = state.orders.find((entry) => Number(entry.id) === Number(orderId));
+        if (!order) return;
+        const current = primarySupplierOrder(order);
+        const activeCards = (state.giftCards || []).filter((card) => card.status === "active");
+        const cardChoices = activeCards.map((card) => `${card.id}: ${card.label} (${money(card.current_balance)})`).join("\\n");
+        const defaultCard = current?.gift_card_id || activeCards[0]?.id || "";
+        const selectedCard = prompt(`Gift-card ID (leave blank for credit card)${cardChoices ? `\\n${cardChoices}` : ""}`, String(defaultCard));
+        const recipientName = prompt("Recipient name", current?.recipient_name || order.buyer_username || "") ?? "";
+        const addressLine1 = prompt("Shipping address", current?.address_line1 || "") ?? "";
+        const addressLine2 = prompt("Address line 2 (optional)", current?.address_line2 || "") ?? "";
+        const city = prompt("City", current?.city || "") ?? "";
+        const region = prompt("State", current?.state || "") ?? "";
+        const postalCode = prompt("Postal code", current?.postal_code || "") ?? "";
+        const phone = prompt("Phone (optional)", current?.phone || "") ?? "";
+        const result = await request(`/orders/${orderId}/supplier-orders/prepare`, {
+          method: "POST",
+          body: JSON.stringify({
+            gift_card_id: selectedCard?.trim() ? Number(selectedCard) : null,
+            recipient_name: recipientName,
+            address_line1: addressLine1,
+            address_line2: addressLine2,
+            city,
+            state: region,
+            postal_code: postalCode,
+            phone
+          })
+        });
+        await refreshAll();
+        message(result.status === "draft" ? "Supplier order is ready for your approval." : `Checkout plan needs review: ${result.failure_reason || "missing information"}`);
+      }
+
+      async function approveSupplierOrder(supplierOrderId) {
+        const supplierOrder = (state.supplierOrders || []).find((entry) => Number(entry.id) === Number(supplierOrderId));
+        if (!supplierOrder) return;
+        if (!confirm(`Approve a browser-assisted ${supplierOrder.supplier.replaceAll("_", " ")} checkout for up to ${money(supplierOrder.total)}? This authorizes AutoZS to queue the purchase.`)) return;
+        const approved = await request(`/supplier-orders/${supplierOrderId}/approve`, { method: "POST" });
+        await refreshAll();
+        message(`Supplier order approved and ${approved.status}. Browser checkout execution is still disabled until its canary test passes.`);
       }
 
       async function updateOrderTaskStatus(orderId, status) {
@@ -8554,7 +10011,7 @@
           body: JSON.stringify({ status, exception_reason: status === "blocked" ? exceptionReason : null })
         });
         await refreshAll();
-        const label = { open: "Pending", in_progress: "Ordered", completed: "Completed", blocked: "Needs review" }[status] || status;
+        const label = { open: "Pending", in_progress: "Ordered", completed: "Completed", refunded: "Refunded", blocked: "Needs review" }[status] || status;
         message(`Order ${order.ebay_order_id} updated to ${label}.`);
       }
 
@@ -8743,6 +10200,7 @@
       }
 
       async function saveSupplierSettings() {
+        const existingSupplierSettings = settingJson("supplier_settings_json", {});
         const supplierSettings = {
           home_depot: {
             enabled: true,
@@ -8750,6 +10208,16 @@
             country: document.getElementById("supplier-country").value || "United States",
             zipcode: document.getElementById("supplier-zipcode").value.trim(),
             shipping_method: document.getElementById("supplier-shipping-method").value || "Cheapest with tracking",
+          },
+          lowes: {
+            ...(existingSupplierSettings.lowes || {}),
+            enabled: false,
+            status: "coming_soon",
+            default_quantity: Math.max(1, Number(existingSupplierSettings.lowes?.default_quantity || 1)),
+            url_import: true,
+            browser_capture: false,
+            automatic_price_refresh: false,
+            browser_fulfillment: false,
           },
         };
         const numberKeys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
@@ -9059,6 +10527,38 @@
         await request(`/ebay/accounts/${encodeURIComponent(key)}`, { method: "DELETE" });
         await refreshAll();
         message("eBay account profile deleted.");
+      }
+
+      async function startEbayAccountOAuth(key) {
+        const result = await request(`/ebay/accounts/${encodeURIComponent(key)}/oauth/start`, { method: "POST" });
+        lastEbayOAuthState = result.state || "";
+        try {
+          await navigator.clipboard.writeText(result.authorization_url);
+        } catch (_) {
+          // Opening the authorization page is sufficient when clipboard access is unavailable.
+        }
+        window.open(result.authorization_url, "_blank", "noopener,noreferrer");
+        message("eBay consent opened. After approving it, copy the full returned URL, come back here, and press Paste OAuth result.");
+      }
+
+      async function finishEbayAccountOAuth(key) {
+        const value = prompt("Paste the full eBay redirect URL shown after consent. You may also paste the authorization code if this page has not been refreshed.");
+        if (!value) return;
+        const payload = parseEbayOAuthInput(value);
+        const result = await request(`/ebay/accounts/${encodeURIComponent(key)}/oauth/callback`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        await request(`/stats/traffic/sync?account=${encodeURIComponent(key)}`, { method: "POST" });
+        await refreshAll();
+        message(`eBay ${result.environment} analytics connected and the first traffic sync was started.`);
+      }
+
+      async function refreshEbayAccountOAuth(key) {
+        const result = await request(`/ebay/accounts/${encodeURIComponent(key)}/oauth/refresh`, { method: "POST" });
+        await request(`/stats/traffic/sync?account=${encodeURIComponent(key)}`, { method: "POST" });
+        await refreshAll();
+        message(`eBay analytics token refreshed. Expires ${result.access_token_expires_at || "soon"}.`);
       }
 
       async function startEbayOAuth() {

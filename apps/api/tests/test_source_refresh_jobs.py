@@ -115,6 +115,27 @@ def test_automatic_source_refresh_only_tracks_scheduled_and_live_listings() -> N
     assert "Queued 1 supplier price refresh" in message
 
 
+def test_lowes_scaffold_is_never_queued_for_automatic_price_refresh() -> None:
+    db = make_session()
+    product = add_source_product(db, sku="LOWES-SCAFFOLD", updated_at=datetime.utcnow() - timedelta(hours=7))
+    supplier = product.supplier_products[0]
+    supplier.supplier = "lowes"
+    supplier.source_url = "https://www.lowes.com/pd/Project-Source-Sample/5012345678"
+    db.commit()
+    add_ebay_listing(db, product, status="live")
+
+    batch_key, due_available, jobs = create_source_refresh_batch(
+        db,
+        limit=5,
+        interval_hours=6,
+        force=True,
+    )
+
+    assert batch_key
+    assert due_available == 0
+    assert jobs == []
+
+
 def test_automatic_source_refresh_respects_disabled_setting() -> None:
     db = make_session()
     add_source_product(db, updated_at=datetime.utcnow() - timedelta(hours=7))
@@ -256,6 +277,32 @@ def test_source_refresh_rejects_five_dollar_promotion_false_positive() -> None:
     assert job.status == SourceRefreshJobStatus.failed.value
     assert job.price_changed is False
     assert product.supplier_products[0].last_price == 20.0
+
+
+def test_recent_failed_refresh_waits_for_interval_before_new_automatic_job() -> None:
+    db = make_session()
+    product = add_source_product(db, updated_at=datetime.utcnow() - timedelta(hours=7))
+    _batch_key, _due_available, jobs = create_source_refresh_batch(db, limit=1, interval_hours=6, force=False)
+    failed = jobs[0]
+
+    reject_suspicious_source_refresh_price(db, failed.id, 5.0)
+
+    _cooldown_batch, due_available, cooldown_jobs = create_source_refresh_batch(
+        db, limit=1, interval_hours=6, force=False
+    )
+
+    assert due_available == 0
+    assert cooldown_jobs == []
+
+    failed.completed_at = datetime.utcnow() - timedelta(hours=7)
+    db.commit()
+    _retry_batch, due_available, retry_jobs = create_source_refresh_batch(
+        db, limit=1, interval_hours=6, force=False
+    )
+
+    assert due_available == 1
+    assert len(retry_jobs) == 1
+    assert retry_jobs[0].product_id == product.id
 
 
 def test_late_source_failure_does_not_overwrite_completed_capture() -> None:

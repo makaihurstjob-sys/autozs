@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from typing import Any
 from urllib.parse import urlencode
@@ -26,15 +26,21 @@ ACTIVE_REPORT_STATUSES = {"active", "live", "listed"}
 ACTIVE_REPORT_RECONCILE_STATUSES = {*ACTIVE_REPORT_STATUSES, "scheduled"}
 
 
-def start_ebay_sync_run(db: Session, account_key: str = "manual", source: str = "seller_hub_report") -> EbaySyncRun:
+def start_ebay_sync_run(
+    db: Session,
+    account_key: str = "manual",
+    source: str = "seller_hub_report",
+    report_type: str = "active_listings",
+) -> EbaySyncRun:
+    normalized_report_type = report_type if report_type in {"traffic", "orders"} else "active_listings"
     run = EbaySyncRun(
         account_key=_clean_account_key(account_key),
         source=source[:64],
-        report_type="active_listings",
+        report_type=normalized_report_type,
         status=EbaySyncRunStatus.running.value,
         phase="account_check",
         started_at=_now(),
-        message="Checking the visible Chrome eBay account before syncing.",
+        message=f"Checking the visible Chrome eBay account before syncing {normalized_report_type.replace('_', ' ')}.",
     )
     db.add(run)
     db.flush()
@@ -47,7 +53,8 @@ def start_ebay_sync_run(db: Session, account_key: str = "manual", source: str = 
         run.message = str(exc)
     else:
         run.phase = "opening_reports"
-        run.message = "Account matched. Opening Seller Hub Reports for automatic Active Listings sync."
+        label = {"traffic": "Traffic", "orders": "Orders"}.get(normalized_report_type, "Active Listings")
+        run.message = f"Account matched. Opening Seller Hub for automatic {label} sync."
     db.commit()
     db.refresh(run)
     return run
@@ -58,6 +65,330 @@ def list_ebay_sync_runs(db: Session, account_key: str | None = None, limit: int 
     if account_key:
         stmt = stmt.where(EbaySyncRun.account_key == _clean_account_key(account_key))
     return list(db.scalars(stmt).all())
+
+
+def queue_ebay_active_listing_sync(
+    db: Session,
+    *,
+    account_key: str,
+    force: bool = False,
+    minimum_age_minutes: int = 30,
+) -> EbaySyncRun:
+    account_key = _clean_account_key(account_key)
+    pending = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "active_listings",
+            EbaySyncRun.status.in_((EbaySyncRunStatus.queued.value, EbaySyncRunStatus.running.value)),
+        )
+        .order_by(EbaySyncRun.created_at.desc(), EbaySyncRun.id.desc())
+    )
+    if pending is not None:
+        return pending
+    if not force:
+        cutoff = _now() - timedelta(minutes=max(5, minimum_age_minutes))
+        latest = db.scalar(
+            select(EbaySyncRun)
+            .where(
+                EbaySyncRun.account_key == account_key,
+                EbaySyncRun.report_type == "active_listings",
+                EbaySyncRun.status == EbaySyncRunStatus.completed.value,
+            )
+            .order_by(EbaySyncRun.completed_at.desc(), EbaySyncRun.id.desc())
+        )
+        if latest and latest.completed_at and latest.completed_at >= cutoff:
+            return latest
+    run = EbaySyncRun(
+        account_key=account_key,
+        source="seller_hub_active_listings_report",
+        report_type="active_listings",
+        status=EbaySyncRunStatus.queued.value,
+        phase="queued",
+        message="Queued for the Chrome extension to refresh the Seller Hub Active listings report.",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def claim_next_ebay_active_listing_sync(db: Session, *, account_key: str) -> EbaySyncRun | None:
+    account_key = _clean_account_key(account_key)
+    stale_cutoff = _now() - timedelta(minutes=15)
+    stale_runs = list(
+        db.scalars(
+            select(EbaySyncRun).where(
+                EbaySyncRun.status == EbaySyncRunStatus.running.value,
+                EbaySyncRun.report_type == "active_listings",
+                EbaySyncRun.updated_at < stale_cutoff,
+            )
+        ).all()
+    )
+    for stale in stale_runs:
+        stale.status = EbaySyncRunStatus.needs_review.value
+        stale.completed_at = _now()
+        stale.message = "Expired stale Active listings sync lease so a newer Chrome extension job can continue."
+    if stale_runs:
+        db.commit()
+
+    running = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "active_listings",
+            EbaySyncRun.status == EbaySyncRunStatus.running.value,
+        )
+        .order_by(EbaySyncRun.updated_at, EbaySyncRun.id)
+    )
+    if running is not None:
+        return running
+    busy = db.scalar(
+        select(EbaySyncRun.id).where(
+            EbaySyncRun.status == EbaySyncRunStatus.running.value,
+            EbaySyncRun.report_type.in_(("active_listings", "traffic", "orders")),
+        )
+    )
+    if busy is not None:
+        return None
+    run = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "active_listings",
+            EbaySyncRun.status == EbaySyncRunStatus.queued.value,
+        )
+        .order_by(EbaySyncRun.created_at, EbaySyncRun.id)
+    )
+    if run is None:
+        candidate = queue_ebay_active_listing_sync(db, account_key=account_key, force=False)
+        if candidate.status != EbaySyncRunStatus.queued.value:
+            return None
+        run = candidate
+    run.status = EbaySyncRunStatus.running.value
+    run.phase = "opening_reports"
+    run.started_at = _now()
+    run.message = "Chrome extension claimed the Seller Hub Active listings sync."
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def queue_ebay_traffic_sync(
+    db: Session,
+    *,
+    account_key: str,
+    force: bool = False,
+    minimum_age_hours: int = 20,
+) -> EbaySyncRun:
+    account_key = _clean_account_key(account_key)
+    pending = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "traffic",
+            EbaySyncRun.status.in_((EbaySyncRunStatus.queued.value, EbaySyncRunStatus.running.value)),
+        )
+        .order_by(EbaySyncRun.created_at.desc(), EbaySyncRun.id.desc())
+    )
+    if pending is not None:
+        return pending
+    if not force:
+        cutoff = _now().timestamp() - max(1, minimum_age_hours) * 60 * 60
+        latest = db.scalar(
+            select(EbaySyncRun)
+            .where(
+                EbaySyncRun.account_key == account_key,
+                EbaySyncRun.report_type == "traffic",
+                EbaySyncRun.status == EbaySyncRunStatus.completed.value,
+            )
+            .order_by(EbaySyncRun.completed_at.desc(), EbaySyncRun.id.desc())
+        )
+        if latest and latest.completed_at and latest.completed_at.timestamp() >= cutoff:
+            return latest
+    run = EbaySyncRun(
+        account_key=account_key,
+        source="seller_hub_traffic_report",
+        report_type="traffic",
+        status=EbaySyncRunStatus.queued.value,
+        phase="queued",
+        message="Queued for the Chrome extension to download the Seller Hub Active listings traffic report.",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def claim_next_ebay_traffic_sync(db: Session, *, account_key: str) -> EbaySyncRun | None:
+    account_key = _clean_account_key(account_key)
+    stale_cutoff = _now() - timedelta(minutes=15)
+    stale_runs = list(
+        db.scalars(
+            select(EbaySyncRun).where(
+                EbaySyncRun.status == EbaySyncRunStatus.running.value,
+                EbaySyncRun.report_type.in_(("active_listings", "traffic", "orders")),
+                EbaySyncRun.updated_at < stale_cutoff,
+            )
+        ).all()
+    )
+    for stale in stale_runs:
+        stale.status = EbaySyncRunStatus.needs_review.value
+        stale.completed_at = _now()
+        stale.message = "Expired stale Seller Hub sync lease so newer Chrome extension jobs can continue."
+    if stale_runs:
+        db.commit()
+    running_traffic = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "traffic",
+            EbaySyncRun.status == EbaySyncRunStatus.running.value,
+        )
+        .order_by(EbaySyncRun.updated_at, EbaySyncRun.id)
+    )
+    if running_traffic is not None:
+        return running_traffic
+    busy = db.scalar(
+        select(EbaySyncRun.id).where(
+            EbaySyncRun.status == EbaySyncRunStatus.running.value,
+            EbaySyncRun.report_type.in_(("active_listings", "traffic", "orders")),
+        )
+    )
+    if busy is not None:
+        return None
+    run = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "traffic",
+            EbaySyncRun.status == EbaySyncRunStatus.queued.value,
+        )
+        .order_by(EbaySyncRun.created_at, EbaySyncRun.id)
+    )
+    if run is None:
+        return None
+    run.status = EbaySyncRunStatus.running.value
+    run.phase = "opening_reports"
+    run.started_at = _now()
+    run.message = "Chrome extension claimed the Seller Hub Traffic sync."
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def queue_ebay_order_sync(
+    db: Session,
+    *,
+    account_key: str,
+    force: bool = False,
+    minimum_age_minutes: int = 30,
+) -> EbaySyncRun:
+    account_key = _clean_account_key(account_key)
+    pending = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "orders",
+            EbaySyncRun.status.in_((EbaySyncRunStatus.queued.value, EbaySyncRunStatus.running.value)),
+        )
+        .order_by(EbaySyncRun.created_at.desc(), EbaySyncRun.id.desc())
+    )
+    if pending is not None:
+        return pending
+    if not force:
+        cutoff = _now() - timedelta(minutes=max(5, minimum_age_minutes))
+        latest = db.scalar(
+            select(EbaySyncRun)
+            .where(
+                EbaySyncRun.account_key == account_key,
+                EbaySyncRun.report_type == "orders",
+                EbaySyncRun.status.in_(
+                    (
+                        EbaySyncRunStatus.completed.value,
+                        EbaySyncRunStatus.failed.value,
+                        EbaySyncRunStatus.needs_review.value,
+                    )
+                ),
+            )
+            .order_by(EbaySyncRun.updated_at.desc(), EbaySyncRun.id.desc())
+        )
+        if latest and latest.updated_at and latest.updated_at >= cutoff:
+            return latest
+    run = EbaySyncRun(
+        account_key=account_key,
+        source="seller_hub_orders_report",
+        report_type="orders",
+        status=EbaySyncRunStatus.queued.value,
+        phase="queued",
+        message="Queued for the Chrome extension to download the Seller Hub Orders report.",
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def claim_next_ebay_order_sync(db: Session, *, account_key: str) -> EbaySyncRun | None:
+    account_key = _clean_account_key(account_key)
+    stale_cutoff = _now() - timedelta(minutes=15)
+    stale_runs = list(
+        db.scalars(
+            select(EbaySyncRun).where(
+                EbaySyncRun.status == EbaySyncRunStatus.running.value,
+                EbaySyncRun.report_type == "orders",
+                EbaySyncRun.updated_at < stale_cutoff,
+            )
+        ).all()
+    )
+    for stale in stale_runs:
+        stale.status = EbaySyncRunStatus.needs_review.value
+        stale.completed_at = _now()
+        stale.message = "Expired stale Seller Hub Orders sync lease so a newer Chrome extension job can continue."
+    if stale_runs:
+        db.commit()
+
+    running = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "orders",
+            EbaySyncRun.status == EbaySyncRunStatus.running.value,
+        )
+        .order_by(EbaySyncRun.updated_at, EbaySyncRun.id)
+    )
+    if running is not None:
+        return running
+    busy = db.scalar(
+        select(EbaySyncRun.id).where(
+            EbaySyncRun.status == EbaySyncRunStatus.running.value,
+            EbaySyncRun.report_type.in_(("active_listings", "traffic", "orders")),
+        )
+    )
+    if busy is not None:
+        return None
+
+    run = db.scalar(
+        select(EbaySyncRun)
+        .where(
+            EbaySyncRun.account_key == account_key,
+            EbaySyncRun.report_type == "orders",
+            EbaySyncRun.status == EbaySyncRunStatus.queued.value,
+        )
+        .order_by(EbaySyncRun.created_at, EbaySyncRun.id)
+    )
+    if run is None:
+        candidate = queue_ebay_order_sync(db, account_key=account_key, force=False)
+        if candidate.status != EbaySyncRunStatus.queued.value:
+            return None
+        run = candidate
+    run.status = EbaySyncRunStatus.running.value
+    run.phase = "opening_reports"
+    run.started_at = _now()
+    run.message = "Chrome extension claimed the Seller Hub Orders sync."
+    db.commit()
+    db.refresh(run)
+    return run
 
 
 def capture_listing_views(
@@ -198,7 +529,11 @@ def import_listing_report_rows(
 
 
 def serialize_ebay_sync_run(run: EbaySyncRun) -> dict:
-    runner_url = "https://www.ebay.com/sh/lst/active#" + urlencode(
+    runner_path = {
+        "traffic": "/sh/performance/traffic",
+        "orders": "/sh/reports/downloads",
+    }.get(run.report_type, "/sh/lst/active")
+    runner_url = f"https://www.ebay.com{runner_path}#" + urlencode(
         {
             "autozs_sync_run": run.id,
             "autozs_account_key": run.account_key,
@@ -243,6 +578,7 @@ def update_ebay_sync_run_progress(db: Session, run_id: int, values: dict[str, An
         "downloading_report",
         "report_downloaded",
         "importing_report",
+        "completed",
     }
     phase = str(values.get("phase") or "").strip()
     if phase and phase not in allowed_phases:
@@ -250,6 +586,7 @@ def update_ebay_sync_run_progress(db: Session, run_id: int, values: dict[str, An
     status = str(values.get("status") or "").strip()
     if status and status not in {
         EbaySyncRunStatus.running.value,
+        EbaySyncRunStatus.completed.value,
         EbaySyncRunStatus.needs_review.value,
         EbaySyncRunStatus.failed.value,
     }:
@@ -266,7 +603,15 @@ def update_ebay_sync_run_progress(db: Session, run_id: int, values: dict[str, An
         run.report_filename = str(values["report_filename"])[:1000] or None
     if values.get("increment_attempts"):
         run.attempts += 1
-    if run.status in {EbaySyncRunStatus.needs_review.value, EbaySyncRunStatus.failed.value}:
+    if values.get("listings_seen") is not None:
+        run.listings_seen = int(values["listings_seen"])
+    if values.get("listings_upserted") is not None:
+        run.listings_upserted = int(values["listings_upserted"])
+    if run.status in {
+        EbaySyncRunStatus.completed.value,
+        EbaySyncRunStatus.needs_review.value,
+        EbaySyncRunStatus.failed.value,
+    }:
         run.completed_at = _now()
     db.commit()
     db.refresh(run)

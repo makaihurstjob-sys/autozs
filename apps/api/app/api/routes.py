@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta, timezone
+import base64
+import hmac
 import json
 from pathlib import Path
+import shutil
+import subprocess
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
@@ -12,6 +16,8 @@ from app.models.domain import (
     AutomationRun,
     CandidateProduct,
     Competitor,
+    CustomerConversation,
+    CustomerMessage,
     CustomerUpdate,
     EbayAccount,
     EbayListing,
@@ -19,13 +25,18 @@ from app.models.domain import (
     EbayRevisionBatch,
     EbayRevisionJob,
     EbaySyncRun,
+    FinancialAccount,
     FulfillmentTask,
+    GiftCard,
     Order,
     PriceSnapshot,
     Product,
     ProductStatus,
     PushSubscription,
     ResearchJob,
+    SourceRefreshJob,
+    SubscriptionExpense,
+    SupplierOrder,
     SupplierProduct,
 )
 from app.schemas.domain import (
@@ -38,6 +49,15 @@ from app.schemas.domain import (
     CapturedProductUpdate,
     BulkProductImageDownloadResult,
     CapturedProductImport,
+    CustomerConversationImport,
+    CustomerConversationRead,
+    CustomerMessageCreate,
+    CustomerMessageRead,
+    CustomerMessageUpdate,
+    CustomerTemplateMessageCreate,
+    CustomerTemplateRead,
+    CustomerTemplateRenderRead,
+    CustomerTemplateRenderRequest,
     CustomerUpdateRead,
     CustomerUpdateStatusPatch,
     DraftRecalculationResult,
@@ -53,6 +73,13 @@ from app.schemas.domain import (
     EbayListingViewsCaptureResult,
     EbayListingViewsSummary,
     EbayListingViewSnapshotRead,
+    EbayOrderReportImport,
+    EbayOrderReportImportResult,
+    EbayTrafficImportResult,
+    EbayTrafficFileImport,
+    EbayTrafficOverviewRead,
+    EbayTrafficReportImport,
+    EbayTrafficSyncResult,
     EbaySyncListingReportImport,
     EbaySyncRunCreate,
     EbaySyncRunProgress,
@@ -79,6 +106,15 @@ from app.schemas.domain import (
     EbayPublishResult,
     FulfillmentTaskRead,
     FulfillmentTaskUpdate,
+    FinanceEntryImport,
+    FinanceOverviewRead,
+    FinancialAccountRead,
+    FinancialAccountUpsert,
+    GiftCardCreate,
+    GiftCardCredentialStatus,
+    GiftCardCredentialWrite,
+    GiftCardRead,
+    GiftCardUpdate,
     ListingQueueItem,
     ListingJobCreate,
     ListingDraftVerification,
@@ -98,6 +134,7 @@ from app.schemas.domain import (
     PushSubscriptionCreate,
     PushSubscriptionRead,
     PushSubscriptionUpdate,
+    PushSaleTestRequest,
     PushTestRequest,
     ProductImageDownloadResult,
     ProductImageOrderUpdate,
@@ -112,6 +149,7 @@ from app.schemas.domain import (
     ResearchJobRead,
     SettingsRead,
     SourceCaptureQueueItem,
+    SourceCaptureClaim,
     SourceCaptureQueueRead,
     SourceRefreshQueueItem,
     SourceRefreshQueueRead,
@@ -127,6 +165,14 @@ from app.schemas.domain import (
     StatsTopProduct,
     StatsTotals,
     SupplierAttach,
+    SupplierOptionRead,
+    SupplierOrderPrepare,
+    SupplierCheckoutCredentialRead,
+    SupplierOrderClaimRead,
+    SupplierOrderRead,
+    SupplierOrderUpdate,
+    SubscriptionExpenseCreate,
+    SubscriptionExpenseRead,
     UiThemeUpdate,
     WorkerRead,
 )
@@ -158,7 +204,17 @@ from app.services.listing_jobs import (
     verify_listing_job_draft,
 )
 from app.services.automation import create_repricing_snapshots, run_catalog_automation_cycle as run_catalog_cycle_service
-from app.services.ebay import complete_ebay_oauth, ebay_connection_status, publish_ebay_sandbox_listing, refresh_ebay_access_token, start_ebay_oauth
+from app.services.ebay import (
+    complete_ebay_account_oauth,
+    complete_ebay_oauth,
+    ebay_connection_status,
+    publish_ebay_sandbox_listing,
+    refresh_ebay_access_token,
+    refresh_ebay_account_access_token,
+    start_ebay_account_oauth,
+    start_ebay_oauth,
+)
+from app.services.ebay_traffic import import_traffic_file, import_traffic_report, sync_ebay_traffic, traffic_overview
 from app.services.ebay_accounts import create_ebay_account, delete_ebay_account, list_ebay_accounts, update_ebay_account
 from app.services.ebay_browser_account import read_ebay_browser_account_status, update_ebay_browser_account_status
 from app.services.ebay_revisions import (
@@ -184,20 +240,57 @@ from app.services.ebay_revision_batches import (
     update_ebay_revision_batch,
 )
 from app.services.ebay_sync import (
+    claim_next_ebay_order_sync,
+    claim_next_ebay_traffic_sync,
     capture_listing_views,
     import_listing_report_rows,
     list_ebay_sync_runs,
+    claim_next_ebay_active_listing_sync,
+    queue_ebay_order_sync,
+    queue_ebay_traffic_sync,
     serialize_ebay_sync_run,
     start_ebay_sync_run,
     update_ebay_sync_run_progress,
 )
 from app.services.images import prepare_product_images_for_ebay
 from app.services.monitoring import build_source_refresh_queue, run_source_monitoring_cycle
-from app.services.orders import seed_mock_order
+from app.services.orders import import_ebay_order_report_rows, parse_ebay_order_report, seed_mock_order
 from app.services.order_updates import generate_order_update_drafts, list_customer_updates, update_customer_update_status
+from app.services.customer_service import (
+    claim_next_outbound_message,
+    import_conversation,
+    list_conversations,
+    queue_message,
+    queue_missing_order_thank_yous,
+    queue_template_message,
+    update_message,
+)
+from app.services.customer_templates import list_customer_templates, render_customer_template
+from app.services.fulfillment import (
+    approve_supplier_order,
+    claim_next_supplier_order,
+    create_gift_card,
+    list_gift_cards,
+    list_supplier_orders,
+    prepare_supplier_order,
+    update_gift_card,
+    update_supplier_order,
+)
+from app.services.windows_credentials import (
+    gift_card_credential_target,
+    read_generic_credential,
+    store_generic_credential,
+)
+from app.services.finance import (
+    create_subscription,
+    finance_overview,
+    import_finance_entries,
+    upsert_financial_account,
+)
 from app.services.products import approve_candidate
 from app.services.research import create_mock_candidates
 from app.services.settings import read_pricing_settings, write_pricing_settings
+from app.services.suppliers import supplier_catalog
 from app.services.source_refresh_jobs import (
     claim_next_source_refresh_job_any_batch,
     claim_next_source_refresh_job,
@@ -216,6 +309,7 @@ from app.services.push_notifications import (
     dispatch_alert_notifications,
     get_push_config,
     list_push_subscriptions,
+    send_latest_order_sale_test,
     serialize_push_subscription,
     send_test_push,
     update_push_subscription,
@@ -223,6 +317,66 @@ from app.services.push_notifications import (
 )
 
 router = APIRouter()
+
+
+@router.post("/browser-recovery/home-depot-backup")
+def launch_home_depot_backup_profile() -> dict[str, str]:
+    chrome = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+    extension_source = Path(r"C:\AutoZS\repo\tools\chrome-extension")
+    extension = Path(r"C:\AutoZS\chrome-extensions\home-depot-backup")
+    profile = Path(r"C:\AutoZS\chrome-profiles\home-depot-backup-capture-only")
+    if not chrome.exists():
+        raise HTTPException(status_code=503, detail="Chrome is not installed at the configured Windows path")
+    if not (extension_source / "manifest.json").exists():
+        raise HTTPException(status_code=503, detail="The AutoZS Chrome extension is unavailable")
+    extension.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(extension_source, extension, dirs_exist_ok=True)
+    manifest_path = extension / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["name"] = "AutoZS Home Depot Backup Capture"
+    manifest["description"] = "Capture-only Home Depot failover worker. This extension cannot run eBay jobs."
+    manifest["host_permissions"] = [
+        permission
+        for permission in manifest.get("host_permissions", [])
+        if "homedepot.com" in permission
+        or "desktop-56u49jf" in permission
+        or "127.0.0.1" in permission
+        or "localhost" in permission
+    ]
+    manifest["content_scripts"] = [
+        script
+        for script in manifest.get("content_scripts", [])
+        if not any("ebay.com" in match for match in script.get("matches", []))
+        and not any("lowes.com" in match for match in script.get("matches", []))
+    ]
+    for resource in manifest.get("web_accessible_resources", []):
+        resource["matches"] = [match for match in resource.get("matches", []) if "homedepot.com" in match]
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    profile.mkdir(parents=True, exist_ok=True)
+    dashboard = (
+        "https://desktop-56u49jf.tailb2892a.ts.net/"
+        "?api=https://desktop-56u49jf.tailb2892a.ts.net:8443"
+        "&autozs_worker_mode=capture"
+    )
+    subprocess.Popen(
+        [
+            str(chrome),
+            f"--user-data-dir={profile}",
+            "--profile-directory=Default",
+            f"--load-extension={extension}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            dashboard,
+        ],
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+    return {"status": "launched", "profile": str(profile), "mode": "capture"}
+
+
+def _require_local_checkout_request(request: Request) -> None:
+    host = str(request.client.host if request.client else "")
+    if host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        raise HTTPException(status_code=403, detail="Checkout credentials are only available to the local Windows worker.")
 
 
 @router.get("/health")
@@ -335,6 +489,14 @@ def send_push_test_route(payload: PushTestRequest, db: Session = Depends(get_db)
         db,
         title=payload.title,
         body=payload.body,
+        subscription_id=payload.subscription_id,
+    ))
+
+
+@router.post("/push/test-sale", response_model=PushDispatchResult)
+def send_push_sale_test_route(payload: PushSaleTestRequest, db: Session = Depends(get_db)) -> PushDispatchResult:
+    return PushDispatchResult(**send_latest_order_sale_test(
+        db,
         subscription_id=payload.subscription_id,
     ))
 
@@ -457,6 +619,43 @@ def delete_ebay_account_route(account_key: str, db: Session = Depends(get_db)) -
     if not delete_ebay_account(db, account_key):
         raise HTTPException(status_code=404, detail="eBay account not found")
     return {"deleted": True}
+
+
+@router.post("/ebay/accounts/{account_key}/oauth/start", response_model=EbayOAuthStartRead)
+def start_ebay_account_oauth_flow(account_key: str, db: Session = Depends(get_db)) -> EbayOAuthStartRead:
+    try:
+        result = start_ebay_account_oauth(db, account_key)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if result.get("missing"):
+        raise HTTPException(status_code=400, detail={"missing": result["missing"]})
+    return EbayOAuthStartRead(**result)
+
+
+@router.post("/ebay/accounts/{account_key}/oauth/callback", response_model=EbayOAuthTokenRead)
+def complete_ebay_account_oauth_flow(
+    account_key: str,
+    payload: EbayOAuthCallbackRequest,
+    db: Session = Depends(get_db),
+) -> EbayOAuthTokenRead:
+    try:
+        result = complete_ebay_account_oauth(db, account_key, payload.code, payload.state)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EbayOAuthTokenRead(**result)
+
+
+@router.post("/ebay/accounts/{account_key}/oauth/refresh", response_model=EbayOAuthTokenRead)
+def refresh_ebay_account_oauth_token(account_key: str, db: Session = Depends(get_db)) -> EbayOAuthTokenRead:
+    try:
+        result = refresh_ebay_account_access_token(db, account_key)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EbayOAuthTokenRead(**result)
 
 
 @router.post("/ebay/oauth/start", response_model=EbayOAuthStartRead)
@@ -596,6 +795,11 @@ def list_products(include_deleted: bool = Query(False), db: Session = Depends(ge
     return list(db.scalars(stmt).all())
 
 
+@router.get("/suppliers", response_model=list[SupplierOptionRead])
+def list_supplier_options() -> list[SupplierOptionRead]:
+    return [SupplierOptionRead(**item) for item in supplier_catalog()]
+
+
 @router.post("/products/import", response_model=ProductImportResult)
 def import_source_products(payload: ProductImportRequest, db: Session = Depends(get_db)) -> ProductImportResult:
     urls = split_urls(payload.urls)
@@ -615,25 +819,66 @@ def import_source_products(payload: ProductImportRequest, db: Session = Depends(
 @router.post("/products/import-captured", response_model=ProductRead)
 def import_captured_source_product(payload: CapturedProductImport, db: Session = Depends(get_db)) -> Product:
     reject_home_depot_error_capture(payload.source_url, payload.title)
+    reject_bulk_source_capture(
+        db,
+        source_url=payload.source_url,
+        source_bulk_package=payload.source_bulk_package,
+        source_purchase_unit=payload.source_purchase_unit,
+        reason=payload.source_bulk_package_reason,
+        refresh_job_id=payload.refresh_job_id,
+    )
     if payload.refresh_job_id:
+        job = db.get(SourceRefreshJob, payload.refresh_job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Source refresh job not found")
         suspicious_price = reject_suspicious_source_refresh_price(db, payload.refresh_job_id, payload.source_price)
         if suspicious_price:
             raise HTTPException(status_code=422, detail=suspicious_price)
+        missing_capture_fields: list[str] = []
+        if not payload.title.strip():
+            missing_capture_fields.append("title")
+        if not split_urls(payload.image_urls or ""):
+            missing_capture_fields.append("images")
+        if missing_capture_fields:
+            message = (
+                "Incomplete automatic source capture; preserved the existing product data. "
+                f"Missing {', '.join(missing_capture_fields)}."
+            )
+            fail_source_refresh_job(db, payload.refresh_job_id, message)
+            raise HTTPException(status_code=422, detail=message)
+        product = update_product_from_capture(
+            db,
+            product_id=job.product_id,
+            source_price=payload.source_price,
+            source_shipping=payload.source_shipping,
+            source_in_stock=payload.source_in_stock,
+            source_price_unavailable=payload.source_price_unavailable,
+            subscription_discount_percent=payload.subscription_discount_percent,
+            minimum_order_quantity=payload.minimum_order_quantity,
+        )
+        if product is None:
+            raise HTTPException(status_code=404, detail="Source refresh product not found")
+        complete_source_refresh_job(db, payload.refresh_job_id, product.id)
+        return product
     product = import_captured_product(
         db,
         source_url=payload.source_url,
         title=payload.title,
         source_price=payload.source_price,
         source_shipping=payload.source_shipping,
+        source_in_stock=payload.source_in_stock,
+        source_price_unavailable=payload.source_price_unavailable,
         competitor_price=payload.competitor_price,
         subscription_discount_percent=payload.subscription_discount_percent,
+        minimum_order_quantity=payload.minimum_order_quantity,
         description=payload.description,
         image_urls=payload.image_urls,
     )
-    if payload.refresh_job_id:
-        complete_source_refresh_job(db, payload.refresh_job_id, product.id)
-    else:
-        enqueue_ebay_price_revisions(db, product_ids=[product.id])
+    product.capture_lease_owner = None
+    product.capture_lease_expires_at = None
+    db.commit()
+    db.refresh(product)
+    enqueue_ebay_price_revisions(db, product_ids=[product.id])
     return product
 
 
@@ -729,6 +974,11 @@ def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRea
         supplier = product.supplier_products[0] if product.supplier_products else None
         if supplier is None or not supplier.source_url:
             continue
+        # An unavailable source intentionally has no shipping quote. Keeping it
+        # in the capture queue would reopen the same page forever while waiting
+        # for shipping data that cannot exist.
+        if supplier.in_stock is False or supplier.price_unavailable:
+            continue
         missing: list[str] = []
         if supplier.last_price is None:
             missing.append("source price")
@@ -762,20 +1012,66 @@ def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRea
     return SourceCaptureQueueRead(total=len(items), items=items)
 
 
+@router.post("/products/capture-queue/claim", response_model=SourceCaptureQueueItem | None)
+def claim_source_capture_item(
+    payload: SourceCaptureClaim,
+    db: Session = Depends(get_db),
+) -> SourceCaptureQueueItem | None:
+    now = datetime.utcnow()
+    lease_expires_at = now + timedelta(minutes=20)
+    # Build the eligible queue with the same rules used by the dashboard, then
+    # atomically claim the first row whose prior lease is absent or expired.
+    # The conditional UPDATE prevents two Chrome profiles from owning the same
+    # product even when their polling requests arrive together.
+    for item in source_capture_queue(db).items:
+        if payload.source_host and payload.source_host.lower() not in item.source_url.lower():
+            continue
+        claimed = db.execute(
+            update(Product)
+            .where(
+                Product.id == item.product_id,
+                or_(
+                    Product.capture_lease_expires_at.is_(None),
+                    Product.capture_lease_expires_at <= now,
+                    Product.capture_lease_owner == payload.worker_id,
+                ),
+            )
+            .values(
+                capture_lease_owner=payload.worker_id,
+                capture_lease_expires_at=lease_expires_at,
+            )
+        )
+        db.commit()
+        if claimed.rowcount:
+            return item
+    return None
+
+
 @router.patch("/products/{product_id}/capture", response_model=ProductRead)
 def update_product_capture(product_id: int, payload: CapturedProductUpdate, db: Session = Depends(get_db)) -> Product:
     product_before_update = db.get(Product, product_id)
     if product_before_update is not None and product_before_update.supplier_products:
         source_url = product_before_update.supplier_products[0].source_url
         reject_home_depot_error_capture(source_url, payload.title)
+        reject_bulk_source_capture(
+            db,
+            source_url=source_url,
+            source_bulk_package=payload.source_bulk_package,
+            source_purchase_unit=payload.source_purchase_unit,
+            reason=payload.source_bulk_package_reason,
+            product_id=product_id,
+        )
     product = update_product_from_capture(
         db,
         product_id=product_id,
         title=payload.title,
         source_price=payload.source_price,
         source_shipping=payload.source_shipping,
+        source_in_stock=payload.source_in_stock,
+        source_price_unavailable=payload.source_price_unavailable,
         competitor_price=payload.competitor_price,
         subscription_discount_percent=payload.subscription_discount_percent,
+        minimum_order_quantity=payload.minimum_order_quantity,
         description=payload.description,
         image_urls=payload.image_urls,
     )
@@ -790,6 +1086,41 @@ def reject_home_depot_error_capture(source_url: str | None, title: str | None) -
         return
     if "homedepot.com" in source_url.lower() and title.strip().lower() == "error page":
         raise HTTPException(status_code=422, detail="Home Depot returned an error page; refresh the source page and try again")
+
+
+def reject_bulk_source_capture(
+    db: Session,
+    *,
+    source_url: str | None,
+    source_bulk_package: bool,
+    source_purchase_unit: str | None,
+    reason: str | None,
+    refresh_job_id: int | None = None,
+    product_id: int | None = None,
+) -> None:
+    if not source_bulk_package:
+        return
+    unit = (source_purchase_unit or "bulk package").strip().lower()
+    if source_url and "homedepot.com" not in source_url.lower():
+        return
+    message = (
+        f"Excluded bulk-source product ({unit}); AutoZS does not import case, carton, pallet, "
+        "or coverage-priced products as single items."
+    )
+    if reason:
+        message = f"{message} {reason.strip()}"
+    if refresh_job_id:
+        refresh_job = db.get(SourceRefreshJob, refresh_job_id)
+        if refresh_job is not None:
+            product_id = refresh_job.product_id
+    if product_id:
+        product = db.get(Product, product_id)
+        if product is not None:
+            product.status = ProductStatus.paused.value
+            db.commit()
+    if refresh_job_id:
+        fail_source_refresh_job(db, refresh_job_id, message)
+    raise HTTPException(status_code=422, detail=message)
 
 
 @router.patch("/products/{product_id}/listing-schedule", response_model=ProductRead)
@@ -824,6 +1155,10 @@ def choose_draft_price(product_id: int, payload: DraftPriceUpdate, db: Session =
     product = choose_product_draft_price(db, product_id, payload.mode)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    product.capture_lease_owner = None
+    product.capture_lease_expires_at = None
+    db.commit()
+    db.refresh(product)
     return product
 
 
@@ -1135,8 +1470,31 @@ def _auto_delist_candidate(listing: EbayListing, settings: dict) -> bool:
 
 @router.post("/ebay/sync-runs", response_model=EbaySyncRunRead)
 def create_ebay_sync_run(payload: EbaySyncRunCreate, db: Session = Depends(get_db)) -> EbaySyncRunRead:
-    run = start_ebay_sync_run(db, account_key=payload.account_key, source=payload.source)
+    run = start_ebay_sync_run(
+        db,
+        account_key=payload.account_key,
+        source=payload.source,
+        report_type=payload.report_type,
+    )
     return EbaySyncRunRead(**serialize_ebay_sync_run(run))
+
+
+@router.post("/ebay/sync-runs/active-listings/next", response_model=EbaySyncRunRead | None)
+def claim_ebay_active_listing_sync_run(
+    account_key: str = Query(..., min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+) -> EbaySyncRunRead | None:
+    run = claim_next_ebay_active_listing_sync(db, account_key=account_key)
+    return EbaySyncRunRead(**serialize_ebay_sync_run(run)) if run else None
+
+
+@router.post("/ebay/sync-runs/traffic/next", response_model=EbaySyncRunRead | None)
+def claim_ebay_traffic_sync_run(
+    account_key: str = Query(..., min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+) -> EbaySyncRunRead | None:
+    run = claim_next_ebay_traffic_sync(db, account_key=account_key)
+    return EbaySyncRunRead(**serialize_ebay_sync_run(run)) if run else None
 
 
 @router.post("/ebay/sync-runs/listing-report", response_model=EbaySyncRunRead)
@@ -1657,16 +2015,37 @@ def stats_overview(
 
     products = [product for product in products if _in_stats_range(product.created_at, cutoff)]
     snapshots = [snapshot for snapshot in snapshots if _in_stats_range(snapshot.created_at, cutoff)]
-    available_accounts = sorted(
-        {
-            *{order.account_id for order in orders if getattr(order, "account_id", None)},
-            *{listing.account_id for listing in listings if getattr(listing, "account_id", None)},
-            *{account.account_id for account in db.scalars(select(EbayAccount)).all() if getattr(account, "account_id", None)},
-        }
-    )
-    if account != "all":
-        account_orders = [order for order in orders if order.account_id == account and _in_stats_range(order.created_at, cutoff)]
-        account_listings = [listing for listing in listings if listing.account_id == account and _in_stats_range(listing.created_at, cutoff)]
+    configured_accounts = list(db.scalars(select(EbayAccount)).all())
+    account_aliases = {
+        alias: configured.key
+        for configured in configured_accounts
+        for alias in (configured.key, configured.account_id)
+        if alias
+    }
+    raw_account_ids = {
+        *{order.account_id for order in orders if getattr(order, "account_id", None)},
+        *{listing.account_id for listing in listings if getattr(listing, "account_id", None)},
+        *{configured.key for configured in configured_accounts if configured.key},
+        *{configured.account_id for configured in configured_accounts if configured.account_id},
+    }
+    available_accounts = sorted({account_aliases.get(raw, raw) for raw in raw_account_ids})
+    selected_account = account_aliases.get(account, account)
+    selected_aliases = {
+        alias
+        for alias, canonical in account_aliases.items()
+        if canonical == selected_account
+    } | {selected_account}
+    if selected_account != "all":
+        account_orders = [
+            order
+            for order in orders
+            if order.account_id in selected_aliases and _in_stats_range(order.created_at, cutoff)
+        ]
+        account_listings = [
+            listing
+            for listing in listings
+            if listing.account_id in selected_aliases and _in_stats_range(listing.created_at, cutoff)
+        ]
     else:
         account_orders = [order for order in orders if _in_stats_range(order.created_at, cutoff)]
         account_listings = [listing for listing in listings if _in_stats_range(listing.created_at, cutoff)]
@@ -1685,10 +2064,11 @@ def stats_overview(
         draft = product.listing_drafts[0] if product.listing_drafts else None
         source_price = supplier.last_price if supplier else None
         source_shipping = supplier.last_shipping if supplier else -1.0
+        minimum_order_quantity = max(1, int(supplier.minimum_order_quantity or 1)) if supplier else 1
         draft_price = draft.calculated_price if draft else None
-        cost = round(effective_supplier_cost(source_price, settings) + _shipping_cost(source_shipping), 2) if source_price is not None else 0.0
+        cost = round(effective_supplier_cost(source_price * minimum_order_quantity, settings) + _shipping_cost(source_shipping), 2) if source_price is not None else 0.0
         fees = _stats_fees(product, draft_price)
-        profit = _stats_profit(product, draft_price, source_price, source_shipping, settings)
+        profit = _stats_profit(product, draft_price, source_price, source_shipping, settings, minimum_order_quantity)
         revenue = draft_price or 0.0
         totals["catalog_revenue"] += revenue
         totals["catalog_cost"] += cost
@@ -1746,7 +2126,7 @@ def stats_overview(
     return StatsOverviewRead(
         selected_range=selected_range,
         grain=grain,
-        selected_account=account,
+        selected_account=selected_account,
         available_accounts=["all", *available_accounts],
         account_note="Catalog projections are global; listing and synced order totals are filtered by eBay account.",
         totals=StatsTotals(
@@ -1783,6 +2163,91 @@ def stats_overview(
     )
 
 
+@router.get("/stats/traffic", response_model=EbayTrafficOverviewRead)
+def read_traffic_overview(
+    selected_range: str = Query("30", alias="range", pattern="^(7|30|90|all)$"),
+    grain: str = Query("day", pattern="^(day|month)$"),
+    account: str = Query("all", pattern="^[A-Za-z0-9_.:-]+$"),
+    db: Session = Depends(get_db),
+) -> EbayTrafficOverviewRead:
+    return EbayTrafficOverviewRead(
+        **traffic_overview(
+            db,
+            selected_range=selected_range,
+            grain=grain,
+            account=account,
+        )
+    )
+
+
+@router.post("/stats/traffic/sync", response_model=EbayTrafficSyncResult)
+def refresh_traffic_metrics(
+    selected_range: str = Query("30", alias="range", pattern="^(7|30|90|all)$"),
+    account: str = Query("all", pattern="^[A-Za-z0-9_.:-]+$"),
+    db: Session = Depends(get_db),
+) -> EbayTrafficSyncResult:
+    try:
+        return EbayTrafficSyncResult(
+            **sync_ebay_traffic(
+                db,
+                selected_range=selected_range,
+                account=account,
+            )
+        )
+    except ValueError:
+        account_key = account
+        if account_key == "all":
+            configured = list_ebay_accounts(db)
+            if not configured:
+                raise HTTPException(status_code=409, detail="No eBay store is configured for Chrome traffic sync.")
+            account_key = str(configured[0]["key"])
+        run = queue_ebay_traffic_sync(db, account_key=account_key, force=True)
+        today = datetime.utcnow().date()
+        return EbayTrafficSyncResult(
+            records_imported=0,
+            accounts_synced=[],
+            period_start=(today - timedelta(days=29)).isoformat(),
+            period_end=today.isoformat(),
+            queued=run.status in {"queued", "running"},
+            run_id=run.id,
+        )
+
+
+@router.post("/stats/traffic/import", response_model=EbayTrafficImportResult)
+def import_traffic_metrics(
+    payload: EbayTrafficReportImport,
+    db: Session = Depends(get_db),
+) -> EbayTrafficImportResult:
+    imported = import_traffic_report(
+        db,
+        account_key=payload.account_key,
+        account_id=payload.account_id or payload.account_key,
+        marketplace_id=payload.marketplace_id,
+        payload=payload.report,
+        dimension=payload.dimension,
+    )
+    db.commit()
+    return EbayTrafficImportResult(records_imported=imported)
+
+
+@router.post("/stats/traffic/import-file", response_model=EbayTrafficImportResult)
+def import_traffic_metrics_file(
+    payload: EbayTrafficFileImport,
+    db: Session = Depends(get_db),
+) -> EbayTrafficImportResult:
+    try:
+        imported = import_traffic_file(
+            db,
+            account_key=payload.account_key,
+            filename=payload.filename,
+            report_base64=payload.report_base64,
+            run_id=payload.run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return EbayTrafficImportResult(records_imported=imported)
+
+
 @router.get("/repricing/snapshots", response_model=list[PriceSnapshotRead])
 def list_repricing_snapshots(db: Session = Depends(get_db)) -> list[PriceSnapshot]:
     return list(db.scalars(select(PriceSnapshot).order_by(PriceSnapshot.created_at.desc()).limit(100)).all())
@@ -1793,16 +2258,208 @@ def sync_sandbox_order(db: Session = Depends(get_db)) -> Order:
     return seed_mock_order(db)
 
 
+@router.post("/orders/sync", response_model=EbaySyncRunRead)
+def queue_order_sync(
+    account_key: str = Query("main-store", min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+) -> EbaySyncRunRead:
+    run = queue_ebay_order_sync(db, account_key=account_key, force=True)
+    return EbaySyncRunRead(**serialize_ebay_sync_run(run))
+
+
+@router.post("/orders/sync/next", response_model=EbaySyncRunRead | None)
+def claim_order_sync(
+    account_key: str = Query(..., min_length=1, max_length=128),
+    db: Session = Depends(get_db),
+) -> EbaySyncRunRead | None:
+    run = claim_next_ebay_order_sync(db, account_key=account_key)
+    return EbaySyncRunRead(**serialize_ebay_sync_run(run)) if run else None
+
+
+@router.post("/orders/import-file", response_model=EbayOrderReportImportResult)
+def import_order_report(
+    payload: EbayOrderReportImport,
+    db: Session = Depends(get_db),
+) -> EbayOrderReportImportResult:
+    try:
+        content = base64.b64decode(payload.report_base64, validate=True)
+        rows = parse_ebay_order_report(content, payload.filename)
+        seen, upserted, unmatched = import_ebay_order_report_rows(
+            db,
+            rows=rows,
+            account_key=payload.account_key,
+            run_id=payload.run_id,
+            filename=payload.filename,
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return EbayOrderReportImportResult(
+        orders_seen=seen,
+        orders_upserted=upserted,
+        unmatched_items=unmatched,
+        run_id=payload.run_id,
+    )
+
+
 @router.get("/orders", response_model=list[OrderRead])
 def list_orders(include_sandbox: bool = False, db: Session = Depends(get_db)) -> list[Order]:
     stmt = (
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.fulfillment_tasks), selectinload(Order.customer_updates))
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.fulfillment_tasks),
+            selectinload(Order.customer_updates),
+            selectinload(Order.supplier_orders).selectinload(SupplierOrder.items),
+        )
         .order_by(Order.created_at.desc())
     )
     if not include_sandbox:
         stmt = stmt.where(Order.ebay_order_id != "SANDBOX-ORDER-001")
     return list(db.scalars(stmt).all())
+
+
+@router.get("/gift-cards", response_model=list[GiftCardRead])
+def read_gift_cards(db: Session = Depends(get_db)) -> list[GiftCard]:
+    return list_gift_cards(db)
+
+
+@router.post("/gift-cards", response_model=GiftCardRead)
+def add_gift_card(payload: GiftCardCreate, db: Session = Depends(get_db)) -> GiftCard:
+    try:
+        return create_gift_card(db, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.patch("/gift-cards/{card_id}", response_model=GiftCardRead)
+def patch_gift_card(card_id: int, payload: GiftCardUpdate, db: Session = Depends(get_db)) -> GiftCard:
+    card = db.get(GiftCard, card_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Gift card not found")
+    try:
+        return update_gift_card(db, card, **payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/gift-cards/{card_id}/credential", response_model=GiftCardCredentialStatus)
+def store_gift_card_credential(
+    card_id: int,
+    payload: GiftCardCredentialWrite,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> GiftCardCredentialStatus:
+    _require_local_checkout_request(request)
+    card = db.get(GiftCard, card_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Gift card not found")
+    target = gift_card_credential_target(card.id)
+    try:
+        store_generic_credential(target, payload.card_number, payload.pin)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    card.secret_ref = target
+    card.last_four = "".join(character for character in payload.card_number if character.isdigit())[-4:]
+    db.commit()
+    return GiftCardCredentialStatus(stored=True, secret_ref=target, last_four=card.last_four)
+
+
+@router.get("/supplier-orders", response_model=list[SupplierOrderRead])
+def read_supplier_orders(order_id: int | None = None, db: Session = Depends(get_db)) -> list[SupplierOrder]:
+    return list_supplier_orders(db, order_id=order_id)
+
+
+@router.get("/supplier-orders/{supplier_order_id}", response_model=SupplierOrderRead)
+def read_supplier_order(supplier_order_id: int, db: Session = Depends(get_db)) -> SupplierOrder:
+    orders = list_supplier_orders(db)
+    supplier_order = next((order for order in orders if order.id == supplier_order_id), None)
+    if supplier_order is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    return supplier_order
+
+
+@router.post("/orders/{order_id}/supplier-orders/prepare", response_model=SupplierOrderRead)
+def prepare_order_for_supplier(
+    order_id: int,
+    payload: SupplierOrderPrepare,
+    db: Session = Depends(get_db),
+) -> SupplierOrder:
+    try:
+        return prepare_supplier_order(db, order_id, **payload.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/supplier-orders/{supplier_order_id}/approve", response_model=SupplierOrderRead)
+def approve_order_for_supplier(supplier_order_id: int, db: Session = Depends(get_db)) -> SupplierOrder:
+    try:
+        return approve_supplier_order(db, supplier_order_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/supplier-orders/next", response_model=SupplierOrderClaimRead | None)
+def claim_supplier_order(db: Session = Depends(get_db)) -> SupplierOrder | None:
+    return claim_next_supplier_order(db)
+
+
+@router.post(
+    "/supplier-orders/{supplier_order_id}/checkout-credential",
+    response_model=SupplierCheckoutCredentialRead,
+)
+def read_supplier_checkout_credential(
+    supplier_order_id: int,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> SupplierCheckoutCredentialRead:
+    _require_local_checkout_request(request)
+    supplier_order = db.get(SupplierOrder, supplier_order_id)
+    if supplier_order is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    token = request.headers.get("X-AutoZS-Checkout-Token", "")
+    if (
+        supplier_order.status != "placing"
+        or not supplier_order.checkout_token
+        or not hmac.compare_digest(token, supplier_order.checkout_token)
+    ):
+        raise HTTPException(status_code=403, detail="The checkout credential lease is not valid.")
+    card = db.get(GiftCard, supplier_order.gift_card_id) if supplier_order.gift_card_id else None
+    if card is None or card.status != "active" or not card.secret_ref:
+        raise HTTPException(status_code=422, detail="An active secured gift card is required.")
+    if float(card.current_balance or 0) + 0.001 < float(supplier_order.approved_total or 0):
+        raise HTTPException(status_code=422, detail="Gift-card balance is below the approved supplier-order total.")
+    try:
+        card_number, pin = read_generic_credential(card.secret_ref)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return SupplierCheckoutCredentialRead(
+        supplier_order_id=supplier_order.id,
+        card_number=card_number,
+        pin=pin,
+        approved_total=float(supplier_order.approved_total or 0),
+        current_balance=float(card.current_balance or 0),
+    )
+
+
+@router.patch("/supplier-orders/{supplier_order_id}", response_model=SupplierOrderRead)
+def patch_supplier_order(
+    supplier_order_id: int,
+    payload: SupplierOrderUpdate,
+    db: Session = Depends(get_db),
+) -> SupplierOrder:
+    supplier_order = db.get(SupplierOrder, supplier_order_id)
+    if supplier_order is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    try:
+        return update_supplier_order(db, supplier_order, payload.model_dump(exclude_unset=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/orders/{order_id}/customer-updates", response_model=OrderUpdateDraftRunRead)
@@ -1816,6 +2473,101 @@ def draft_order_customer_update(order_id: int, db: Session = Depends(get_db)) ->
 @router.get("/customer-updates", response_model=list[CustomerUpdateRead])
 def read_customer_updates(status: str | None = Query(None, pattern="^(draft|sent|skipped)$"), db: Session = Depends(get_db)) -> list[CustomerUpdate]:
     return list_customer_updates(db, status=status)
+
+
+@router.get("/customer-service/conversations", response_model=list[CustomerConversationRead])
+def read_customer_conversations(db: Session = Depends(get_db)) -> list[CustomerConversation]:
+    return list_conversations(db)
+
+
+@router.get("/customer-service/templates", response_model=list[CustomerTemplateRead])
+def read_customer_templates() -> list[dict]:
+    return list_customer_templates()
+
+
+@router.post("/customer-service/automation/post-sale")
+def queue_post_sale_customer_messages(db: Session = Depends(get_db)) -> dict[str, int]:
+    queued = queue_missing_order_thank_yous(db)
+    return {"queued": len(queued)}
+
+
+@router.post("/customer-service/templates/{template_key}/render", response_model=CustomerTemplateRenderRead)
+def preview_customer_template(
+    template_key: str,
+    payload: CustomerTemplateRenderRequest,
+) -> dict:
+    try:
+        return render_customer_template(template_key, payload.variables)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/customer-service/conversations/import", response_model=CustomerConversationRead)
+def import_customer_conversation(
+    payload: CustomerConversationImport,
+    db: Session = Depends(get_db),
+) -> CustomerConversation:
+    return import_conversation(
+        db,
+        account_id=payload.account_id,
+        ebay_thread_id=payload.ebay_thread_id,
+        ebay_order_id=payload.ebay_order_id,
+        buyer_username=payload.buyer_username,
+        subject=payload.subject,
+        messages=[message.model_dump() for message in payload.messages],
+    )
+
+
+@router.post("/customer-service/conversations/{conversation_id}/messages", response_model=CustomerMessageRead)
+def create_customer_message(
+    conversation_id: int,
+    payload: CustomerMessageCreate,
+    db: Session = Depends(get_db),
+) -> CustomerMessage:
+    try:
+        return queue_message(db, conversation_id, **payload.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/customer-service/conversations/{conversation_id}/template-messages",
+    response_model=CustomerMessageRead,
+)
+def create_customer_template_message(
+    conversation_id: int,
+    template_key: str,
+    payload: CustomerTemplateMessageCreate,
+    db: Session = Depends(get_db),
+) -> CustomerMessage:
+    try:
+        return queue_template_message(
+            db,
+            conversation_id,
+            template_key=template_key,
+            **payload.model_dump(),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/customer-service/messages/next", response_model=CustomerMessageRead | None)
+def claim_customer_message(db: Session = Depends(get_db)) -> CustomerMessage | None:
+    return claim_next_outbound_message(db)
+
+
+@router.patch("/customer-service/messages/{message_id}", response_model=CustomerMessageRead)
+def patch_customer_message(
+    message_id: int,
+    payload: CustomerMessageUpdate,
+    db: Session = Depends(get_db),
+) -> CustomerMessage:
+    message = db.get(CustomerMessage, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Customer message not found")
+    return update_message(db, message, payload.model_dump(exclude_unset=True))
 
 
 @router.patch("/customer-updates/{update_id}", response_model=CustomerUpdateRead)
@@ -1852,6 +2604,34 @@ def update_fulfillment_task(
     return task
 
 
+@router.get("/finance/overview", response_model=FinanceOverviewRead)
+def read_finance_overview(db: Session = Depends(get_db)) -> FinanceOverviewRead:
+    return FinanceOverviewRead(**finance_overview(db))
+
+
+@router.post("/finance/accounts", response_model=FinancialAccountRead)
+def write_financial_account(
+    payload: FinancialAccountUpsert,
+    db: Session = Depends(get_db),
+) -> FinancialAccount:
+    return upsert_financial_account(db, payload.model_dump())
+
+
+@router.post("/finance/subscriptions", response_model=SubscriptionExpenseRead)
+def add_subscription_expense(
+    payload: SubscriptionExpenseCreate,
+    db: Session = Depends(get_db),
+) -> SubscriptionExpense:
+    if payload.payment_account_id is not None and db.get(FinancialAccount, payload.payment_account_id) is None:
+        raise HTTPException(status_code=422, detail="Payment account not found")
+    return create_subscription(db, payload.model_dump())
+
+
+@router.post("/finance/entries/import")
+def import_financial_entries(entries: list[FinanceEntryImport], db: Session = Depends(get_db)) -> dict[str, int]:
+    return {"imported": import_finance_entries(db, [entry.model_dump() for entry in entries])}
+
+
 def _stats_cutoff(selected_range: str) -> datetime | None:
     if selected_range == "all":
         return None
@@ -1878,11 +2658,18 @@ def _stats_profit(
     source_price: float | None,
     source_shipping: float,
     settings: dict[str, float | bool | str],
+    minimum_order_quantity: int = 1,
 ) -> float | None:
     if draft_price is None or source_price is None:
         return None
     fee_rate = product.ebay_fee_rate + product.promoted_rate + product.return_risk_rate
-    return round(draft_price - effective_supplier_cost(source_price, settings) - _shipping_cost(source_shipping) - (draft_price * fee_rate), 2)
+    return round(
+        draft_price
+        - effective_supplier_cost(source_price * max(1, minimum_order_quantity), settings)
+        - _shipping_cost(source_shipping)
+        - (draft_price * fee_rate),
+        2,
+    )
 
 
 def _stats_fees(product: Product, draft_price: float | None) -> float | None:

@@ -63,6 +63,8 @@ def enqueue_listing_jobs(
         product = db.get(Product, product_id)
         if product is None or product.status == ProductStatus.deleted.value:
             continue
+        if _supplier_delivery_unavailable(product):
+            continue
         product_listing_schedule_at = (
             requested_listing_schedule_at
             or _naive_utc(product.listing_schedule_at)
@@ -111,6 +113,21 @@ def read_listing_job(db: Session, job_id: int) -> ListingJob | None:
 
 
 def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
+    product = db.get(Product, job.product_id)
+    if product is None:
+        job.status = ListingJobStatus.failed.value
+        job.completed_at = _now_utc_naive()
+        job.message = "Product was not found or no longer has an eBay package"
+        db.commit()
+        db.refresh(job)
+        return job
+    if _supplier_delivery_unavailable(product):
+        job.status = ListingJobStatus.needs_review.value
+        job.completed_at = _now_utc_naive()
+        job.message = "Supplier delivery is unavailable; AutoZS blocked this listing from being submitted to eBay."
+        db.commit()
+        db.refresh(job)
+        return job
     try:
         assert_ebay_browser_account_can_list(db, job.ebay_account_key)
     except ValueError as exc:
@@ -365,6 +382,17 @@ def _now_utc_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _supplier_delivery_unavailable(product: Product) -> bool:
+    supplier = product.supplier_products[0] if product.supplier_products else None
+    if supplier is None:
+        return False
+    return supplier.in_stock is False or (
+        supplier.last_price is not None
+        and supplier.last_shipping is not None
+        and float(supplier.last_shipping) < 0
+    )
+
+
 def _conflicting_draft_job(db: Session, job: ListingJob, ebay_draft_id: str | None) -> ListingJob | None:
     clean_draft_id = str(ebay_draft_id or "").strip()
     if not clean_draft_id:
@@ -386,7 +414,7 @@ def _upsert_listing_from_completed_job(db: Session, job: ListingJob, listing_id:
     start = _naive_utc(job.listing_schedule_at) or now
     listing = db.scalar(
         select(EbayListing).where(
-            EbayListing.account_id == job.ebay_account_key,
+            EbayListing.product_id == job.product_id,
             EbayListing.listing_id == clean_listing_id,
         )
     )
@@ -397,6 +425,7 @@ def _upsert_listing_from_completed_job(db: Session, job: ListingJob, listing_id:
         listing = EbayListing(product_id=job.product_id, listing_id=clean_listing_id, account_id=job.ebay_account_key)
         db.add(listing)
     listing.product_id = job.product_id
+    listing.account_id = job.ebay_account_key
     listing.environment = "manual"
     listing.price = package["price"] if package else listing.price
     listing.quantity = max(1, int(listing.quantity or 1))

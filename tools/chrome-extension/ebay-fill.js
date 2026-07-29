@@ -1,5 +1,5 @@
 (async () => {
-  const ASSISTANT_BUILD = "2026-07-18-stable-schedule-calendar";
+  const ASSISTANT_BUILD = "2026-07-28-prelist-condition-shadow-dom";
   const existingAssistant = document.getElementById("autozs-ebay-fill-assistant");
   const existingBuild = existingAssistant?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayFillAssistant && existingBuild === ASSISTANT_BUILD) return;
@@ -921,29 +921,34 @@ async function runPriceRevisionWorkflow(pkg) {
   }
   await waitForEditorReady();
   const targetPrice = Number(readAutoWorkflowState()?.targetPrice || pkg.price);
+  const minimumOrderQuantity = Math.max(1, Number(pkg.minimum_order_quantity || 1));
+  const titleFilled = minimumOrderQuantity <= 1
+    || await fillEbayFieldByHints(["title", "listing title"], pkg.title);
   const filled = Number.isFinite(targetPrice)
     && await fillEbayFieldByHints(["price", "buy it now", "fixed price"], targetPrice.toFixed(2));
   await finishListingEditorView();
   const revisionJobId = readAutoWorkflowState()?.revisionJobId;
   const workflow = readAutoWorkflowState() || {};
-  if (!filled) {
+  if (!filled || !titleFilled) {
     if (revisionJobId) {
       await updateEbayRevisionJob(revisionJobId, {
         status: "failed",
-        message: `Could not find the eBay price field for $${targetPrice.toFixed(2)}.`,
+        message: !titleFilled
+          ? `Could not update the required ${minimumOrderQuantity}-unit pack title on eBay.`
+          : `Could not find the eBay price field for $${targetPrice.toFixed(2)}.`,
       });
     }
     writeAutoWorkflowState({ phase: "failed", status: "failed" });
     return {
-      lines: [`Review price $${targetPrice.toFixed(2)}`],
-      message: "Could not update the eBay price field.",
+      lines: [!titleFilled ? `Review title ${pkg.title}` : `Review price $${targetPrice.toFixed(2)}`],
+      message: !titleFilled ? "Could not update the eBay pack title." : "Could not update the eBay price field.",
       terminal: true,
     };
   }
   if (revisionJobId) {
     await updateEbayRevisionJob(revisionJobId, {
       status: "running",
-      message: `Filled the eBay price field with $${targetPrice.toFixed(2)}.`,
+      message: `Filled the eBay price field with $${targetPrice.toFixed(2)}${minimumOrderQuantity > 1 ? ` and the (${minimumOrderQuantity}X) pack title` : ""}.`,
     });
   }
   if (workflow.autoSubmit === true) {
@@ -988,7 +993,7 @@ async function runPriceRevisionWorkflow(pkg) {
     status: "running",
   });
   return {
-    lines: [`OK price $${targetPrice.toFixed(2)}`],
+      lines: [minimumOrderQuantity > 1 ? `OK title ${pkg.title}` : "", `OK price $${targetPrice.toFixed(2)}`].filter(Boolean),
     message: `Price updated to $${targetPrice.toFixed(2)} in the editor. Review, then submit the revision on eBay.`,
     terminal: true,
   };
@@ -1058,11 +1063,11 @@ async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
     writeAutoWorkflowState({ phase: "prelist", status: "running" });
     const prelistLines = [];
     let prelistResult = null;
-    for (let step = 0; step < 6 && isEbayPrelistPage(); step += 1) {
+    for (let step = 0; step < 12 && isEbayPrelistPage(); step += 1) {
       prelistResult = await prepareEbayPrelist(pkg);
       prelistLines.push(...(prelistResult.lines || []));
       if (!prelistResult.ok || isEbayListingEditorPage()) break;
-      await delay(650);
+      await delay(900);
     }
     return {
       lines: prelistLines,
@@ -1385,9 +1390,8 @@ function findFinalScheduleButton() {
 
 async function submitScheduledListing(pkg, interactionTimeoutMs = 8000) {
   if (!pkg.listing_schedule_at) return { ok: false, message: "A scheduled start is required for automatic submission." };
-  const schedule = parseListingSchedule(pkg.listing_schedule_at);
-  if (!schedule || !scheduleDateFieldMatches(findScheduleDayField(), schedule)) {
-    return { ok: false, message: "The eBay schedule date could not be verified, so AutoZS did not submit." };
+  if (!(await ensureListingScheduleStable(pkg))) {
+    return { ok: false, message: "The eBay schedule date and time could not be verified after eBay finished rendering, so AutoZS did not submit." };
   }
   const issue = detectEbaySubmissionIssue();
   if (issue) return { ok: false, message: issue };
@@ -1537,7 +1541,7 @@ async function chooseVisibleCondition(condition) {
     used: "3000",
     forpartsornotworking: "7000",
   };
-  const directRadios = [...document.querySelectorAll('input[type="radio"]')];
+  const directRadios = conditionQueryAll('input[type="radio"]');
   const directRadio = directRadios.find((radio) => normalizeText(conditionRadioLabel(radio)) === normalized)
     || directRadios.find((radio) => String(radio.value || "") === conditionCodes[normalized]);
   if (directRadio) {
@@ -1600,7 +1604,15 @@ async function chooseVisibleCondition(condition) {
       match = popupControls.find((control) => conditionControlMatches(control, normalized));
     }
   }
-  if (!match) return conditionSelectionMatches(condition);
+  if (!match) {
+    const textChoice = conditionTextChoice(normalized);
+    if (textChoice) {
+      await clickConditionChoice(textChoice);
+      await delay(350);
+      return conditionSelectionMatches(condition) || conditionContinueButtonEnabled();
+    }
+    return conditionSelectionMatches(condition);
+  }
   if (match.element.matches?.('input[type="radio"]')) {
     if (match.element.checked) return conditionSelectionMatches(condition);
     const clicked = await clickConditionChoice(match.element);
@@ -1617,18 +1629,83 @@ async function chooseVisibleCondition(condition) {
 
 function conditionRadioLabel(radio) {
   if (!radio) return "";
-  const direct = radio.id ? document.querySelector(`label[for="${cssEscape(radio.id)}"]`) : null;
+  const root = radio.getRootNode?.() || document;
+  const direct = radio.id ? root.querySelector?.(`label[for="${cssEscape(radio.id)}"]`) : null;
   return direct?.innerText || direct?.textContent || labelText(radio) || radio.getAttribute?.("aria-label") || "";
 }
 
 function conditionControls() {
-  return [...document.querySelectorAll('input[type="radio"], button, [role="button"], [role="radio"], [role="combobox"], label')];
+  return conditionQueryAll('input[type="radio"], button, [role="button"], [role="radio"], [role="combobox"], label');
 }
 
 function conditionPopupControls() {
-  const popups = [...document.querySelectorAll('[role="dialog"], [role="listbox"], [role="menu"], [data-testid*="condition" i]')].filter(isVisible);
+  const popups = conditionQueryAll('[role="dialog"], [role="listbox"], [role="menu"], [data-testid*="condition" i]').filter(isVisible);
   const scoped = popups.flatMap((popup) => [...popup.querySelectorAll?.('input[type="radio"], button, [role="button"], [role="radio"], [role="option"], [role="menuitem"], label, li') || []]);
-  return [...scoped, ...document.querySelectorAll('input[type="radio"], button, [role="button"], [role="radio"], [role="option"], [role="menuitem"], label, li')];
+  return [...new Set([
+    ...scoped,
+    ...conditionQueryAll('input[type="radio"], button, [role="button"], [role="radio"], [role="option"], [role="menuitem"], label, li'),
+  ])];
+}
+
+function conditionQueryRoots() {
+  const roots = [document];
+  const seen = new Set(roots);
+  for (let index = 0; index < roots.length && index < 150; index += 1) {
+    const root = roots[index];
+    let elements = [];
+    try {
+      elements = [...(root.querySelectorAll?.("*") || [])];
+    } catch {}
+    for (const element of elements) {
+      const shadowRoot = element?.shadowRoot;
+      if (!shadowRoot || seen.has(shadowRoot) || element.id === "autozs-ebay-fill-assistant") continue;
+      seen.add(shadowRoot);
+      roots.push(shadowRoot);
+    }
+  }
+  return roots;
+}
+
+function conditionQueryAll(selector) {
+  const found = [];
+  const seen = new Set();
+  for (const root of conditionQueryRoots()) {
+    let elements = [];
+    try {
+      elements = [...(root.querySelectorAll?.(selector) || [])];
+    } catch {}
+    for (const element of elements) {
+      if (seen.has(element)) continue;
+      seen.add(element);
+      found.push(element);
+    }
+  }
+  return found;
+}
+
+function conditionTextChoice(normalizedCondition) {
+  if (!normalizedCondition) return null;
+  const textElements = conditionQueryAll("label, [role='radio'], [role='option'], button, li, span, p, div")
+    .filter(isVisible)
+    .filter((element) => normalizeText(element.innerText || element.textContent || "") === normalizedCondition);
+  for (const textElement of textElements) {
+    let candidate = textElement;
+    for (let depth = 0; candidate && depth < 6; depth += 1, candidate = candidate.parentElement) {
+      const radio = candidate.matches?.('input[type="radio"], [role="radio"]')
+        ? candidate
+        : candidate.querySelector?.('input[type="radio"], [role="radio"]');
+      if (radio) return radio;
+      if (
+        candidate.matches?.("label, button, [role='button'], [role='option'], li")
+        || typeof candidate.onclick === "function"
+        || candidate.tabIndex >= 0
+      ) {
+        return candidate;
+      }
+    }
+    return textElement;
+  }
+  return null;
 }
 
 function conditionControlMatches(control, normalizedCondition) {
@@ -1650,7 +1727,8 @@ async function clickConditionChoice(element) {
 function conditionAssociatedLabel(element) {
   if (!element) return null;
   if (element.id) {
-    const direct = document.querySelector(`label[for="${cssEscape(element.id)}"]`);
+    const root = element.getRootNode?.() || document;
+    const direct = root.querySelector?.(`label[for="${cssEscape(element.id)}"]`);
     if (direct) return direct;
   }
   return element.closest?.("label") || null;
@@ -1659,7 +1737,10 @@ function conditionAssociatedLabel(element) {
 function conditionSelectionMatches(condition) {
   const normalized = normalizeText(condition);
   if (!normalized) return false;
-  const selected = [...document.querySelectorAll('input[type="radio"]:checked, [aria-checked="true"], [aria-selected="true"]')]
+  const selected = [
+    ...conditionQueryAll('input[type="radio"]:checked, [aria-checked="true"], [aria-selected="true"]'),
+    ...conditionQueryAll('[data-state="checked"]'),
+  ]
     .some((element) => normalizeText(`${element.value || ""} ${element.getAttribute?.("aria-label") || ""} ${labelText(element)} ${nearbyText(element)} ${element.innerText || ""} ${element.textContent || ""}`).includes(normalized));
   if (selected) return true;
   return conditionControls().filter(isVisible).some((element) => {
@@ -1669,13 +1750,13 @@ function conditionSelectionMatches(condition) {
 }
 
 function conditionContinueButtonEnabled() {
-  return [...document.querySelectorAll("button, [role='button']")]
+  return conditionQueryAll("button, [role='button']")
     .filter(isVisible)
     .some((button) => /^(continue|continue to listing|next)$/i.test((button.innerText || button.textContent || "").trim()) && !button.disabled && button.getAttribute("aria-disabled") !== "true");
 }
 
 async function clickPrelistContinueButton() {
-  const button = [...document.querySelectorAll("button, a")]
+  const button = conditionQueryAll("button, a")
     .filter(isVisible)
     .find((element) => /^(continue|continue to listing|next)$/i.test((element.innerText || element.textContent || "").trim()));
   if (!button || typeof button.click !== "function") return false;
@@ -1824,15 +1905,25 @@ async function fillEbayFieldByHints(hints, value) {
 
 async function fillEbayItemSpecific(key, value) {
   const normalizedKey = normalizeText(key);
-  const direct = candidateFields()
-    .filter((field) => field.haystack.includes(normalizedKey))
-    .sort((a, b) => itemSpecificFieldScore(a, normalizedKey) - itemSpecificFieldScore(b, normalizedKey))[0];
-  if (direct) {
+  const fillDirect = async () => {
+    const direct = candidateFields()
+      .filter((field) => field.haystack.includes(normalizedKey))
+      .sort((a, b) => itemSpecificFieldScore(a, normalizedKey) - itemSpecificFieldScore(b, normalizedKey))[0];
+    if (!direct) return false;
     await setEbayTextFieldValue(direct.element, value);
     await commitEbayItemSpecificField(direct.element, value);
-    if (itemSpecificMatches(key, value)) return true;
-  }
+    return itemSpecificMatches(key, value);
+  };
+  if (await fillDirect()) return true;
   if (await fillEbayItemSpecificDropdown(key, value)) return true;
+  // eBay can replace the chosen Brand/Type control after React processes the
+  // first selection. Re-query once and commit to the replacement control.
+  await delay(400);
+  if (await fillDirect()) return true;
+  if (await fillEbayItemSpecificDropdown(key, value)) return true;
+  if (await waitForCondition(() => itemSpecificMatches(key, value), 1600, 160)) {
+    return true;
+  }
   return suggestedItemSpecificMatches(key, value);
 }
 
@@ -2596,12 +2687,26 @@ async function ensureListingScheduleStable(pkg) {
   const schedule = parseListingSchedule(pkg.listing_schedule_at);
   if (!schedule) return false;
   const matches = () => scheduleDateFieldMatches(findScheduleDayField(), schedule) && scheduleTimeMatches(schedule);
-  if (!matches() && !(await applyListingSchedule(pkg))) return false;
-  // eBay can briefly show the requested date, then React restores today's
-  // date. Require it to survive a second render before autosubmit is allowed.
-  if (!(await waitForCondition(matches, 2500, 150))) return false;
-  await delay(750);
-  return matches();
+  // The schedule panel can re-render more than once as other listing fields
+  // settle. Reapply against the newest controls, then require the value to
+  // remain correct across multiple observations.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!matches() && !(await applyListingSchedule(pkg))) {
+      await delay(500);
+      continue;
+    }
+    if (!(await waitForCondition(matches, 3000, 150))) continue;
+    let stable = true;
+    for (let observation = 0; observation < 3; observation += 1) {
+      await delay(500);
+      if (!matches()) {
+        stable = false;
+        break;
+      }
+    }
+    if (stable) return true;
+  }
+  return false;
 }
 
 async function setScheduleDate(schedule) {
@@ -2653,7 +2758,7 @@ async function chooseScheduleCalendarDate(dateField, schedule) {
 function findScheduleCalendarToggle(dateField) {
   const byControls = dateField?.parentElement?.querySelector?.('button[aria-label*="calendar" i], button[title*="calendar" i]');
   if (byControls && isVisible(byControls)) return byControls;
-  return [...document.querySelectorAll("button, [role='button']")]
+  return conditionQueryAll("button, [role='button']")
     .filter(isVisible)
     .find((button) => /toggle calendar|open calendar|calendar/i.test(`${button.getAttribute("aria-label") || ""} ${button.getAttribute("title") || ""} ${nearbyText(button)}`));
 }
@@ -2670,7 +2775,7 @@ function calendarDateDescription(schedule) {
 
 function findScheduleCalendarDay(schedule) {
   const target = calendarDateDescription(schedule);
-  const buttons = [...document.querySelectorAll("button, [role='button'], [role='gridcell']")]
+  const buttons = conditionQueryAll("button, [role='button'], [role='gridcell']")
     .filter(isVisible)
     .filter((element) => element.getAttribute("aria-disabled") !== "true" && !element.disabled);
   const fullDateMatch = buttons.find((element) => {
@@ -2704,14 +2809,14 @@ function findScheduleCalendarDay(schedule) {
 }
 
 function visibleCalendarContainers() {
-  const containers = [...document.querySelectorAll('[role="dialog"], [role="grid"], [role="application"], .calendar, [class*="calendar" i], [data-testid*="calendar" i], div')]
+  const containers = conditionQueryAll('[role="dialog"], [role="grid"], [role="application"], .calendar, [class*="calendar" i], [data-testid*="calendar" i], div')
     .filter(isVisible)
     .filter((element) => /january|february|march|april|may|june|july|august|september|october|november|december/i.test(element.innerText || element.textContent || ""));
   return containers.length ? containers : [document.body].filter(Boolean);
 }
 
 function findScheduleCalendarNextMonth() {
-  return [...document.querySelectorAll("button, [role='button']")]
+  return conditionQueryAll("button, [role='button']")
     .filter(isVisible)
     .find((element) => {
       const text = `${element.getAttribute("aria-label") || ""} ${element.getAttribute("title") || ""} ${element.innerText || element.textContent || ""}`;
@@ -2720,7 +2825,7 @@ function findScheduleCalendarNextMonth() {
 }
 
 function findScheduleDayField() {
-  return [...document.querySelectorAll("input, textarea, [role='textbox']")]
+  return conditionQueryAll("input, textarea, [role='textbox']")
     .filter(isVisible)
     .find((element) => {
       const text = normalizeText(
@@ -2733,7 +2838,23 @@ function findScheduleDayField() {
 function findScheduleDateElement() {
   const scheduleDayField = findScheduleDayField();
   if (scheduleDayField) return scheduleDayField;
-  const fields = candidateFields().filter(
+  const fields = conditionQueryAll("input, textarea, [role='textbox']")
+    .filter(isVisible)
+    .map((element) => ({
+      element,
+      haystack: normalizeText(
+        [
+          element.id,
+          element.name,
+          element.placeholder,
+          element.getAttribute("aria-label"),
+          element.getAttribute("data-testid"),
+          labelText(element),
+          nearbyText(element),
+        ].filter(Boolean).join(" ")
+      ),
+    }))
+    .filter(
     (field) => /schedule|listingstart|startdate|starttime|date|time|goeslive/.test(field.haystack) || ["date", "time"].includes(field.element.type)
   );
   return (

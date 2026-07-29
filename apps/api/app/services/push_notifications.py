@@ -55,6 +55,7 @@ DEFAULT_PUSH_PREFERENCES: dict[str, bool | str | int] = {
     "revision_running": True,
     "revision_attention": True,
     "revision_completed": False,
+    "order_sold": True,
     "worker_attention": True,
     "delivery_mode": "individual",
 }
@@ -147,6 +148,7 @@ def upsert_push_subscription(
     db.flush()
     if vapid_public_key and not registered_for_current_key:
         _seed_current_job_receipts(db, subscription)
+        _seed_current_order_receipts(db, subscription)
     db.commit()
     db.refresh(subscription)
     return subscription
@@ -258,6 +260,34 @@ def send_test_push(
         return _result(message="No matching enabled push subscription.")
     payload = {"title": title, "body": body, "tag": "autozs-test", "url": "/mobile.html"}
     return _send_to_subscriptions(db, subscriptions, payload, notified_alerts=0)
+
+
+def send_latest_order_sale_test(
+    db: Session,
+    *,
+    subscription_id: int,
+) -> dict[str, Any]:
+    config = get_push_config()
+    subscription = db.get(PushSubscription, subscription_id)
+    subscriptions = [subscription] if (
+        subscription is not None
+        and subscription.enabled
+        and subscription.vapid_public_key
+        and subscription.vapid_public_key == config.get("public_key")
+    ) else []
+    if not config["enabled"]:
+        return _result(attempted=len(subscriptions), message=str(config["reason"]))
+    if not subscriptions:
+        return _result(message="This phone does not have an active push subscription.")
+    orders = _order_sale_candidates(db, limit=1)
+    if not orders:
+        return _result(message="No real order is available for the sold-listing test.")
+    return _send_to_subscriptions(
+        db,
+        subscriptions,
+        _order_sale_payload(orders[0]),
+        notified_alerts=0,
+    )
 
 
 def dispatch_alert_notifications(db: Session, limit: int = 20) -> dict[str, Any]:
@@ -374,14 +404,63 @@ def dispatch_weekly_summaries(db: Session, now: datetime | None = None) -> dict[
     return _result(attempted=attempted, sent=sent, failed=failed, message=f"Sent {sent} weekly summary notification(s).")
 
 
+def dispatch_order_sale_notifications(db: Session, limit: int = 100) -> dict[str, Any]:
+    config = get_push_config()
+    subscriptions = [
+        subscription for subscription in _enabled_subscriptions(db)
+        if subscription.vapid_public_key and subscription.vapid_public_key == config.get("public_key")
+    ]
+    if not config["enabled"]:
+        return _result(attempted=len(subscriptions), message=str(config["reason"]))
+    if not subscriptions:
+        return _result(message="No enabled push subscriptions.")
+
+    orders = _order_sale_candidates(db, limit=limit)
+    attempted = sent = failed = 0
+    for subscription in subscriptions:
+        if not read_push_preferences(subscription).get("order_sold", True):
+            continue
+        for order in orders:
+            event_key = _order_sale_event_key(subscription.id, order.id)
+            if _has_receipt(db, event_key):
+                continue
+            attempted += 1
+            if _send_one(db, subscription, _order_sale_payload(order)):
+                _record_receipt(
+                    db,
+                    subscription,
+                    event_key,
+                    "order-sold",
+                    "order",
+                    order.id,
+                    order.status,
+                )
+                sent += 1
+            else:
+                failed += 1
+    db.commit()
+    return _result(attempted=attempted, sent=sent, failed=failed, message=f"Sent {sent} sale notification(s).")
+
+
 def dispatch_push_cycle(db: Session) -> dict[str, Any]:
     alert_result = dispatch_alert_notifications(db)
     job_result = dispatch_job_transition_notifications(db)
+    order_result = dispatch_order_sale_notifications(db)
     weekly_result = dispatch_weekly_summaries(db)
     return _result(
-        attempted=int(alert_result["attempted"]) + int(job_result["attempted"]) + int(weekly_result["attempted"]),
-        sent=int(alert_result["sent"]) + int(job_result["sent"]) + int(weekly_result["sent"]),
-        failed=int(alert_result["failed"]) + int(job_result["failed"]) + int(weekly_result["failed"]),
+        attempted=(
+            int(alert_result["attempted"])
+            + int(job_result["attempted"])
+            + int(order_result["attempted"])
+            + int(weekly_result["attempted"])
+        ),
+        sent=int(alert_result["sent"]) + int(job_result["sent"]) + int(order_result["sent"]) + int(weekly_result["sent"]),
+        failed=(
+            int(alert_result["failed"])
+            + int(job_result["failed"])
+            + int(order_result["failed"])
+            + int(weekly_result["failed"])
+        ),
         notified_alerts=int(alert_result["notified_alerts"]),
         message="Push cycle complete.",
     )
@@ -457,6 +536,52 @@ def _seed_current_job_receipts(db: Session, subscription: PushSubscription) -> N
     """Start a newly registered phone at the current queue state without flooding it."""
     for event in _job_event_candidates(db, limit=500):
         _record_job_event_receipt(db, subscription, event)
+
+
+def _seed_current_order_receipts(db: Session, subscription: PushSubscription) -> None:
+    """Avoid replaying historical sales when a phone is first registered or repaired."""
+    for order in _order_sale_candidates(db, limit=500):
+        _record_receipt(
+            db,
+            subscription,
+            _order_sale_event_key(subscription.id, order.id),
+            "order-sold",
+            "order",
+            order.id,
+            order.status,
+        )
+
+
+def _order_sale_candidates(db: Session, limit: int) -> list[Order]:
+    return list(db.scalars(
+        select(Order)
+        .where(
+            Order.account_id != "sandbox",
+            Order.status != "deleted",
+        )
+        .order_by(Order.created_at.desc(), Order.id.desc())
+        .limit(limit)
+    ).unique().all())
+
+
+def _order_sale_event_key(subscription_id: int, order_id: int) -> str:
+    return f"subscription:{subscription_id}:order:{order_id}:sold"
+
+
+def _order_sale_payload(order: Order) -> dict[str, Any]:
+    item_count = sum(max(1, int(item.quantity or 1)) for item in order.items)
+    item_revenue = sum(float(item.sale_price or 0) * max(1, int(item.quantity or 1)) for item in order.items)
+    first_title = next((item.title.strip() for item in order.items if item.title and item.title.strip()), "Your listing")
+    if item_count == 1:
+        body = f"You sold {first_title} for ${item_revenue:,.2f}! Open AutoZS to fulfill it."
+    else:
+        body = f"You sold {item_count} items for ${item_revenue:,.2f}! Open AutoZS to fulfill the order."
+    return {
+        "title": "💸💸 Sold Listing!!! 💸💸",
+        "body": body[:240],
+        "tag": f"autozs-order-sold-{order.id}",
+        "url": "/mobile.html",
+    }
 
 
 def _job_payload(kind: str, group: str, job: Any, title: str) -> dict[str, Any]:

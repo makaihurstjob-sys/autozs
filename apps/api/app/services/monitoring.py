@@ -78,7 +78,14 @@ def build_source_refresh_queue(db: Session, stale_after_days: int | None = None)
         estimated_profit = None
         if draft and draft.calculated_price is not None and source_price is not None:
             fee_rate = product.ebay_fee_rate + product.promoted_rate + product.return_risk_rate
-            estimated_profit = round(draft.calculated_price - effective_supplier_cost(source_price, settings) - _shipping_cost(source_shipping) - (draft.calculated_price * fee_rate), 2)
+            minimum_order_quantity = max(1, int(supplier.minimum_order_quantity or 1)) if supplier else 1
+            estimated_profit = round(
+                draft.calculated_price
+                - effective_supplier_cost(source_price * minimum_order_quantity, settings)
+                - _shipping_cost(source_shipping)
+                - (draft.calculated_price * fee_rate),
+                2,
+            )
 
         if supplier is None:
             priority = "high"

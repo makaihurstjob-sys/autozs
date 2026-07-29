@@ -36,6 +36,17 @@ def test_gift_card_discount_reduces_cost_and_increases_profit() -> None:
     assert calculate_profit(120.0, 99.0, 0.0, settings)["profit"] == 14.94
 
 
+def test_minimum_order_quantity_multiplies_supplier_cost() -> None:
+    settings = {
+        "default_gift_card_discount_enabled": False,
+        "default_ebay_fee_rate": 0.10,
+        "default_promoted_rate": 0.0,
+        "default_return_risk_rate": 0.0,
+    }
+
+    assert calculate_profit(40.0, 14.19, 0.0, settings, minimum_order_quantity=2)["profit"] == 7.62
+
+
 def test_minimum_profit_guard_clamps_competitor_strategy() -> None:
     settings = {
         "default_margin_percent": 0.20,

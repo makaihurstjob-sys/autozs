@@ -13,6 +13,9 @@ from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.database import Base, SessionLocal, engine
 from app.services.ebay_report_files import watch_ebay_report_inbox
+from app.services.ebay_traffic import sync_ebay_traffic
+from app.services.ebay_accounts import list_ebay_accounts
+from app.services.ebay_sync import queue_ebay_traffic_sync
 from app.services.listing_jobs import flag_stale_listing_jobs
 from app.services.push_notifications import dispatch_push_cycle
 from app.services.settings import read_pricing_settings
@@ -32,7 +35,10 @@ def _ensure_lightweight_columns() -> None:
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
     migrations = {
-        "orders": {"account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL"},
+        "orders": {
+            "account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL",
+            "recipient_name": "VARCHAR(256) DEFAULT '' NOT NULL",
+        },
         "ebay_listings": {
             "account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL",
             "started_at": "DATETIME",
@@ -63,8 +69,20 @@ def _ensure_lightweight_columns() -> None:
             "approved_at": "DATETIME",
             "lease_expires_at": "DATETIME",
         },
-        "products": {"listing_schedule_at": "DATETIME"},
-        "supplier_products": {"subscription_discount_percent": "FLOAT"},
+        "products": {
+            "listing_schedule_at": "DATETIME",
+            "capture_lease_owner": "VARCHAR(256)",
+            "capture_lease_expires_at": "DATETIME",
+        },
+        "supplier_products": {
+            "subscription_discount_percent": "FLOAT",
+            "minimum_order_quantity": "INTEGER DEFAULT 1 NOT NULL",
+            "price_unavailable": "BOOLEAN DEFAULT 0 NOT NULL",
+        },
+        "supplier_orders": {
+            "approved_total": "FLOAT DEFAULT 0 NOT NULL",
+            "checkout_token": "VARCHAR(128) DEFAULT '' NOT NULL",
+        },
         "ebay_sync_runs": {
             "report_type": "VARCHAR(64) DEFAULT 'active_listings' NOT NULL",
             "report_reference": "VARCHAR(128)",
@@ -134,6 +152,25 @@ async def _source_refresh_auto_queue_loop() -> None:
         await asyncio.sleep(max(60, int(poll_minutes * 60)))
 
 
+def _sync_ebay_traffic() -> None:
+    with SessionLocal() as db:
+        try:
+            sync_ebay_traffic(db, selected_range="30", account="all")
+        except ValueError:
+            for account in list_ebay_accounts(db):
+                account_key = str(account.get("key") or account.get("account_id") or "").strip()
+                if account_key:
+                    queue_ebay_traffic_sync(db, account_key=account_key)
+
+
+async def _ebay_traffic_sync_loop() -> None:
+    await asyncio.sleep(60)
+    while True:
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(_sync_ebay_traffic)
+        await asyncio.sleep(6 * 60 * 60)
+
+
 def _dispatch_push_alerts() -> None:
     with SessionLocal() as db:
         dispatch_push_cycle(db)
@@ -155,6 +192,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     heartbeat = None
     push_alerts = None
     source_refresh_scheduler = None
+    traffic_scheduler = None
     with contextlib.suppress(Exception):
         await asyncio.to_thread(_write_worker_heartbeat, "AutoZS API started.")
     heartbeat = asyncio.create_task(_worker_heartbeat_loop())
@@ -163,6 +201,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             await asyncio.to_thread(_dispatch_push_alerts)
         push_alerts = asyncio.create_task(_push_alert_loop())
         source_refresh_scheduler = asyncio.create_task(_source_refresh_auto_queue_loop())
+        traffic_scheduler = asyncio.create_task(_ebay_traffic_sync_loop())
     if settings.ebay_report_watch_enabled and ":memory:" not in settings.database_url:
         watcher = asyncio.create_task(watch_ebay_report_inbox())
     try:
@@ -184,6 +223,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             source_refresh_scheduler.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await source_refresh_scheduler
+        if traffic_scheduler is not None:
+            traffic_scheduler.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await traffic_scheduler
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

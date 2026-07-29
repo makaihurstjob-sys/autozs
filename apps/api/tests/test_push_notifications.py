@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
-from app.models.domain import ListingJob, Product, PushSubscription
+from app.models.domain import ListingJob, Order, OrderItem, Product, PushSubscription
 from app.services import push_notifications
 from app.services.push_notifications import _load_or_create_vapid_private_key, _weekly_summary_due
 
@@ -170,3 +170,130 @@ def test_job_notifications_only_send_after_a_new_transition(monkeypatch):
     assert changed["sent"] == 1
     assert duplicate["sent"] == 0
     assert delivered == ["Listing running"]
+
+
+def test_new_real_order_sends_one_hype_notification(monkeypatch):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(push_notifications, "get_push_config", lambda: {"enabled": True, "reason": "", "public_key": "key"})
+    delivered = []
+    monkeypatch.setattr(push_notifications, "_send_payload", lambda subscription, payload: delivered.append(payload))
+
+    with Session(engine) as db:
+        push_notifications.upsert_push_subscription(
+            db,
+            endpoint="https://push.example/sub/sale",
+            p256dh="abc",
+            auth="def",
+            vapid_public_key="key",
+        )
+        order = Order(
+            ebay_order_id="12-34567-89012",
+            account_id="main-store",
+            status="imported",
+            total=20.96,
+        )
+        db.add(order)
+        db.flush()
+        db.add(OrderItem(
+            order_id=order.id,
+            title="First Real Sale Product",
+            quantity=1,
+            sale_price=19.53,
+        ))
+        db.commit()
+        order_id = order.id
+
+        first = push_notifications.dispatch_order_sale_notifications(db)
+        duplicate = push_notifications.dispatch_order_sale_notifications(db)
+
+    assert first["sent"] == 1
+    assert duplicate["sent"] == 0
+    assert delivered == [{
+        "title": "💸💸 Sold Listing!!! 💸💸",
+        "body": "You sold First Real Sale Product for $19.53! Open AutoZS to fulfill it.",
+        "tag": f"autozs-order-sold-{order_id}",
+        "url": "/mobile.html",
+    }]
+
+
+def test_existing_orders_are_seeded_for_a_new_phone(monkeypatch):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(push_notifications, "get_push_config", lambda: {"enabled": True, "reason": "", "public_key": "key"})
+    delivered = []
+    monkeypatch.setattr(push_notifications, "_send_payload", lambda subscription, payload: delivered.append(payload))
+
+    with Session(engine) as db:
+        db.add(Order(
+            ebay_order_id="12-34567-89013",
+            account_id="main-store",
+            status="imported",
+            total=11.53,
+        ))
+        db.commit()
+        push_notifications.upsert_push_subscription(
+            db,
+            endpoint="https://push.example/sub/new-phone",
+            p256dh="abc",
+            auth="def",
+            vapid_public_key="key",
+        )
+
+        result = push_notifications.dispatch_order_sale_notifications(db)
+
+    assert result["sent"] == 0
+    assert delivered == []
+
+
+def test_sale_notification_dev_test_uses_latest_real_order(monkeypatch):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(push_notifications, "get_push_config", lambda: {"enabled": True, "reason": "", "public_key": "key"})
+    delivered = []
+    monkeypatch.setattr(push_notifications, "_send_payload", lambda subscription, payload: delivered.append(payload))
+
+    with Session(engine) as db:
+        subscription = push_notifications.upsert_push_subscription(
+            db,
+            endpoint="https://push.example/sub/dev-sale",
+            p256dh="abc",
+            auth="def",
+            vapid_public_key="key",
+        )
+        order = Order(
+            ebay_order_id="12-34567-89014",
+            account_id="main-store",
+            status="imported",
+            total=6.02,
+        )
+        db.add(order)
+        db.flush()
+        db.add(OrderItem(
+            order_id=order.id,
+            title="Instagram Story Sale",
+            quantity=1,
+            sale_price=5.53,
+        ))
+        db.commit()
+
+        result = push_notifications.send_latest_order_sale_test(
+            db,
+            subscription_id=subscription.id,
+        )
+
+    assert result["sent"] == 1
+    assert delivered[0]["title"] == "💸💸 Sold Listing!!! 💸💸"
+    assert delivered[0]["body"] == "You sold Instagram Story Sale for $5.53! Open AutoZS to fulfill it."

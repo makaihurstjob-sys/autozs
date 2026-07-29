@@ -1,9 +1,17 @@
 import csv
 from io import StringIO
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.domain import EbayListing, EbayRevisionJob, EbayRevisionJobStatus, EbayRevisionTemplate
+from app.models.domain import (
+    EbayListing,
+    EbayRevisionJob,
+    EbayRevisionJobStatus,
+    EbayRevisionTemplate,
+    ListingDraft,
+    SupplierProduct,
+)
 
 
 HEADER_ALIASES = {
@@ -26,7 +34,16 @@ def build_ebay_price_revision_csv(
     rows = list(csv.reader(StringIO(template_csv.lstrip("\ufeff"))))
     header_index, columns = _find_header(rows)
     prefix = rows[:header_index]
-    header = rows[header_index]
+    header = list(rows[header_index])
+    pack_job_ids = {
+        job_id
+        for job_id in dict.fromkeys(job_ids)
+        if _minimum_order_quantity(db, db.get(EbayRevisionJob, job_id)) > 1
+    }
+    title_column = next((index for index, value in enumerate(header) if value.strip().lower() == "title"), None)
+    if pack_job_ids and title_column is None:
+        title_column = len(header)
+        header.append("Title")
     output_rows = [*prefix, header]
     prepared_ids: list[int] = []
 
@@ -44,6 +61,15 @@ def build_ebay_price_revision_csv(
         row[columns["action"]] = "Revise"
         row[columns["item_number"]] = listing_id
         row[columns["start_price"]] = f"{job.target_price:.2f}"
+        if title_column is not None and job.id in pack_job_ids:
+            draft = db.scalar(
+                select(ListingDraft)
+                .where(ListingDraft.product_id == job.product_id, ListingDraft.marketplace == "ebay")
+                .order_by(ListingDraft.created_at.asc(), ListingDraft.id.asc())
+            )
+            if draft is None or not str(draft.title or "").startswith(f"({_minimum_order_quantity(db, job)}X) "):
+                raise ValueError(f"Job {job.id} requires a pack title before it can be revised")
+            row[title_column] = draft.title
         output_rows.append(row)
         prepared_ids.append(job.id)
 
@@ -51,6 +77,17 @@ def build_ebay_price_revision_csv(
     output.write("\ufeff")
     csv.writer(output, lineterminator="\r\n").writerows(output_rows)
     return output.getvalue(), prepared_ids
+
+
+def _minimum_order_quantity(db: Session, job: EbayRevisionJob | None) -> int:
+    if job is None:
+        return 1
+    supplier = db.scalar(
+        select(SupplierProduct)
+        .where(SupplierProduct.product_id == job.product_id)
+        .order_by(SupplierProduct.created_at.asc(), SupplierProduct.id.asc())
+    )
+    return max(1, int(supplier.minimum_order_quantity or 1)) if supplier is not None else 1
 
 
 def save_ebay_revision_template(

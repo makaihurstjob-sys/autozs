@@ -320,6 +320,7 @@
     .calendar-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
     .calendar-dot.scheduled { background: var(--blue); }
     .calendar-dot.listed { background: var(--ok); }
+    .calendar-dot.sold { background: var(--warn); }
     .calendar-dot.renewal { background: var(--accent); }
     .calendar-detail {
       border-top: 1px solid var(--line);
@@ -328,6 +329,16 @@
       gap: 9px;
     }
     .calendar-detail-heading { color: var(--muted); font-size: 12px; font-weight: 850; }
+    .calendar-detail-toolbar { display: flex; align-items: center; gap: 9px; }
+    .calendar-detail-toolbar select {
+      flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px;
+      background: #102019; color: var(--text); padding: 9px 10px; font: inherit; font-weight: 850;
+    }
+    .calendar-detail-count { color: var(--muted); font-size: 12px; font-weight: 900; white-space: nowrap; }
+    .calendar-detail-items {
+      display: grid; gap: 9px; max-height: min(52vh, 620px); overflow-y: auto;
+      overscroll-behavior: contain; padding-right: 2px;
+    }
     .calendar-mini-card {
       display: grid;
       grid-template-columns: 54px minmax(0, 1fr);
@@ -341,6 +352,7 @@
     }
     .calendar-mini-card.scheduled { border-left-color: var(--blue); }
     .calendar-mini-card.listed { border-left-color: var(--ok); }
+    .calendar-mini-card.sold { border-left-color: var(--warn); }
     .calendar-mini-card.renewal { border-left-color: var(--accent); }
     .calendar-mini-card img {
       width: 54px;
@@ -436,6 +448,9 @@
       word-break: break-word;
       margin-top: 9px;
     }
+    .worker-progress { height: 7px; margin-top: 11px; border-radius: 999px; overflow: hidden; background: #20342c; }
+    .worker-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
+    .worker-progress-label { margin-top: 5px; color: var(--muted); font-size: 12px; font-weight: 850; text-align: right; }
     .revision-prices {
       background: #0b1813;
       border: 1px solid var(--line);
@@ -626,6 +641,10 @@
       <div class="stat-card"><label>Drafts</label><strong id="drafts-count">-</strong></div>
       <div class="stat-card"><label>30D Views</label><strong id="views-30d">-</strong></div>
       <div class="stat-card"><label>1W Views</label><strong id="views-7d">-</strong></div>
+      <div class="stat-card"><label>Impressions</label><strong id="traffic-impressions">-</strong></div>
+      <div class="stat-card"><label>CTR</label><strong id="traffic-ctr">-</strong></div>
+      <div class="stat-card"><label>Conversion</label><strong id="traffic-conversion">-</strong></div>
+      <div class="stat-card"><label>Traffic Sales</label><strong id="traffic-transactions">-</strong></div>
     </section>
 
     <section class="mobile-calendar" id="mobile-calendar" aria-label="Listing calendar">
@@ -663,6 +682,7 @@
         <button class="small-btn accent" id="notification-setup" type="button">Set up</button>
         <button class="small-btn" id="notification-repair" type="button">Repair</button>
         <button class="small-btn" id="notification-test" type="button">Send test</button>
+        <button class="small-btn accent" id="notification-test-sale" type="button">💸 DEV: Test Sold Alert</button>
       </div>
       <div id="notification-preferences"></div>
       <button class="small-btn accent" id="notification-save" type="button" style="width:100%;margin-top:8px">Save notification settings</button>
@@ -686,6 +706,7 @@
     let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     let calendarSelectedDate = localDateKey(new Date());
     let calendarEvents = [];
+    let calendarEventFilter = "all";
 
     document.getElementById("dashboard-link").href = dashboardUrl;
     document.getElementById("notify-button").addEventListener("click", openNotificationSettings);
@@ -696,6 +717,7 @@
     document.getElementById("notification-setup").addEventListener("click", () => enableNotifications(false));
     document.getElementById("notification-repair").addEventListener("click", () => enableNotifications(true));
     document.getElementById("notification-test").addEventListener("click", sendNotificationTest);
+    document.getElementById("notification-test-sale").addEventListener("click", sendSaleNotificationTest);
     document.getElementById("notification-save").addEventListener("click", saveNotificationSettings);
     document.getElementById("privacy-button").addEventListener("click", togglePrivacy);
     document.getElementById("store-picker").addEventListener("change", (event) => {
@@ -742,10 +764,12 @@
         api("/ebay/revision-jobs"),
         api("/ebay/revision-batches"),
         api("/orders"),
+        api("/products/capture-queue"),
         api("/ebay/accounts"),
         api(statsPath(30)),
         api(statsPath(7)),
         api(viewSummaryPath()),
+        api(trafficPath(30)),
       ]);
       const failures = results.filter((result) => result.status === "rejected");
       const [
@@ -757,10 +781,12 @@
         revisionJobs,
         revisionBatches,
         orders,
+        captureQueue,
         stores,
         stats30,
         stats7,
         viewSummary,
+        traffic30,
       ] = results.map((result) => result.status === "fulfilled" ? result.value : null);
 
       setError(failures.length
@@ -770,11 +796,12 @@
       if (stores) updateStores(stores);
       if (products && listings && listingJobs && orders && stats30 && stats7) {
         updateStats({ products, listings, listingJobs, orders, stats30, stats7 });
-        updateMobileCalendar({ products, listings, listingJobs });
+        updateMobileCalendar({ products, listings, listingJobs, orders });
       }
       if (viewSummary) updateViewStats(viewSummary);
-      if (listingJobs && sourceRefreshJobs && revisionJobs && revisionBatches) {
-        updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches });
+      if (traffic30) updateTrafficStats(traffic30);
+      if (listingJobs && sourceRefreshJobs && revisionJobs && revisionBatches && captureQueue && products) {
+        updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue, products });
       }
     }
 
@@ -808,6 +835,11 @@
       return selectedStore === "all"
         ? "/ebay/listing-views/summary"
         : `/ebay/listing-views/summary?account_key=${encodeURIComponent(selectedStore)}`;
+    }
+
+    function trafficPath(range) {
+      const account = selectedStore === "all" ? "" : `&account=${encodeURIComponent(selectedStore)}`;
+      return `/stats/traffic?range=${range}&grain=day${account}`;
     }
 
     function setView(view) {
@@ -920,6 +952,20 @@
       setText("views-7d", Number(summary?.views_7d || 0).toLocaleString());
     }
 
+    function updateTrafficStats(traffic) {
+      const summary = traffic?.summary || {};
+      setText("traffic-impressions", Number(summary.total_impressions || 0).toLocaleString());
+      setText("traffic-ctr", mobilePercent(summary.click_through_rate));
+      setText("traffic-conversion", mobilePercent(summary.sales_conversion_rate));
+      setText("traffic-transactions", Number(summary.transactions || 0).toLocaleString());
+    }
+
+    function mobilePercent(value) {
+      const number = Number(value || 0);
+      const normalized = Math.abs(number) > 1 ? number : number * 100;
+      return `${normalized.toFixed(2)}%`;
+    }
+
     function isDraftProduct(product, scopedListings) {
       const status = String(product.status || "").toLowerCase();
       if (["deleted", "tombstoned", "listed", "live", "scheduled"].includes(status)) return false;
@@ -927,8 +973,10 @@
       return !scopedListings.some((listing) => Number(listing.product_id) === Number(product.id) && ["active", "listed", "live", "scheduled"].includes(String(listing.status || "").toLowerCase()));
     }
 
-    function updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches }) {
+    function updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue, products }) {
+      const productById = new Map(products.map((product) => [Number(product.id), product]));
       const entries = [
+        ...(captureQueue.items || []).map((item) => draftImportQueueEntry(item, productById.get(Number(item.product_id)))),
         ...listingJobs.map((job) => workerQueueEntry("Listing", job, workerQueueGroup(job.status))),
         ...latestSourceRefreshJobs(sourceRefreshJobs).map((job) => workerQueueEntry("Price refresh", job, workerQueueGroup(job.status))),
         ...revisionJobs.filter((job) => job.status !== "cancelled").map((job) => workerQueueEntry("Revision", job, workerQueueGroup(job.status))),
@@ -955,6 +1003,28 @@
       }
       container.innerHTML = entries.map(renderWorkerQueueEntry).join("");
       wireRevisionReviewActions(container);
+    }
+
+    function draftImportQueueEntry(item, product) {
+      const completedParts = [
+        item.source_price !== null && item.source_price !== undefined,
+        Number(item.source_shipping) >= 0,
+        Number(item.local_image_count || 0) > 0 && Number(item.local_image_count || 0) >= Number(item.image_count || 0),
+        Boolean(product?.description_html || product?.description),
+      ].filter(Boolean).length;
+      const progress = Math.max(10, Math.min(90, Math.round((completedParts / 4) * 100)));
+      return {
+        kind: "Draft import",
+        id: item.product_id,
+        group: "queued",
+        status: "importing",
+        title: item.title || product?.title || `Product ${item.product_id}`,
+        subtitle: `${item.sku || product?.sku || "New draft"} · source capture`,
+        message: item.reason || "Building product draft.",
+        updatedAt: item.updated_at || product?.updated_at,
+        attempts: 0,
+        progress,
+      };
     }
 
     function latestSourceRefreshJobs(jobs = []) {
@@ -1019,6 +1089,7 @@
           </div>
           ${entry.message ? `<div class="message">${escapeHtml(entry.message)}</div>` : ""}
           ${revision ? renderRevisionPrices(revision) : ""}
+          ${entry.progress === null || entry.progress === undefined ? "" : `<div class="worker-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Number(entry.progress)}"><span style="width:${Number(entry.progress)}%"></span></div><div class="worker-progress-label">${Number(entry.progress)}%</div>`}
           <div class="meta">${escapeHtml(meta)}</div>
           <div class="alert-actions">
             ${revision?.source_url ? `<a class="small-btn" href="${escAttr(revision.source_url)}" target="_blank" rel="noopener noreferrer">Open source</a>` : ""}
@@ -1034,10 +1105,13 @@
       const sourceDelta = job.source_price === null || job.source_price === undefined
         ? "Price unavailable"
         : `${moneyExact(job.old_source_price ?? job.source_price)} → ${moneyExact(job.source_price)}`;
+      const orderTotal = Number(job.minimum_order_quantity || 1) > 1
+        ? ` each - ${job.minimum_order_quantity} units = ${moneyExact(job.source_order_subtotal)}`
+        : "";
       const shipping = Number(job.source_shipping || 0) > 0 ? ` + ${moneyExact(job.source_shipping)} shipping` : "";
       return `
         <div class="revision-prices">
-          <div class="revision-price-row"><span>Source price</span><strong>${escapeHtml(sourceDelta + shipping)}</strong></div>
+          <div class="revision-price-row"><span>Source price</span><strong>${escapeHtml(sourceDelta + orderTotal + shipping)}</strong></div>
           <div class="revision-price-row"><span>eBay price</span><strong>${escapeHtml(ebayDelta)}</strong></div>
         </div>
       `;
@@ -1099,7 +1173,7 @@
       });
     }
 
-    function updateMobileCalendar({ products, listings, listingJobs }) {
+    function updateMobileCalendar({ products, listings, listingJobs, orders }) {
       const productById = new Map(products.map((product) => [Number(product.id), product]));
       const scopedListings = selectedStore === "all"
         ? listings
@@ -1131,20 +1205,37 @@
         const product = productById.get(Number(listing.product_id));
         events.push(mobileCalendarEvent("renewal", instant, product, listing, null));
       });
+      (orders || []).forEach((order) => {
+        if (selectedStore !== "all" && order.account_id !== selectedStore) return;
+        const instant = apiDate(order.created_at || order.updated_at);
+        if (Number.isNaN(instant.getTime())) return;
+        (order.items || []).forEach((item) => {
+          const product = productById.get(Number(item.product_id));
+          events.push(mobileCalendarEvent(
+            "sold",
+            instant,
+            product,
+            listingByProduct.get(Number(item.product_id)),
+            null,
+            { title: item.title, price: item.sale_price, quantity: item.quantity },
+          ));
+        });
+      });
       calendarEvents = events.sort((a, b) => a.date - b.date);
       renderMobileCalendar();
     }
 
-    function mobileCalendarEvent(type, date, product, listing, job) {
+    function mobileCalendarEvent(type, date, product, listing, job, orderItem = null) {
       const image = product?.images?.slice().sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))[0]?.image_url || "";
-      const price = listing?.price ?? job?.price ?? product?.listing_drafts?.[0]?.price ?? null;
+      const price = orderItem?.price ?? listing?.price ?? job?.price ?? product?.listing_drafts?.[0]?.price ?? null;
       return {
         type,
         date,
         dateKey: localDateKey(date),
-        title: job?.title || product?.listing_drafts?.[0]?.title || product?.title || `Product ${listing?.product_id || job?.product_id || ""}`,
+        title: orderItem?.title || job?.title || product?.listing_drafts?.[0]?.title || product?.title || `Product ${listing?.product_id || job?.product_id || ""}`,
         image,
         price,
+        quantity: Number(orderItem?.quantity || 1),
       };
     }
 
@@ -1187,13 +1278,35 @@
       }));
       const selected = grouped.get(calendarSelectedDate) || [];
       const selectedDate = new Date(`${calendarSelectedDate}T12:00:00`);
-      detail.innerHTML = `<div class="calendar-detail-heading">${escapeHtml(selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }))}</div>${selected.length ? selected.map(renderMobileCalendarCard).join("") : `<div class="calendar-empty">Nothing scheduled, listed, or renewing on this day.</div>`}`;
+      const counts = selected.reduce((result, event) => {
+        result[event.type] = (result[event.type] || 0) + 1;
+        return result;
+      }, {});
+      const filtered = calendarEventFilter === "all" ? selected : selected.filter((event) => event.type === calendarEventFilter);
+      const options = [
+        ["all", "All", selected.length],
+        ["scheduled", "Scheduled", counts.scheduled || 0],
+        ["listed", "Listed", counts.listed || 0],
+        ["sold", "Sold", counts.sold || 0],
+        ["renewal", "Renewals", counts.renewal || 0],
+      ];
+      detail.innerHTML = `
+        <div class="calendar-detail-heading">${escapeHtml(selectedDate.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }))}</div>
+        <div class="calendar-detail-toolbar">
+          <select id="calendar-event-filter" aria-label="Filter calendar products">${options.map(([value, labelText, count]) => `<option value="${value}"${calendarEventFilter === value ? " selected" : ""}>${labelText} (${count})</option>`).join("")}</select>
+          <span class="calendar-detail-count">${filtered.length} item${filtered.length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="calendar-detail-items">${filtered.length ? filtered.map(renderMobileCalendarCard).join("") : `<div class="calendar-empty">No matching items on this day.</div>`}</div>`;
+      document.getElementById("calendar-event-filter")?.addEventListener("change", (event) => {
+        calendarEventFilter = event.target.value;
+        renderMobileCalendar();
+      });
     }
 
     function renderMobileCalendarCard(event) {
-      const typeLabel = event.type === "renewal" ? "Renews" : event.type === "listed" ? "Listed" : "Scheduled";
+      const typeLabel = event.type === "renewal" ? "Renews" : event.type === "listed" ? "Listed" : event.type === "sold" ? "Sold" : "Scheduled";
       const scheduleTime = event.date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: businessTimeZone, timeZoneName: "short" });
-      const meta = [typeLabel, scheduleTime, event.price === null ? "" : money(event.price)].filter(Boolean).join(" · ");
+      const meta = [typeLabel, event.type === "sold" && event.quantity > 1 ? `${event.quantity} sold` : "", scheduleTime, event.price === null ? "" : money(event.price)].filter(Boolean).join(" · ");
       return `<article class="calendar-mini-card ${event.type}">${event.image ? `<img src="${escAttr(event.image)}" alt="" />` : `<div></div>`}<div><div class="calendar-mini-title">${escapeHtml(event.title)}</div><div class="calendar-mini-meta">${escapeHtml(meta)}</div></div></article>`;
     }
 
@@ -1216,6 +1329,7 @@
       revision_running: true,
       revision_attention: true,
       revision_completed: false,
+      order_sold: true,
       worker_attention: true,
       delivery_mode: "individual",
     };
@@ -1391,6 +1505,34 @@
       }
     }
 
+    async function sendSaleNotificationTest() {
+      if (!currentPushSubscription) {
+        setNotificationError("Set up this iPhone before sending the sold-listing test.");
+        return;
+      }
+      const button = document.getElementById("notification-test-sale");
+      button.disabled = true;
+      button.textContent = "💸 Sending...";
+      setNotificationError("");
+      try {
+        const result = await api("/push/test-sale", {
+          method: "POST",
+          body: JSON.stringify({
+            subscription_id: currentPushSubscription.id,
+          }),
+        });
+        await initializePushState();
+        if (Number(result.sent || 0) < 1 || Number(result.failed || 0) > 0) {
+          throw new Error(currentPushSubscription?.last_error || result.message || "The sold-listing test was not delivered.");
+        }
+      } catch (error) {
+        setNotificationError(error.message || String(error));
+      } finally {
+        button.disabled = false;
+        button.textContent = "💸 DEV: Test Sold Alert";
+      }
+    }
+
     async function saveNotificationSettings() {
       if (!currentPushSubscription) {
         setNotificationError("Set up this iPhone before saving notification settings.");
@@ -1435,6 +1577,10 @@
             ${preferenceToggle(`${prefix}_completed`, "Completed", preferences)}
           </section>
         `).join("")}
+        <section class="notification-group">
+          <div><h3>Sales</h3><small>Celebrate each newly imported eBay order</small></div>
+          ${preferenceToggle("order_sold", "Sold listing", preferences)}
+        </section>
         <section class="notification-group">
           <div><h3>Worker health</h3><small>Windows worker availability</small></div>
           ${preferenceToggle("worker_attention", "Offline or stale", preferences)}

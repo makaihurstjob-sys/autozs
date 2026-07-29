@@ -75,8 +75,16 @@ def test_orders_and_fulfillment_update(client) -> None:
     ).json()
     assert updated["status"] == "in_progress"
 
+    refunded = client.patch(
+        f"/fulfillment-tasks/{task_id}",
+        json={"status": "refunded"},
+    )
+    assert refunded.status_code == 200
+    assert refunded.json()["status"] == "refunded"
+
     orders = client.get("/orders?include_sandbox=true").json()
     assert len(orders) == 1
+    assert orders[0]["fulfillment_tasks"][0]["status"] == "refunded"
 
 
 def test_ebay_connection_reports_missing_credentials(client) -> None:
@@ -195,6 +203,9 @@ def test_ebay_sync_run_blocks_when_browser_account_mismatches_selected_store(cli
         "/ebay/accounts",
         json={"label": "Main Store", "account_id": "a.m.anim-59", "environment": "production"},
     ).json()
+    stats = client.get("/stats/overview?range=all&account=a.m.anim-59").json()
+    assert stats["selected_account"] == account["key"]
+    assert stats["available_accounts"] == ["all", account["key"]]
     client.post(
         "/ebay/browser-account",
         json={
@@ -461,6 +472,58 @@ def test_ebay_oauth_refresh_renews_access_token(client, monkeypatch) -> None:
     assert settings["ebay_access_token"] == "NEW-ACCESS-TOKEN"
 
 
+def test_account_ebay_oauth_connects_store_for_analytics(client, monkeypatch) -> None:
+    account = client.post(
+        "/ebay/accounts",
+        json={
+            "label": "Main Store",
+            "account_id": "a.m.anim-59",
+            "environment": "production",
+            "client_id": "PRODUCTION-CLIENT-ID",
+            "client_secret": "PRODUCTION-SECRET",
+            "redirect_uri": "MakProduction-RuName",
+        },
+    ).json()
+
+    started = client.post(f"/ebay/accounts/{account['key']}/oauth/start").json()
+    assert started["environment"] == "production"
+    assert started["authorization_url"].startswith("https://auth.ebay.com/oauth2/authorize?")
+    assert "sell.analytics.readonly" in started["authorization_url"]
+
+    calls = []
+
+    def fake_post(url, data, headers, timeout):
+        calls.append({"url": url, "data": data, "headers": headers, "timeout": timeout})
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "ANALYTICS-ACCESS-TOKEN",
+                "expires_in": 7200,
+                "refresh_token": "ANALYTICS-REFRESH-TOKEN",
+                "refresh_token_expires_in": 47304000,
+                "token_type": "User Access Token",
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(ebay.httpx, "post", fake_post)
+    connected = client.post(
+        f"/ebay/accounts/{account['key']}/oauth/callback",
+        json={"code": "AUTH-CODE", "state": started["state"]},
+    )
+
+    assert connected.status_code == 200
+    assert connected.json()["connected"] is True
+    assert calls[0]["url"] == "https://api.ebay.com/identity/v1/oauth2/token"
+    assert calls[0]["data"]["redirect_uri"] == "MakProduction-RuName"
+    expected_auth = base64.b64encode(b"PRODUCTION-CLIENT-ID:PRODUCTION-SECRET").decode("ascii")
+    assert calls[0]["headers"]["Authorization"] == f"Basic {expected_auth}"
+
+    stored = client.get("/ebay/accounts").json()[0]
+    assert stored["connected"] is True
+    assert stored["token_expires_at"]
+
+
 def test_sandbox_order_maps_to_product_and_account_stats(client) -> None:
     product = client.post(
         "/products/import-captured",
@@ -536,7 +599,7 @@ def test_import_source_product_creates_listing_draft_and_images(client) -> None:
 
 
 def test_import_normalizes_internal_auto_import_query_params(client) -> None:
-    clean_url = "https://www.homedepot.com/p/Auto-Import-Normalized/123?MERCH=REC"
+    clean_url = "https://www.homedepot.com/p/Auto-Import-Normalized/123"
     flagged_url = "https://www.homedepot.com/p/Auto-Import-Normalized/123?ea_auto_import=1&MERCH=REC&auto_download_test=1"
 
     first = client.post(
@@ -553,6 +616,28 @@ def test_import_normalizes_internal_auto_import_query_params(client) -> None:
     assert "ea_auto_import" not in second["supplier_products"][0]["source_url"]
     assert "auto_download_test" not in second["supplier_products"][0]["source_url"]
     assert second["supplier_products"][0]["last_price"] == 13.5
+
+
+def test_supplier_catalog_and_lowes_placeholder_import(client) -> None:
+    suppliers = {item["key"]: item for item in client.get("/suppliers").json()}
+    assert suppliers["home_depot"]["enabled"] is True
+    assert suppliers["lowes"]["enabled"] is False
+    assert suppliers["lowes"]["status"] == "coming_soon"
+    assert suppliers["lowes"]["capabilities"]["url_import"] is True
+    assert suppliers["lowes"]["capabilities"]["browser_capture"] is False
+    assert suppliers["lowes"]["capabilities"]["automatic_price_refresh"] is False
+    assert suppliers["lowes"]["capabilities"]["browser_fulfillment"] is False
+
+    tracked_url = "https://www.lowes.com/pd/Project-Source-Sample/5012345678?cm_mmc=tracking#details"
+    result = client.post("/products/import", json={"urls": tracked_url}).json()
+    product = result["products"][0]
+    supplier = product["supplier_products"][0]
+
+    assert supplier["supplier"] == "lowes"
+    assert supplier["source_url"] == "https://www.lowes.com/pd/Project-Source-Sample/5012345678"
+    assert supplier["last_price"] is None
+    assert product["listing_drafts"][0]["calculated_price"] is None
+    assert any("not enabled yet" in warning for warning in result["warnings"])
 
 
 def test_delete_hides_product_but_reimport_revives_cached_source_data(client) -> None:
@@ -692,12 +777,74 @@ def test_source_capture_queue_lists_imports_that_need_browser_capture(client) ->
     assert queue["total"] == 1
     assert queue["items"][0]["product_id"] == missing["id"]
     assert queue["items"][0]["source_url"] == missing["supplier_products"][0]["source_url"]
-    assert queue["items"][0]["item_specifics"]["Brand"] == "Capture Queue Missing"
+    assert queue["items"][0]["item_specifics"]["Brand"] == "Capture"
     assert queue["items"][0]["item_specifics"]["MPN"] == "111"
     assert "source price" in queue["items"][0]["missing"]
     assert "source shipping" in queue["items"][0]["missing"]
     assert any(label in queue["items"][0]["missing"] for label in ["images", "downloaded images"])
     assert all(item["product_id"] != ready["id"] for item in queue["items"])
+
+
+def test_hidden_source_price_is_terminal_until_a_cart_price_is_captured(client) -> None:
+    source_url = "https://www.homedepot.com/p/Hidden-Until-Cart/326259922"
+    unavailable = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Anvil Heavy Duty Adjustable Brass Hose Spray Nozzle",
+            "source_price_unavailable": True,
+            "source_shipping": 0.0,
+            "description": "Price is revealed in the supplier cart.",
+            "image_urls": (
+                "data:image/png;base64,"
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            ),
+        },
+    ).json()
+
+    supplier = unavailable["supplier_products"][0]
+    assert supplier["last_price"] is None
+    assert supplier["price_unavailable"] is True
+    assert unavailable["listing_drafts"][0]["calculated_price"] is None
+    assert all(
+        item["product_id"] != unavailable["id"]
+        for item in client.get("/products/capture-queue").json()["items"]
+    )
+
+    revealed = client.patch(
+        f"/products/{unavailable['id']}/capture",
+        json={"source_price": 12.97, "source_price_unavailable": False},
+    ).json()
+    assert revealed["supplier_products"][0]["last_price"] == 12.97
+    assert revealed["supplier_products"][0]["price_unavailable"] is False
+    assert revealed["listing_drafts"][0]["calculated_price"] is not None
+
+
+def test_source_capture_queue_claim_prevents_duplicate_profile_imports(client) -> None:
+    product = client.post(
+        "/products/import",
+        json={"urls": "https://www.homedepot.com/p/Profile-Lease-Test/333"},
+    ).json()["products"][0]
+
+    main_claim = client.post(
+        "/products/capture-queue/claim",
+        json={"worker_id": "main-autozs-profile", "source_host": "homedepot.com"},
+    )
+    backup_claim = client.post(
+        "/products/capture-queue/claim",
+        json={"worker_id": "backup-autozs-profile", "source_host": "homedepot.com"},
+    )
+    same_profile_claim = client.post(
+        "/products/capture-queue/claim",
+        json={"worker_id": "main-autozs-profile", "source_host": "homedepot.com"},
+    )
+
+    assert main_claim.status_code == 200
+    assert main_claim.json()["product_id"] == product["id"]
+    assert backup_claim.status_code == 200
+    assert backup_claim.json() is None
+    assert same_profile_claim.status_code == 200
+    assert same_profile_claim.json()["product_id"] == product["id"]
 
 
 def test_stats_overview_reports_catalog_profit_and_mix(client) -> None:
@@ -1559,6 +1706,66 @@ def test_import_captured_product_directly(client) -> None:
     assert package["landed_cost"] == 23.47
 
 
+def test_captured_titles_remove_only_brand_and_trailing_model_identifier(client) -> None:
+    pistol = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Husky-Industrial-Pistol-Nozzle-10502HD/100000001",
+            "title": "Husky Industrial Pistol Nozzle 10502HD",
+            "source_price": 12.0,
+            "source_shipping": 0.0,
+            "description": "Industrial pistol nozzle",
+            "image_urls": "https://example.com/pistol.jpg",
+        },
+    ).json()
+    assert pistol["title"] == "Husky Industrial Pistol Nozzle"
+    assert pistol["listing_drafts"][0]["title"] == "Industrial Pistol Nozzle | FREE SHIPPING"
+
+    fireman = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Husky-PRO-Fireman-Multi-Pattern-Nozzle-622045/100000002",
+            "title": "Husky PRO Fireman's Multi-Pattern Nozzle 622045",
+            "source_price": 14.0,
+            "source_shipping": 0.0,
+            "description": "Fireman's multi-pattern nozzle",
+            "image_urls": "https://example.com/fireman.jpg",
+        },
+    ).json()
+    assert fireman["title"] == "Husky PRO Fireman's Multi-Pattern Nozzle"
+    assert fireman["listing_drafts"][0]["title"] == "PRO Fireman's Multi-Pattern Nozzle | FREE SHIPPING"
+
+
+def test_captured_minimum_order_quantity_prices_and_titles_as_pack(client) -> None:
+    response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Minimum-Order-Product/333193816",
+            "title": "Ornamental Mouldings Natural Ash Wood Board",
+            "source_price": 14.19,
+            "source_shipping": 0.0,
+            "minimum_order_quantity": 2,
+            "description": "Minimum order quantity test",
+            "image_urls": "https://images.thdstatic.com/productImages/minimum-order.jpg",
+        },
+    )
+
+    assert response.status_code == 200
+    product = response.json()
+    supplier = product["supplier_products"][0]
+    assert supplier["last_price"] == 14.19
+    assert supplier["minimum_order_quantity"] == 2
+    assert product["listing_drafts"][0]["title"].startswith("(2X) ")
+
+    package = client.get(f"/products/{product['id']}/ebay-package").json()
+    assert package["source_price"] == 14.19
+    assert package["minimum_order_quantity"] == 2
+    assert package["source_order_subtotal"] == 28.38
+    assert package["landed_cost"] == 28.38
+    assert package["title"].startswith("(2X) ")
+    assert any("minimum order of 2" in warning for warning in package["warnings"])
+
+
 def test_captured_import_keeps_large_image_sets(client, monkeypatch) -> None:
     monkeypatch.setattr(importer, "_download_image", lambda product_id, image_url, sort_order: None)
     image_urls = "\n".join(f"https://images.thdstatic.com/productImages/example-{index}.jpg" for index in range(45))
@@ -1703,7 +1910,7 @@ def test_recapturing_product_replaces_stale_images(client) -> None:
 
 
 def test_captured_import_normalizes_internal_auto_import_query_params(client) -> None:
-    clean_url = "https://www.homedepot.com/p/HDX-Captured-Normalized/331012931?MERCH=REC"
+    clean_url = "https://www.homedepot.com/p/HDX-Captured-Normalized/331012931"
     flagged_url = "https://www.homedepot.com/p/HDX-Captured-Normalized/331012931?MERCH=REC&ea_auto_import=1"
     first = client.post(
         "/products/import-captured",
@@ -1778,6 +1985,173 @@ def test_source_refresh_pilot_runs_as_a_resumable_single_item_batch(client) -> N
     assert jobs[0]["captured_price"] == 21.5
     assert jobs[0]["price_changed"] is True
     assert client.post(f"/source-refresh/batches/{batch['batch_key']}/next").json() is None
+
+
+def test_source_refresh_updates_price_without_replacing_catalog_metadata(client) -> None:
+    source_url = "https://www.homedepot.com/p/Refresh-Metadata-Guard/445"
+    original_image = "https://images.thdstatic.com/productImages/refresh-metadata-original.jpg"
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Original Catalog Product",
+            "source_price": 20.0,
+            "source_shipping": 0.0,
+            "description": "Original catalog description",
+            "image_urls": original_image,
+        },
+    ).json()
+    original_draft = product["listing_drafts"][0]
+
+    batch = client.post(
+        "/source-refresh/batches",
+        json={"limit": 1, "interval_hours": 6, "force": True, "product_ids": [product["id"]]},
+    ).json()
+    refreshed = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Incorrect Refresh Page Title",
+            "source_price": 21.5,
+            "source_shipping": 0.0,
+            "description": "Incorrect refresh description",
+            "image_urls": "https://images.thdstatic.com/productImages/incorrect-refresh-image.jpg",
+            "refresh_job_id": batch["jobs"][0]["id"],
+        },
+    ).json()
+
+    assert refreshed["title"] == "Original Catalog Product"
+    assert [image["image_url"] for image in refreshed["images"]] == [original_image]
+    assert refreshed["listing_drafts"][0]["title"] == original_draft["title"]
+    assert refreshed["listing_drafts"][0]["description"] == original_draft["description"]
+    assert refreshed["supplier_products"][0]["last_price"] == 21.5
+
+
+def test_capture_rejects_new_home_depot_case_product(client) -> None:
+    response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Case-Only-Product/447",
+            "title": "Case Only Product",
+            "source_price": 192.24,
+            "source_shipping": 0.0,
+            "source_purchase_unit": "case",
+            "source_bulk_package": True,
+            "source_bulk_package_reason": "Excluded Home Depot case product.",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "does not import case, carton, pallet" in response.json()["detail"]
+    assert all(item["title"] != "Case Only Product" for item in client.get("/products").json())
+
+
+def test_unavailable_delivery_clears_shipping_and_marks_supplier_out_of_stock(client) -> None:
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Vigoro-Plant-Food/327058317",
+            "title": "Vigoro 6 lb. Organic Rose and Flower Plant Food 4-7-3",
+            "source_price": 10.97,
+            "source_shipping": 15.65,
+        },
+    ).json()
+    assert product["supplier_products"][0]["last_shipping"] == 15.65
+    assert product["supplier_products"][0]["in_stock"] is True
+
+    updated = client.patch(
+        f"/products/{product['id']}/capture",
+        json={
+            "source_price": 10.97,
+            "source_in_stock": False,
+        },
+    )
+
+    assert updated.status_code == 200
+    supplier = updated.json()["supplier_products"][0]
+    assert supplier["last_shipping"] == -1.0
+    assert supplier["in_stock"] is False
+
+
+def test_source_refresh_pauses_existing_bulk_package_product(client) -> None:
+    source_url = "https://www.homedepot.com/p/Existing-Case-Product/448"
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Existing Case Product",
+            "source_price": 2.67,
+            "source_shipping": 0.0,
+        },
+    ).json()
+    batch = client.post(
+        "/source-refresh/batches",
+        json={"limit": 1, "interval_hours": 6, "force": True, "product_ids": [product["id"]]},
+    ).json()
+
+    response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Existing Case Product",
+            "source_price": 192.24,
+            "source_shipping": 0.0,
+            "source_purchase_unit": "case",
+            "source_bulk_package": True,
+            "source_bulk_package_reason": "Excluded Home Depot case product.",
+            "refresh_job_id": batch["jobs"][0]["id"],
+        },
+    )
+
+    assert response.status_code == 422
+    current = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert current["status"] == "paused"
+    assert current["supplier_products"][0]["last_price"] == 2.67
+    job = client.get(f"/source-refresh/jobs?batch_key={batch['batch_key']}").json()[0]
+    assert job["status"] == "failed"
+    assert "Excluded bulk-source product" in job["message"]
+
+
+def test_source_refresh_rejects_incomplete_metadata_without_clearing_product(client) -> None:
+    source_url = "https://www.homedepot.com/p/Refresh-Incomplete-Guard/446"
+    original_image = "https://images.thdstatic.com/productImages/refresh-incomplete-original.jpg"
+    product = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "Protected Catalog Product",
+            "source_price": 20.0,
+            "source_shipping": 0.0,
+            "description": "Protected catalog description",
+            "image_urls": original_image,
+        },
+    ).json()
+    batch = client.post(
+        "/source-refresh/batches",
+        json={"limit": 1, "interval_hours": 6, "force": True, "product_ids": [product["id"]]},
+    ).json()
+
+    response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": source_url,
+            "title": "",
+            "source_price": 21.5,
+            "source_shipping": 0.0,
+            "image_urls": "",
+            "refresh_job_id": batch["jobs"][0]["id"],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "preserved the existing product data" in response.json()["detail"]
+    current = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert current["title"] == "Protected Catalog Product"
+    assert [image["image_url"] for image in current["images"]] == [original_image]
+    assert current["supplier_products"][0]["last_price"] == 20.0
+    job = client.get(f"/source-refresh/jobs?batch_key={batch['batch_key']}").json()[0]
+    assert job["status"] == "queued"
+    assert "automatic retry" in job["message"].lower()
 
 
 def test_source_refresh_route_rejects_five_dollar_promotion_candidate(client) -> None:

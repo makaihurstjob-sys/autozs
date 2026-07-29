@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoZS Source Capture",
-  "version": "0.2.26",
+  "version": "0.2.41",
   "description": "Capture product data from supplier pages into AutoZS.",
   "action": {
     "default_popup": "popup.html",
@@ -22,30 +22,46 @@
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*",
     "https://www.homedepot.com/*",
+    "https://www.lowes.com/*",
     "https://www.ebay.com/*",
-    "https://sell.ebay.com/*"
+    "https://sell.ebay.com/*",
+    "https://mesg.ebay.com/*"
   ],
   "web_accessible_resources": [
     {
       "resources": ["assets/autozs-logo.png", "assets/import-to-autozs.png"],
-      "matches": ["https://www.homedepot.com/*", "https://www.ebay.com/*", "https://sell.ebay.com/*"]
+      "matches": ["https://www.homedepot.com/*", "https://www.lowes.com/*", "https://www.ebay.com/*", "https://sell.ebay.com/*"]
     }
   ],
   "content_scripts": [
     {
-      "matches": ["https://www.homedepot.com/p/*"],
+      "matches": [
+        "https://desktop-56u49jf.tailb2892a.ts.net/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ],
+      "js": ["dashboard-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.homedepot.com/p/*", "https://www.lowes.com/pd/*"],
       "js": ["capture.js", "content.js"],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*"],
+      "matches": ["https://www.homedepot.com/*"],
+      "js": ["home-depot-product-hunt.js", "home-depot-checkout.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*", "https://mesg.ebay.com/*"],
       "js": ["ebay-dark-mode.js"],
       "run_at": "document_start",
       "all_frames": true
     },
     {
-      "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*"],
-      "js": ["capture.js", "ebay-research.js", "ebay-fill.js", "ebay-reports.js", "ebay-revision-upload.js"],
+      "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*", "https://mesg.ebay.com/*"],
+      "js": ["capture.js", "ebay-research.js", "ebay-fill.js", "ebay-reports.js", "ebay-revision-upload.js", "ebay-customer-message.js"],
       "run_at": "document_start"
     }
   ]

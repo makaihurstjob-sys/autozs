@@ -17,6 +17,7 @@
     });
 
   await waitForBody();
+  const isLowesScaffold = /(^|\.)lowes\.com$/i.test(location.hostname || "");
 
   const host = document.createElement("div");
   host.id = "ebay-automation-import-host";
@@ -72,6 +73,23 @@
           pointer-events: auto;
           position: absolute;
         }
+        .page-progress {
+          height: 4px;
+          left: 0;
+          overflow: hidden;
+          pointer-events: none;
+          position: absolute;
+          top: 0;
+          width: 100%;
+        }
+        .page-progress-fill {
+          background: var(--az-accent);
+          height: 100%;
+          transform: scaleX(0);
+          transform-origin: left center;
+          transition: transform .24s ease, background-color .18s ease;
+          width: 100%;
+        }
         .progress-card {
           align-items: center;
           background: var(--az-bg);
@@ -92,9 +110,12 @@
         .progress-percent { color: var(--az-ink); font-size: 13px; font-weight: 800; }
         .progress-note { color: var(--az-muted); font-size: 11px; text-align: center; }
         :host([data-state="error"]) .progress-fill { background: #ff6b6b; }
+        :host([data-state="error"]) .page-progress-fill { background: #ff6b6b; }
         :host([data-state="complete"]) .progress-fill { background: #56d88a; }
+        :host([data-state="complete"]) .page-progress-fill { background: #56d88a; }
       </style>
       <div class="progress-overlay" role="status" aria-live="polite">
+        <div class="page-progress" aria-hidden="true"><div id="page-progress-fill" class="page-progress-fill"></div></div>
         <div class="progress-card">
           ${progressLogoUrl ? `<img class="logo" src="${progressLogoUrl}" alt="AutoZS" draggable="false" />` : ""}
           <div class="progress-title">AutoZS is working</div>
@@ -119,13 +140,35 @@
     const progressLabel = progressHost.shadowRoot.querySelector("#progress-label");
     const progressFill = progressHost.shadowRoot.querySelector("#progress-fill");
     const progressPercent = progressHost.shadowRoot.querySelector("#progress-percent");
+    const pageProgressFill = progressHost.shadowRoot.querySelector("#page-progress-fill");
     if (progressLabel) progressLabel.textContent = text;
     if (progressFill) progressFill.style.width = `${autoProgressPercent}%`;
     if (progressPercent) progressPercent.textContent = `${autoProgressPercent}%`;
+    if (pageProgressFill) pageProgressFill.style.transform = `scaleX(${autoProgressPercent / 100})`;
   };
   shadow.innerHTML = `
     <style>
       :host { all: initial; }
+      .import-progress-strip {
+        height: 4px;
+        left: 0;
+        opacity: 0;
+        overflow: hidden;
+        pointer-events: none;
+        position: fixed;
+        top: 0;
+        transition: opacity .18s ease;
+        width: 100vw;
+        z-index: 2147483647;
+      }
+      .import-progress-strip-fill {
+        background: #4bb7a6;
+        height: 100%;
+        transform: scaleX(0);
+        transform-origin: left center;
+        transition: transform .24s ease, background-color .18s ease;
+        width: 100%;
+      }
       .import-action {
         display: block;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -158,7 +201,7 @@
       }
       button:hover { background: rgba(255, 255, 255, .1); }
       button:focus-visible { outline: 3px solid #195f56; outline-offset: 3px; }
-      button:disabled { background: rgba(0, 0, 0, .14); cursor: wait; }
+      button:disabled { background: rgba(0, 0, 0, .14); cursor: not-allowed; }
       .status {
         height: 1px;
         overflow: hidden;
@@ -173,15 +216,38 @@
         button { width: 50%; }
       }
     </style>
+    <div id="import-progress-strip" class="import-progress-strip" role="progressbar" aria-label="AutoZS import progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div id="import-progress-strip-fill" class="import-progress-strip-fill"></div>
+    </div>
     <div class="import-action">
       <img class="import-artwork" src="${importArtworkUrl}" alt="" draggable="false">
       <button type="button" aria-label="Import this product to AutoZS" title="Import to AutoZS">Import to AutoZS</button>
       <span class="status" aria-live="polite"></span>
     </div>
   `;
+  let importProgressToken = 0;
+  const setImportProgressStrip = (percent, state = "working") => {
+    const strip = shadow.querySelector("#import-progress-strip");
+    const fill = shadow.querySelector("#import-progress-strip-fill");
+    if (!strip || !fill) return;
+    const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+    const token = ++importProgressToken;
+    strip.style.opacity = safePercent > 0 ? "1" : "0";
+    strip.setAttribute("aria-valuenow", String(safePercent));
+    fill.style.transform = `scaleX(${safePercent / 100})`;
+    fill.style.backgroundColor = state === "error" ? "#ff6b6b" : state === "complete" ? "#56d88a" : "#4bb7a6";
+    if (state === "complete" || state === "error") {
+      setTimeout(() => {
+        if (token === importProgressToken) strip.style.opacity = "0";
+      }, state === "complete" ? 1200 : 5000);
+    }
+  };
 
   const findPurchasePanel = () => {
     const title = document.querySelector("h1");
+    if (isLowesScaffold && title?.parentElement) {
+      return { element: title.parentElement, placement: "afterend" };
+    }
     const titleActions = title
       ?.closest('[data-component^="product-details:ProductDetails:"]')
       ?.querySelector('[data-testid="sharabelt-product-details"]');
@@ -270,6 +336,14 @@
     status.textContent = text;
     status.title = text;
   };
+  if (isLowesScaffold) {
+    button.disabled = true;
+    button.setAttribute("aria-label", "Lowe's capture coming soon");
+    button.title = "Lowe's capture coming soon";
+    shadow.querySelector(".import-artwork")?.setAttribute("style", "filter:grayscale(1);opacity:.62");
+    setStatus("Lowe's supplier support is scaffolded. Automated capture is coming soon.");
+    return;
+  }
   const readImageDownloadStatus = (result) =>
     typeof imageDownloadStatus === "function" ? imageDownloadStatus(result) : `${result.downloaded}/${result.attempted} images downloaded`;
 
@@ -312,22 +386,47 @@
       await sleep(700);
     }
     if (latestError) throw latestError;
-    return latestPayload || captureSourceProductFromPage();
+    const readiness = payloadReadiness(latestPayload);
+    if (
+      String(location.hostname || "").includes("homedepot.com") &&
+      latestPayload &&
+      readiness.title &&
+      readiness.images &&
+      !readiness.price
+    ) {
+      latestPayload.source_price_unavailable = true;
+      onProgress(48, "No visible price. Saving for a manual cart price check.");
+      setStatus("Price unavailable on the product page. Add it to cart to confirm the price.");
+      return latestPayload;
+    }
+    const missing = Object.entries(readiness)
+      .filter(([, ready]) => !ready)
+      .map(([field]) => field);
+    throw new Error(
+      `Home Depot product data did not finish loading; missing ${missing.join(", ") || "required product fields"}.`
+    );
   };
 
   const captureAndImport = async (mode = "manual") => {
     const refreshContext = typeof sourceRefreshContextFromLocation === "function" ? sourceRefreshContextFromLocation() : null;
     const automatic = mode === "auto";
-    const closeCompletedRefreshTab = () => {
-      if (!automatic || !refreshContext) return;
+    const closeCompletedAutomaticTab = () => {
+      if (!automatic) return;
       setTimeout(() => {
-        chrome.runtime.sendMessage({
-          type: "autozs-close-source-refresh-tab",
-          jobId: refreshContext.jobId,
-        }).catch(() => {});
+        try {
+          const closeRequest = chrome.runtime.sendMessage({
+            type: refreshContext ? "autozs-close-source-refresh-tab" : "autozs-close-product-capture-tab",
+            ...(refreshContext ? { jobId: refreshContext.jobId } : {}),
+          });
+          closeRequest?.catch?.(() => {});
+        } catch {
+          // Reloading an unpacked extension invalidates callbacks in tabs that
+          // still contain the previous content-script context.
+        }
       }, 1500);
     };
     const progress = (percent, text, state = "working") => {
+      setImportProgressStrip(percent, state);
       if (automatic) setAutoProgress(text, percent, state);
     };
     button.disabled = true;
@@ -368,12 +467,15 @@
       button.textContent = "Imported";
       if (refreshContext) {
         try {
+          await chrome.runtime.sendMessage({ type: "autozs-home-depot-refresh-success" });
+        } catch {}
+        try {
           await chrome.runtime.sendMessage({ type: "autozs-source-refresh-cooldown" });
         } catch {}
         setStatus(`Refreshed ${product.sku}. The background worker will continue after the Home Depot cooldown.`);
       }
       progress(100, refreshContext ? "Source price imported. AutoZS will continue the schedule." : `Imported ${product.sku} into AutoZS.`, "complete");
-      closeCompletedRefreshTab();
+      closeCompletedAutomaticTab();
     } catch (error) {
       setStatus(`Import failed: ${error.message}`);
       button.textContent = "Import failed";
@@ -394,12 +496,21 @@
             }
           } catch {}
         }
+        if (isHomeDepotError && retryAlreadyAttempted) {
+          try {
+            const recovery = await chrome.runtime.sendMessage({ type: "autozs-home-depot-post-cleanup-error" });
+            if (recovery?.rotated) {
+              setStatus("Home Depot blocked this profile three times after cleanup. AutoZS switched source capture to the backup Chrome profile.");
+              progress(autoProgressPercent || 12, "Switching Home Depot capture to the backup Chrome profile...", "error");
+            }
+          } catch {}
+        }
         try {
           const failedJob = await failSourceRefreshJob(refreshContext.jobId, error.message || String(error));
           if (failedJob?.status === "cancelled") {
             setStatus(failedJob.message || "This refresh was superseded by a newer successful capture.");
             progress(100, "A newer source-price refresh already completed this product.", "complete");
-            closeCompletedRefreshTab();
+            closeCompletedAutomaticTab();
           } else {
             setStatus(`Refresh paused after an error. The worker will retry the queue after its cooldown.`);
           }
@@ -419,6 +530,7 @@
   if (autoImportRequested && !window.__ebayAutomationAutoImportStarted) {
     window.__ebayAutomationAutoImportStarted = true;
     setStatus("Auto-import will start after the page settles...");
+    setImportProgressStrip(2);
     setAutoProgress("Waiting for the scheduled product page to settle...", 2);
     setTimeout(() => captureAndImport("auto"), 1800);
   }
