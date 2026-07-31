@@ -146,6 +146,28 @@ async function runAssistantTest() {
     htmlModeCheckbox.checked = !htmlModeCheckbox.checked;
     rawDescription.visible = htmlModeCheckbox.checked;
   };
+  // Mirrors real eBay: the rich editor only receives the HTML source once
+  // "Show HTML Code" is switched back off. While it stays checked the rich model
+  // is empty, which is what eBay validates on submit.
+  const descriptionRichEditable = {
+    get innerText() {
+      return htmlModeCheckbox.checked ? "" : String(rawDescription.value || "");
+    },
+    get innerHTML() {
+      return this.innerText;
+    },
+    focus() {},
+    dispatchEvent() { return true; },
+  };
+  const descriptionRichFrame = {
+    id: "se-rte-frame__summary",
+    contentDocument: {
+      querySelector: (selector) => (/contenteditable/.test(selector) ? descriptionRichEditable : null),
+      body: { get innerText() { return descriptionRichEditable.innerText; } },
+    },
+    contentWindow: { focus() {}, getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
+    scrollIntoView() {},
+  };
   const prelistSearch = new FakeField({
     placeholder: "Enter brand, model, description, etc.",
     parentText: "Start listing with item info Describe your item",
@@ -213,7 +235,7 @@ async function runAssistantTest() {
       querySelector: (selector) => {
         if (selector === 'textarea[name="description"][id*="rawEditor"], textarea[name="description"]') return rawDescriptionEnabled ? rawDescription : null;
         if (selector === `label[for="html-mode"]`) return htmlModeLabel;
-        if (/se-rte-frame/.test(selector)) return richFrames[0] || null;
+        if (/se-rte-frame/.test(selector)) return richFrames[0] || descriptionRichFrame;
         return null;
       },
       getElementById: (id) => id === "html-mode" ? htmlModeCheckbox : null,
@@ -435,8 +457,17 @@ async function runAssistantTest() {
   if (rawDescription.value !== packageData.description) {
     throw new Error(`Expected raw HTML description to be replaced exactly, got ${JSON.stringify(rawDescription.value)}`);
   }
-  if (!htmlModeCheckbox.checked) {
-    throw new Error("Expected HTML mode checkbox to be enabled before filling hidden raw description source.");
+  // Regression: eBay validates its rich model, not the HTML source box. The filler
+  // must enable HTML mode to write the source and then switch it back OFF so eBay
+  // parses the source in — otherwise the submit is rejected with "A description is
+  // required" while the textarea still reads back at the exact expected length.
+  if (htmlModeCheckbox.checked) {
+    throw new Error("Expected HTML mode to be switched back off so eBay commits the description into its rich editor.");
+  }
+  if (descriptionRichEditable.innerText !== packageData.description) {
+    throw new Error(
+      `Expected the rich description editor to receive the source, got ${JSON.stringify(descriptionRichEditable.innerText)}`
+    );
   }
   rawDescription._prototypeValue = `old plain text ${packageData.description}`;
   const exactDescriptionMatch = vm.runInContext(

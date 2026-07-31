@@ -2482,11 +2482,13 @@ async function fillDescription(value) {
   const htmlValue = String(value || "");
   if (descriptionSourceMatches(htmlValue)) return true;
   const isHtmlDescription = looksLikeHtml(htmlValue);
-  // Try the rich-text iframe first. Writing the rawEditor textarea (fillDescriptionHtmlSource)
-  // appears to succeed but React re-renders from its own state and drops the value, which is
-  // what produced the long-running "eBay requires a description" failures.
+  // Verified live 2026-07-31 on job 78: the rawEditor textarea written through the
+  // native value setter is the only path eBay actually keeps, because it is a real
+  // React-controlled form control. The contenteditable execCommand write looks right
+  // immediately afterwards but is discarded on the validation re-render, which is what
+  // produced the long-running "eBay requires a description" failures. Source first.
+  if (await fillDescriptionHtmlSource(htmlValue)) return true;
   if (await fillDescriptionRichFrame(htmlValue)) return true;
-  if (isHtmlDescription && await fillDescriptionHtmlSource(htmlValue)) return true;
   const text = listingDescriptionPlainText(htmlValue);
   if (await fillDescriptionNativeFrame(htmlValue)) return true;
   if (await fillDescriptionHtmlSource(htmlValue)) return true;
@@ -2574,7 +2576,10 @@ async function fillDescriptionRichFrame(htmlValue) {
     // execCommand is a real browser editing operation, so React keeps the resulting DOM.
     if (!frameDocument.execCommand("insertHTML", false, htmlValue)) return false;
     editable.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertHTML", data: htmlValue }));
-    await delay(400);
+    // Re-check after React has had time to re-render. Checking immediately reported
+    // success for a value eBay then dropped, so this path silently swallowed the
+    // failure and the caller never tried the source field that does persist.
+    await delay(1500);
     return !listingDescriptionIsEmpty();
   } catch {
     return false;
@@ -2623,7 +2628,40 @@ async function fillDescriptionHtmlSource(htmlValue) {
   if (!descriptionSourceExactlyMatches(sourceField.element, htmlValue)) {
     await replaceDescriptionSourceNativeFirst(sourceField.element, htmlValue);
   }
-  return descriptionSourceExactlyMatches(sourceField.element, htmlValue);
+  if (!descriptionSourceExactlyMatches(sourceField.element, htmlValue)) return false;
+  // eBay validates its rich model, NOT the HTML source box. Leaving "Show HTML
+  // Code" checked means the source text is never parsed in, so the submit is
+  // rejected with "A description is required" even though the textarea is full
+  // and reads back at the exact expected length. Toggling the mode back off is
+  // what actually commits the description.
+  return await commitHtmlSourceToRichEditor();
+}
+
+function richDescriptionLength() {
+  const frame = document.querySelector(
+    'iframe#se-rte-frame__summary, iframe[name="se-rte-frame__summary"], iframe[id*="se-rte-frame"], iframe[aria-label*="Description" i]'
+  );
+  try {
+    const editable = frame?.contentDocument?.querySelector('[contenteditable="true"]');
+    return String(editable?.innerText || "").trim().length;
+  } catch {
+    return 0;
+  }
+}
+
+async function commitHtmlSourceToRichEditor() {
+  const checkbox = findHtmlCodeCheckbox();
+  if (!checkbox) return richDescriptionLength() > 0;
+  if (checkbox.checked) {
+    const visibleTarget = findHtmlCodeLabel(checkbox) || checkbox.closest?.("label") || checkbox;
+    try {
+      visibleTarget.click?.();
+      checkbox.dispatchEvent?.(new Event("input", { bubbles: true }));
+      checkbox.dispatchEvent?.(new Event("change", { bubbles: true }));
+    } catch {}
+  }
+  await waitForCondition(() => richDescriptionLength() > 0, 4000, 150);
+  return richDescriptionLength() > 0;
 }
 
 async function enableHtmlCodeMode() {
