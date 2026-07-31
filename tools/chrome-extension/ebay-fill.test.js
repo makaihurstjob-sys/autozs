@@ -369,6 +369,47 @@ async function runAssistantTest() {
 
   // Regression: every HTML-code target toggles the same checkbox, so a slow
   // eBay re-render must not cause a second click that flips the mode back off.
+  // Regression: eBay renders the DESCRIPTION block lazily, after the rest of the
+  // editor is interactive. enableHtmlCodeMode used to call findHtmlCodeCheckbox()
+  // once and bail out instantly when the control had not appeared yet, reporting
+  // "could not write one into the editor" for a page that was merely not ready --
+  // which is why running the assistant a second time on the same page succeeds.
+  const lazyDescriptionResult = await vm.runInContext(`(async () => {
+    const saved = {
+      findDescriptionSourceField,
+      findHtmlCodeCheckbox,
+      findHtmlCodeControl,
+      findHtmlCodeLabel,
+      visibleDescriptionSourceField,
+    };
+    let rendered = false;
+    setTimeout(() => { rendered = true; }, 500);
+    const lateCheckbox = {
+      checked: false,
+      click() { this.checked = true; },
+      closest: () => null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
+      id: "late-html-mode",
+    };
+    findDescriptionSourceField = () => null;
+    findHtmlCodeCheckbox = () => (rendered ? lateCheckbox : null);
+    findHtmlCodeControl = () => (rendered ? lateCheckbox : null);
+    findHtmlCodeLabel = () => null;
+    visibleDescriptionSourceField = () => (rendered && lateCheckbox.checked ? { element: {} } : null);
+    const ok = await enableHtmlCodeMode();
+    findDescriptionSourceField = saved.findDescriptionSourceField;
+    findHtmlCodeCheckbox = saved.findHtmlCodeCheckbox;
+    findHtmlCodeControl = saved.findHtmlCodeControl;
+    findHtmlCodeLabel = saved.findHtmlCodeLabel;
+    visibleDescriptionSourceField = saved.visibleDescriptionSourceField;
+    return { ok, rendered };
+  })()`, context);
+  if (!lazyDescriptionResult.ok) {
+    throw new Error(
+      `Expected enableHtmlCodeMode to wait for a lazily-rendered description control instead of bailing out, got ${JSON.stringify(lazyDescriptionResult)}`
+    );
+  }
+
   const htmlToggleResult = await vm.runInContext(`(async () => {
     const saved = {
       findHtmlCodeCheckbox,

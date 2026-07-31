@@ -2668,6 +2668,17 @@ async function enableHtmlCodeMode() {
   const existingField = findDescriptionSourceField();
   if (existingField && isVisible(existingField.element)) return true;
 
+  // eBay renders the DESCRIPTION block lazily, well after the rest of the editor
+  // is interactive. On a first pass the "Show HTML Code" control frequently does
+  // not exist yet, so every lookup below returned null and this bailed out
+  // instantly -- reporting "could not write one into the editor" for a page that
+  // simply was not ready. That is exactly why running the assistant a second
+  // time on the same page succeeds. Wait for the control before concluding it is
+  // missing.
+  if (!findHtmlCodeCheckbox() && !findHtmlCodeControl()) {
+    await waitForCondition(() => Boolean(findHtmlCodeCheckbox() || findHtmlCodeControl()), 15000, 250);
+  }
+
   const checkbox = findHtmlCodeCheckbox();
   if (checkbox) {
     if (!checkbox.checked || !visibleDescriptionSourceField()) {
