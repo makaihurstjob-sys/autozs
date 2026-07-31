@@ -163,6 +163,8 @@ async function runAssistantTest() {
   };
   let rawDescriptionEnabled = true;
   let htmlModeControlEnabled = true;
+  // Populated only by the rich-frame description regression test below.
+  const richFrames = [];
   const selectedCondition = new FakeButton("Condition New");
   selectedCondition.getAttribute = (key) => key === "aria-selected" ? "true" : key === "aria-label" ? "Condition New" : "";
 
@@ -211,6 +213,7 @@ async function runAssistantTest() {
       querySelector: (selector) => {
         if (selector === 'textarea[name="description"][id*="rawEditor"], textarea[name="description"]') return rawDescriptionEnabled ? rawDescription : null;
         if (selector === `label[for="html-mode"]`) return htmlModeLabel;
+        if (/se-rte-frame/.test(selector)) return richFrames[0] || null;
         return null;
       },
       getElementById: (id) => id === "html-mode" ? htmlModeCheckbox : null,
@@ -307,6 +310,107 @@ async function runAssistantTest() {
     throw new Error("Expected eBay search pages to keep the Listing Assistant hidden.");
   }
 
+  context.location.pathname = "/lstng";
+  context.location.search = "?draftId=5350992754210&mode=ReviseItem";
+  if (vm.runInContext("resumedWorkflowAllowedOnPage({ mode: 'create_draft', status: 'running' })", context)) {
+    throw new Error("Expected a resumed create_draft workflow to be blocked on a ReviseItem page.");
+  }
+  if (vm.runInContext("resumedWorkflowAllowedOnPage({ status: 'running' })", context)) {
+    throw new Error("Expected a resumed workflow without a mode to be blocked on a ReviseItem page.");
+  }
+  if (!vm.runInContext("resumedWorkflowAllowedOnPage({ mode: 'revise_price', status: 'running' })", context)) {
+    throw new Error("Expected a revise_price workflow to be allowed on a ReviseItem page.");
+  }
+  context.location.search = "?draftId=5350992754210&mode=AddItem";
+  if (!vm.runInContext("resumedWorkflowAllowedOnPage({ mode: 'create_draft', status: 'running' })", context)) {
+    throw new Error("Expected a resumed create_draft workflow to be allowed on an AddItem page.");
+  }
+  context.location.search = "";
+  context.location.pathname = "/sch/i.html";
+
+  const matchDialogResult = await vm.runInContext(`(async () => {
+    const savedInnerText = Object.getOwnPropertyDescriptor(document.body, "innerText");
+    document.body.innerText = "Find a match\\nSelect the condition of your item\\nNew\\nUsed";
+    const savedDialogCheck = prelistConditionDialogPresent;
+    const deferred = await continueWithoutCatalogMatch();
+    document.body.innerText = "Find a match\\nPick one of these listings";
+    const blocked = await continueWithoutCatalogMatch();
+    document.body.innerText = "";
+    return { deferred, blockedOk: blocked ? blocked.ok : null };
+  })()`, context);
+  if (matchDialogResult.deferred !== null) {
+    throw new Error(`Expected the catalog-match step to defer to the condition dialog, got ${JSON.stringify(matchDialogResult.deferred)}`);
+  }
+  if (matchDialogResult.blockedOk !== false) {
+    throw new Error(`Expected the catalog-match step to report a blocking match page, got ${JSON.stringify(matchDialogResult)}`);
+  }
+
+  // Regression: every HTML-code target toggles the same checkbox, so a slow
+  // eBay re-render must not cause a second click that flips the mode back off.
+  const htmlToggleResult = await vm.runInContext(`(async () => {
+    const saved = {
+      findHtmlCodeCheckbox,
+      findHtmlCodeLabel,
+      findHtmlCodeCheckboxNear,
+      visibleDescriptionSourceField,
+      waitForCondition,
+    };
+    let checked = false;
+    let clicks = 0;
+    const fakeCheckbox = {
+      matches: (sel) => /checkbox/.test(sel),
+      get checked() { return checked; },
+      set checked(v) { checked = v; },
+      click: () => { clicks += 1; checked = !checked; },
+      closest: () => null,
+      parentElement: null,
+      id: "html-mode",
+    };
+    const fakeLabel = { click: () => { clicks += 1; checked = !checked; }, closest: () => null, parentElement: null };
+    findHtmlCodeCheckbox = () => fakeCheckbox;
+    findHtmlCodeLabel = () => fakeLabel;
+    findHtmlCodeCheckboxNear = () => fakeCheckbox;
+    // Source field never renders in time; the old code kept clicking.
+    visibleDescriptionSourceField = () => null;
+    waitForCondition = async () => false;
+    const ok = await clickHtmlCodeCheckbox(fakeCheckbox);
+    findHtmlCodeCheckbox = saved.findHtmlCodeCheckbox;
+    findHtmlCodeLabel = saved.findHtmlCodeLabel;
+    findHtmlCodeCheckboxNear = saved.findHtmlCodeCheckboxNear;
+    visibleDescriptionSourceField = saved.visibleDescriptionSourceField;
+    waitForCondition = saved.waitForCondition;
+    return { ok, clicks, checked };
+  })()`, context);
+  if (htmlToggleResult.clicks !== 1 || htmlToggleResult.checked !== true) {
+    throw new Error(`Expected a single HTML-mode toggle that leaves the mode on, got ${JSON.stringify(htmlToggleResult)}`);
+  }
+
+  // Regression: a confirmation must never attach an eBay item that already
+  // belongs to another product (job 66 claimed product 271's live listing).
+  const conflictResult = await vm.runInContext(`(async () => {
+    const savedFetch = typeof fetch === "undefined" ? undefined : fetch;
+    fetch = async () => ({
+      ok: true,
+      json: async () => ([
+        { listing_id: "800434352064", product_id: 271, status: "scheduled" },
+        { listing_id: "800434352064", product_id: 64, status: "tombstoned" },
+        { listing_id: "800433578509", product_id: 280, status: "active" },
+      ]),
+    });
+    const stolen = await findConflictingListingProduct("800434352064", 64);
+    const own = await findConflictingListingProduct("800434352064", 271);
+    const unrelated = await findConflictingListingProduct("800433578509", 280);
+    fetch = savedFetch;
+    return { stolen, own, unrelated };
+  })()`, context);
+  if (conflictResult.stolen !== "271") {
+    throw new Error(`Expected a conflicting product to be reported, got ${JSON.stringify(conflictResult)}`);
+  }
+  if (conflictResult.own !== "" || conflictResult.unrelated !== "") {
+    throw new Error(`Expected the owning product to be allowed to reconcile, got ${JSON.stringify(conflictResult)}`);
+  }
+
+
   const packageData = {
     title: "HDX 13 Gallon Trash Bags",
     price: 21.49,
@@ -395,6 +499,51 @@ async function runAssistantTest() {
   if (!richDescriptionFilled || richDescription.innerHTML !== richDescriptionHtml) {
     throw new Error(`Expected HTML description fallback to fill rich editor, got filled=${richDescriptionFilled} html=${JSON.stringify(richDescription.innerHTML)}`);
   }
+  // Regression: the real eBay editor keeps its editable div INSIDE iframe#se-rte-frame__summary.
+  // Writing the frame body (or the rawEditor textarea) looks like it works but React drops it,
+  // which is what produced the long-running "eBay requires a description" failures. The filler
+  // must target the inner [contenteditable] and use execCommand, which React preserves.
+  const richFrameEditable = {
+    innerHTML: "",
+    innerText: "",
+    focus() {},
+    dispatchEvent() { return true; },
+  };
+  let execCommandTarget = null;
+  const richFrameDocument = {
+    querySelector: (selector) => (/contenteditable/.test(selector) ? richFrameEditable : null),
+    createRange: () => ({ selectNodeContents(node) { execCommandTarget = node; } }),
+    execCommand(command, _ui, valueArg) {
+      // eBay's editor only honours execCommand when the selection is inside the editable div.
+      if (command !== "insertHTML" || execCommandTarget !== richFrameEditable) return false;
+      richFrameEditable.innerHTML = valueArg;
+      richFrameEditable.innerText = String(valueArg).replace(/<[^>]+>/g, " ").trim();
+      return true;
+    },
+    body: { innerText: "" },
+  };
+  Object.defineProperty(richFrameDocument.body, "innerText", {
+    get: () => richFrameEditable.innerText,
+  });
+  const richFrame = {
+    id: "se-rte-frame__summary",
+    contentDocument: richFrameDocument,
+    contentWindow: {
+      focus() {},
+      getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
+    },
+    scrollIntoView() {},
+  };
+  richFrames.push(richFrame);
+  const richFrameHtml = "<div><h2>Frame description</h2><p>Ships fast.</p></div>";
+  const richFrameFilled = await vm.runInContext(`fillDescriptionRichFrame(${JSON.stringify(richFrameHtml)})`, context);
+  if (!richFrameFilled || richFrameEditable.innerHTML !== richFrameHtml) {
+    throw new Error(
+      `Expected rich-frame description fill to target the inner contenteditable, got filled=${richFrameFilled} html=${JSON.stringify(richFrameEditable.innerHTML)}`
+    );
+  }
+  richFrames.pop();
+
   const formattedFallbackDescription = vm.runInContext(
     `listingDescriptionPlainText('<div>Anim59 Home Improvement</div><div>Fast shipping</div><h1>Prime-Line Sash Balance</h1>')`,
     context
@@ -412,6 +561,96 @@ async function runAssistantTest() {
   const easternSchedule = vm.runInContext(`parseListingSchedule("2026-07-20T21:00:00Z")`, context);
   if (easternSchedule.usDate !== "07/20/2026" || easternSchedule.time12 !== "2:00 PM" || easternSchedule.time24 !== "14:00") {
     throw new Error(`Expected 5 PM Eastern to fill eBay as 2 PM Pacific, got ${JSON.stringify(easternSchedule)}`);
+  }
+  // Required item specifics render as role="menuitemcheckbox" inside the panel
+  // named by the trigger's aria-controls; the old selectors missed them.
+  const specificsResult = await vm.runInContext(`(async () => {
+    const saved = { isVisible, waitForCondition, nearbyText, delay };
+    isVisible = () => true;
+    nearbyText = () => "";
+    delay = async () => {};
+    let chosen = null;
+    let panelOpen = false;
+    const makeOption = (text, recommended) => ({
+      getAttribute: (name) => (name === "role" ? "menuitemcheckbox" : null),
+      innerText: recommended ? text + " Recommended" : text,
+      textContent: text,
+      click: () => { chosen = text; panelOpen = false; },
+    });
+    const options = [makeOption("Amphora"), makeOption("Hose Nozzle", true), makeOption("Barrel")];
+    const panel = { querySelectorAll: () => options };
+    const trigger = {
+      innerText: "",
+      getAttribute: (name) => (name === "aria-controls" ? "panel-1" : null),
+      scrollIntoView: () => {},
+      click: () => { panelOpen = true; },
+    };
+    const valueHost = {
+      querySelectorAll: (sel) => (/button/.test(sel) ? [trigger] : []),
+      querySelector: () => null,
+    };
+    const savedGet = document.getElementById;
+    document.getElementById = (id) => (id === "panel-1" && panelOpen ? panel : null);
+    waitForCondition = async (predicate) => Boolean(predicate());
+    const row = { key: "Type", required: true, valueHost };
+    // Value shows up once an option is clicked.
+    ebayItemSpecificRowValue = (r) => (chosen ? chosen : "");
+    const ok = await chooseEbayItemSpecificOption(row, []);
+    document.getElementById = savedGet;
+    isVisible = saved.isVisible; waitForCondition = saved.waitForCondition;
+    nearbyText = saved.nearbyText; delay = saved.delay;
+    return { ok, chosen };
+  })()`, context);
+  if (!specificsResult.ok || specificsResult.chosen !== "Hose Nozzle") {
+    throw new Error(`Expected the recommended menuitemcheckbox option to be chosen, got ${JSON.stringify(specificsResult)}`);
+  }
+
+  // The minutes select has a generated name, so it must be found by position
+  // inside the schedule panel rather than by scanning every select on the page
+  // (which could bind minutes to an unrelated numeric control such as quantity).
+  const scopeResult = vm.runInContext(`(() => {
+    const savedQS = document.querySelector;
+    const savedIsVisible = isVisible;
+    isVisible = () => true;
+    const makeSelect = (name, values) => ({
+      tagName: "SELECT", name, id: "", value: values[0],
+      getAttribute: () => null,
+      options: values.map((v) => ({ value: v, textContent: v })),
+    });
+    const quantity = makeSelect("quantityPref", ["1", "2", "3"]);
+    const hours = makeSelect("localizedStartHours", ["05", "06"]);
+    const minutes = makeSelect("s0-xyz-generated", ["40", "00"]);
+    const meridian = makeSelect("meridian", ["PM", "AM"]);
+    const panel = { querySelectorAll: () => [hours, minutes, meridian] };
+    const dayField = { parentElement: panel };
+    panel.parentElement = null;
+    document.querySelector = (sel) => (/scheduleStartDate/.test(sel) ? dayField : null);
+    const found = scheduleTimeSelects();
+    document.querySelector = savedQS;
+    isVisible = savedIsVisible;
+    return {
+      hour: found.hour && found.hour.name,
+      minute: found.minute && found.minute.name,
+      meridiem: found.meridiem && found.meridiem.name,
+      pickedQuantity: found.minute === quantity || found.hour === quantity,
+    };
+  })()`, context);
+  if (scopeResult.minute !== "s0-xyz-generated" || scopeResult.hour !== "localizedStartHours" || scopeResult.pickedQuantity) {
+    throw new Error(`Expected schedule selects scoped to the schedule panel, got ${JSON.stringify(scopeResult)}`);
+  }
+
+  // Offset-less schedules are Eastern wall time; eBay's controls are Pacific.
+  const easternWallTime = vm.runInContext(`parseListingSchedule("2026-08-05T20:40:00")`, context);
+  if (easternWallTime.usDate !== "08/05/2026" || easternWallTime.time12 !== "5:40 PM" || easternWallTime.time24 !== "17:40") {
+    throw new Error(`Expected 8:40 PM Eastern to fill eBay as 5:40 PM Pacific, got ${JSON.stringify(easternWallTime)}`);
+  }
+  const easternEveningSlot = vm.runInContext(`parseListingSchedule("2026-07-30T19:00:00")`, context);
+  if (easternEveningSlot.usDate !== "07/30/2026" || easternEveningSlot.time12 !== "4:00 PM") {
+    throw new Error(`Expected 7 PM Eastern to fill eBay as 4 PM Pacific, got ${JSON.stringify(easternEveningSlot)}`);
+  }
+  const easternStandardTime = vm.runInContext(`parseListingSchedule("2026-01-15T19:00:00")`, context);
+  if (easternStandardTime.usDate !== "01/15/2026" || easternStandardTime.time12 !== "4:00 PM") {
+    throw new Error(`Expected 7 PM EST to fill eBay as 4 PM PST, got ${JSON.stringify(easternStandardTime)}`);
   }
   const doubledTitleMatch = vm.runInContext(
     `fieldValueMatchesExactly({ tagName: "INPUT", value: "1313 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen | FREE SHIPPING" }, "13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen | FREE SHIPPING")`,
@@ -477,24 +716,28 @@ async function runAssistantTest() {
     throw new Error(`Expected eBay's generic live confirmation to initially parse as listed, got ${JSON.stringify(genericLiveConfirmation)}`);
   }
   context.location.search = "?draftId=5314800361713&mode=AddItem";
+  const trackedJob = {
+    id: 26,
+    product_id: 29,
+    ebay_draft_id: "5314800361713",
+    listing_schedule_at: "2099-07-21T20:40:00",
+    status: "needs_review",
+  };
   context.fetch = async (url, options = {}) => {
-    reconciliationCalls.push({ url: String(url), body: options.body || "" });
+    reconciliationCalls.push({ url: String(url), body: options.body || "", method: options.method || "GET" });
     if (String(url).includes("/listing-jobs?")) {
-      return {
-        ok: true,
-        json: async () => ([{
-          id: 26,
-          product_id: 29,
-          ebay_draft_id: "5314800361713",
-          listing_schedule_at: "2099-07-21T20:40:00",
-          status: "needs_review",
-        }]),
-      };
+      return { ok: true, json: async () => ([trackedJob]) };
+    }
+    // Single-job lookup: the list endpoint is too slow to sit on.
+    if (/\/listing-jobs\/\d+$/.test(String(url)) && (options.method || "GET") === "GET") {
+      return { ok: true, json: async () => trackedJob };
     }
     return { ok: true, json: async () => ({ ok: true }) };
   };
   await vm.runInContext("reportEbayPublishConfirmation()", context);
-  const recoveredJobCall = reconciliationCalls.find((call) => call.url.endsWith("/listing-jobs/26"));
+  const recoveredJobCall = reconciliationCalls.find(
+    (call) => call.url.endsWith("/listing-jobs/26") && call.method === "PATCH"
+  );
   if (!recoveredJobCall) {
     throw new Error(`Expected stripped reconciliation parameters to recover through the matching draft ID, got ${JSON.stringify(reconciliationCalls)}`);
   }
@@ -511,11 +754,13 @@ async function runAssistantTest() {
   ) {
     throw new Error(`Expected matching-draft recovery to complete the job, got ${recoveredJobCall.body}`);
   }
-  context.location.search = "?autozs_reconcile_listing=1&autozs_product_id=34&autozs_job_id=22&autozs_account_key=main-store";
+  context.location.search = "?autozs_reconcile_listing=1&autozs_product_id=34&autozs_job_id=22&autozs_account_key=a.m.anim-59";
   context.location.hash = "";
   vm.runInContext("readAutoWorkflowState = () => ({}); readSavedProductId = () => ''; readSavedJobId = () => ''; writeAutoWorkflowState = (value) => value;", context);
   await vm.runInContext("reportEbayPublishConfirmation()", context);
-  const reconcileJobCall = reconciliationCalls.find((call) => call.url.endsWith("/listing-jobs/22"));
+  const reconcileJobCall = reconciliationCalls.find(
+    (call) => call.url.endsWith("/listing-jobs/22") && call.method === "PATCH"
+  );
   if (!reconcileJobCall) {
     throw new Error(`Expected listing confirmation to reconcile job 22, got ${JSON.stringify(reconciliationCalls)}`);
   }
@@ -576,10 +821,25 @@ async function runAssistantTest() {
     finalButtonVisible = false;
   };
   finalScheduleButton.getBoundingClientRect = () => finalButtonVisible ? { width: 120, height: 32 } : { width: 0, height: 0 };
+  // A vanished button alone is not proof of submission: eBay leaving the item
+  // in Drafts while the job reported "waiting for confirmation" is exactly how
+  // listings silently failed.
+  const unconfirmedFinalClick = await vm.runInContext("submitScheduledListing({ listing_schedule_at: '2026-07-22T19:00:00' }, 20)", context);
+  if (unconfirmedFinalClick.ok) {
+    throw new Error(`Expected an unconfirmed final List click to be reported as still a draft, got ${JSON.stringify(unconfirmedFinalClick)}`);
+  }
+  finalButtonVisible = true;
+  finalScheduleButton.clicked = false;
+  finalScheduleButton.click = () => {
+    finalScheduleButton.clicked = true;
+    finalButtonVisible = false;
+    context.location.pathname = "/sh/lst/scheduled";
+  };
   const acceptedFinalClick = await vm.runInContext("submitScheduledListing({ listing_schedule_at: '2026-07-22T19:00:00' }, 20)", context);
   if (!acceptedFinalClick.ok || !finalScheduleButton.clicked) {
-    throw new Error(`Expected a responsive final List click to be reported as accepted, got ${JSON.stringify(acceptedFinalClick)}`);
+    throw new Error(`Expected a confirmed final List click to be reported as accepted, got ${JSON.stringify(acceptedFinalClick)}`);
   }
+  context.location.pathname = "/lstng";
   const revisionSubmitButton = new FakeButton("Submit revisions");
   context.document.querySelectorAll = (selector) => {
     if (selector === "button, [role='button'], input[type='submit']") return [revisionSubmitButton];
@@ -709,6 +969,37 @@ async function runAssistantTest() {
   if (inferredVacuumSpecifics.Type !== "Handheld") {
     throw new Error(`Expected the PACKOUT wet/dry vacuum to infer eBay Type Handheld, got ${JSON.stringify(inferredVacuumSpecifics.Type)}.`);
   }
+  const requiredTypeField = new FakeField({
+    id: "attributes-type",
+    ariaLabel: "Type",
+    parentText: "Type Required",
+  });
+  context.__requiredTypeField = requiredTypeField;
+  const needsTypeFallback = vm.runInContext(`
+    (() => {
+      const originalCandidateFields = candidateFields;
+      candidateFields = () => [{ element: __requiredTypeField, haystack: "type required" }];
+      const result = itemSpecificNeedsFallback("Type");
+      candidateFields = originalCandidateFields;
+      return result;
+    })()
+  `, context);
+  if (!needsTypeFallback) {
+    throw new Error("Expected a blank required Type item specific to request a recommended fallback.");
+  }
+  requiredTypeField.value = "Spray Nozzle";
+  const populatedTypeNeedsFallback = vm.runInContext(`
+    (() => {
+      const originalCandidateFields = candidateFields;
+      candidateFields = () => [{ element: __requiredTypeField, haystack: "type required" }];
+      const result = itemSpecificNeedsFallback("Type");
+      candidateFields = originalCandidateFields;
+      return result;
+    })()
+  `, context);
+  if (populatedTypeNeedsFallback) {
+    throw new Error("Expected an existing Type value to be preserved instead of replaced by a fallback.");
+  }
 
   let conditionPopupOpen = false;
   let conditionSelected = false;
@@ -794,6 +1085,13 @@ async function runAssistantTest() {
   if (!vm.runInContext(`itemSpecificOptionMatches(__customBrandOption, "PLUMBFLEX")`, context)) {
     throw new Error("Expected eBay's Add custom value Brand option to match the supplied brand.");
   }
+  const noBrandSpecifics = vm.runInContext(`inferredItemSpecifics(${JSON.stringify({
+    title: "Industrial Pistol Nozzle",
+    description: "Heavy duty spray nozzle",
+  })})`, context);
+  if (noBrandSpecifics.Brand) {
+    throw new Error("Brand inference should remain absent so the fill workflow can apply the explicit Unbranded default.");
+  }
   context.document.querySelectorAll = originalQuerySelectorAll;
   context.document.querySelector = originalQuerySelector;
 
@@ -854,6 +1152,19 @@ async function runAssistantTest() {
   );
   if (uploadResult.ok || !uploadResult.message.includes("could not find eBay image file input")) {
     throw new Error(`Expected safe image upload failure, got ${JSON.stringify(uploadResult)}`);
+  }
+
+  if (!source.includes("repairResult = await repairCriticalListingFields(pkg)")) {
+    throw new Error("Expected the automatic workflow to repair fields after eBay's post-upload render.");
+  }
+  if (!source.includes('fillEbayItemSpecific("Brand", "Unbranded")')) {
+    throw new Error("Expected the repair pass to fall back to Unbranded.");
+  }
+  if (!source.includes('itemSpecificMatches(key, "Unbranded")')) {
+    throw new Error("Expected final checks to accept the required Unbranded fallback.");
+  }
+  if (!source.includes("const finalRepairResult = await repairCriticalListingFields(pkg)")) {
+    throw new Error("Expected a second repair pass after eBay's final editor render.");
   }
 }
 

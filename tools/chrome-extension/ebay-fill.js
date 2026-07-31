@@ -2482,6 +2482,10 @@ async function fillDescription(value) {
   const htmlValue = String(value || "");
   if (descriptionSourceMatches(htmlValue)) return true;
   const isHtmlDescription = looksLikeHtml(htmlValue);
+  // Try the rich-text iframe first. Writing the rawEditor textarea (fillDescriptionHtmlSource)
+  // appears to succeed but React re-renders from its own state and drops the value, which is
+  // what produced the long-running "eBay requires a description" failures.
+  if (await fillDescriptionRichFrame(htmlValue)) return true;
   if (isHtmlDescription && await fillDescriptionHtmlSource(htmlValue)) return true;
   const text = listingDescriptionPlainText(htmlValue);
   if (await fillDescriptionNativeFrame(htmlValue)) return true;
@@ -2542,6 +2546,39 @@ async function fillDescription(value) {
     } catch {}
   }
   return false;
+}
+
+async function fillDescriptionRichFrame(htmlValue) {
+  if (!htmlValue.trim()) return false;
+  const frame = document.querySelector(
+    'iframe#se-rte-frame__summary, iframe[name="se-rte-frame__summary"], iframe[id*="se-rte-frame"], iframe[aria-label*="Description" i]'
+  );
+  if (!frame) return false;
+  try {
+    const frameDocument = frame.contentDocument;
+    const frameWindow = frame.contentWindow;
+    if (!frameDocument || !frameWindow) return false;
+    // The editable node is a div[contenteditable="true"] INSIDE the frame, not the frame body.
+    // Aiming at the body is why the old fallback never worked: execCommand returns false there,
+    // and the body.innerHTML write it falls back to is discarded on the next React render.
+    const editable = frameDocument.querySelector('[contenteditable="true"]');
+    if (!editable) return false;
+    frame.scrollIntoView?.({ block: "center" });
+    frameWindow.focus();
+    editable.focus();
+    const range = frameDocument.createRange();
+    range.selectNodeContents(editable);
+    const selection = frameWindow.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    // execCommand is a real browser editing operation, so React keeps the resulting DOM.
+    if (!frameDocument.execCommand("insertHTML", false, htmlValue)) return false;
+    editable.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertHTML", data: htmlValue }));
+    await delay(400);
+    return !listingDescriptionIsEmpty();
+  } catch {
+    return false;
+  }
 }
 
 async function fillDescriptionNativeFrame(htmlValue) {
