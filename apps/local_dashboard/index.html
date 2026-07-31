@@ -36,6 +36,17 @@
         --code-bg: #0a0d0c;
         --capture-bg: #131916;
       }
+      body[data-marketplace="depop"] {
+        --bg: #fff7f8; --panel: #fffdfd; --ink: #2a1015; --muted: #795c62;
+        --line: #efd8dd; --accent: #c52f49; --danger: #9d2539; --soft: #fbe9ed;
+      }
+      body[data-marketplace="depop"][data-theme="dark"] {
+        --bg: #11080a; --panel: #1b0d11; --ink: #fff5f6; --muted: #c6a3aa;
+        --line: #432029; --accent: #ff4d69; --danger: #ff765f; --soft: #2b1118;
+      }
+      .marketplace-switch { display:inline-flex; gap:4px; padding:3px; border:1px solid var(--line); border-radius:999px; background:var(--soft); }
+      .marketplace-switch button { border:0; border-radius:999px; padding:6px 11px; background:transparent; color:var(--muted); font-weight:800; cursor:pointer; }
+      .marketplace-switch button.active { background:var(--accent); color:#fff; }
       * { box-sizing: border-box; }
       body {
         margin: 0;
@@ -2842,8 +2853,9 @@
             <h1>AutoZS</h1>
             <div class="poll-status" id="poll-status"><span class="poll-dot"></span><span id="poll-label">Live</span></div>
           </div>
-          <div class="muted">Supplier-to-eBay automation dashboard</div>
+          <div class="muted" id="marketplace-subtitle">Supplier-to-eBay automation dashboard</div>
           <div class="header-runtime">
+            <div class="marketplace-switch" id="marketplace-switch" aria-label="Marketplace mode"></div>
             <div class="header-store" id="header-store-selector"></div>
             <div class="header-stats" id="header-stats"></div>
             <div class="header-message" id="message" title="Loading...">Loading...</div>
@@ -2887,7 +2899,9 @@
       }
       let API = normalizeApiBaseUrl(queryApiBase || localStorage.getItem(API_STORAGE_KEY) || window.EBAY_AUTOMATION_API_BASE_URL || defaultApiBaseUrl());
       if (queryApiBase) localStorage.setItem(API_STORAGE_KEY, API);
-      const tabs = ["Research", "Products", "eBay Listings", "Calendar", "Stats", "Marketing", "Orders", "Customer Service", "Settings"];
+      const ebayTabs = ["Research", "Products", "eBay Listings", "Calendar", "Stats", "Marketing", "Orders", "Customer Service", "Settings"];
+      const depopTabs = ["Products", "Depop Listings", "Calendar", "Orders", "Settings"];
+      let marketplaceMode = localStorage.getItem("autozsMarketplaceMode") === "depop" ? "depop" : "ebay";
       let active = "Products";
       let addProductsView = null;
       let addProductsBatchTab = "urls";
@@ -2929,7 +2943,7 @@
       let extensionAutoImportBatch = null;
       let pendingProductImports = [];
       let lastEbayOAuthState = "";
-      let state = { candidates: [], savedSellers: [], products: [], captureQueue: { total: 0, items: [] }, listingQueue: [], listingJobs: [], ebayListings: [], ebayRevisionJobs: [], sourceRefreshJobs: [], automationRuns: [], snapshots: [], refreshQueue: { items: [], total: 0, needs_refresh: 0, stale_after_days: 7 }, orders: [], giftCards: [], supplierOrders: [], customerConversations: [], customerTemplates: [], financeOverview: null, settings: {}, ebayConnection: null, ebayAccounts: [], ebayBrowserAccount: null, workers: [], listingViewsSummary: null, statsOverview: null, trafficOverview: null, priceHistory: {} };
+      let state = { candidates: [], savedSellers: [], products: [], captureQueue: { total: 0, items: [] }, listingQueue: [], listingJobs: [], ebayListings: [], ebayRevisionJobs: [], sourceRefreshJobs: [], automationRuns: [], snapshots: [], refreshQueue: { items: [], total: 0, needs_refresh: 0, stale_after_days: 7 }, orders: [], giftCards: [], supplierOrders: [], customerConversations: [], customerTemplates: [], financeOverview: null, settings: {}, ebayConnection: null, ebayAccounts: [], ebayBrowserAccount: null, depopAccounts: [], depopVariants: [], depopJobs: [], workers: [], listingViewsSummary: null, statsOverview: null, trafficOverview: null, priceHistory: {} };
       let lastStateSignature = "";
       let refreshInFlight = false;
       let pendingSilentRender = false;
@@ -2992,6 +3006,7 @@
       }
 
       applyTheme(localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY) || "system");
+      document.body.dataset.marketplace = marketplaceMode;
       window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
         if (currentThemePreference() === "system") applyTheme("system");
       });
@@ -3041,6 +3056,9 @@
           finance: nextState.financeOverview,
           ebayAccounts: nextState.ebayAccounts,
           ebayBrowserAccount: nextState.ebayBrowserAccount,
+          depopAccounts: nextState.depopAccounts,
+          depopVariants: nextState.depopVariants?.map((variant) => [variant.id, variant.product_id, variant.status, variant.updated_at]),
+          depopJobs: nextState.depopJobs?.map((job) => [job.id, job.variant_id, job.status, job.progress, job.updated_at]),
           workers: nextState.workers?.map((worker) => [worker.worker_id, worker.status, worker.last_seen_at, worker.seconds_since_seen, worker.updated_at]),
           settings: nextState.settings,
           listingViews: nextState.listingViewsSummary,
@@ -3093,7 +3111,7 @@
         refreshInFlight = true;
         try {
           if (silent) updatePollStatus("Syncing", "syncing");
-          const [candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, giftCards, supplierOrders, customerConversations, customerTemplates, financeOverview, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, listingViewsSummary, statsOverview, trafficOverview] = await Promise.all([
+          const [candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, giftCards, supplierOrders, customerConversations, customerTemplates, financeOverview, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, depopAccounts, depopVariants, depopJobs, workers, listingViewsSummary, statsOverview, trafficOverview] = await Promise.all([
             request("/research/candidates"),
             request("/research/sellers"),
             request("/products"),
@@ -3118,6 +3136,9 @@
             request("/ebay/connection"),
             request("/ebay/accounts"),
             request("/ebay/browser-account"),
+            request("/depop/accounts"),
+            request("/depop/variants"),
+            request("/depop/jobs"),
             request("/workers"),
             request("/ebay/listing-views/summary"),
             request(`/stats/overview?range=${encodeURIComponent(statsRange)}&grain=${encodeURIComponent(statsGrain)}&account=${encodeURIComponent(statsAccount)}`),
@@ -3126,7 +3147,7 @@
           if (statsOverview?.selected_account && statsOverview.selected_account !== statsAccount) {
             statsAccount = statsOverview.selected_account;
           }
-          const nextState = { candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, giftCards, supplierOrders, customerConversations, customerTemplates, financeOverview, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, workers, listingViewsSummary, statsOverview, trafficOverview, priceHistory: state.priceHistory || {} };
+          const nextState = { candidates, savedSellers, products, captureQueue, listingQueue, listingJobs, ebayListings, ebaySyncRuns, ebayRevisionJobs, ebayRevisionBatches, sourceRefreshJobs, automationRuns, snapshots, refreshQueue, orders, giftCards, supplierOrders, customerConversations, customerTemplates, financeOverview, settings, ebayConnection, ebayAccounts, ebayBrowserAccount, depopAccounts, depopVariants, depopJobs, workers, listingViewsSummary, statsOverview, trafficOverview, priceHistory: state.priceHistory || {} };
           reconcilePendingProductImports(nextState);
           updateExtensionAutoImportProgress(nextState);
           updateEbaySyncView(nextState);
@@ -3384,6 +3405,36 @@
         const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`);
         return Number.isNaN(date.getTime()) ? null : date;
       }
+      function zoneOffsetMs(date, timeZone) {
+        const parts = Object.fromEntries(
+          new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
+            .formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+        );
+        const asUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+        return asUtc - date.getTime();
+      }
+      function naiveZonedTimeToDate(text, timeZone) {
+        const [datePart, timePart = "00:00:00"] = String(text).trim().split(/[T ]/);
+        const [year, month, day] = datePart.split("-").map(Number);
+        const [hour = 0, minute = 0, second = 0] = timePart.split(":").map(Number);
+        if (![year, month, day].every(Number.isFinite)) return new Date(NaN);
+        const wallUtc = Date.UTC(year, month - 1, day, hour, minute, Math.trunc(second) || 0);
+        let instant = wallUtc;
+        for (let pass = 0; pass < 2; pass += 1) instant = wallUtc - zoneOffsetMs(new Date(instant), timeZone);
+        return new Date(instant);
+      }
+      // listing_schedule_at is stored as naive Eastern wall time (see the Chrome
+      // extension's identical parseListingSchedule and AutoZS's timezone
+      // convention notes). appDate() reads offset-less values as UTC, which put
+      // scheduled calendar items on the wrong day. Values with an explicit
+      // offset are still honored as written.
+      function scheduleDate(value) {
+        if (!value) return null;
+        if (value instanceof Date) return value;
+        const text = String(value).trim();
+        const date = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? new Date(text) : naiveZonedTimeToDate(text, "America/New_York");
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
       function formatDateTime(value) {
         if (!value) return "-";
         const date = appDate(value);
@@ -3511,9 +3562,30 @@
       window.addEventListener("resize", () => positionHoverTooltip(activeTooltipAnchor));
 
       function renderNav() {
+        const tabs = marketplaceMode === "depop" ? depopTabs : ebayTabs;
         document.getElementById("nav").innerHTML = `<button class="nav nav-add-products" onclick="openAddProducts('launcher')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add Products</button>` + tabs.map((tab) =>
-          `<button class="nav ${tab === active ? "active" : ""}" onclick="setActiveTab('${tab}')">${tab === "Products" ? "Drafts" : tab === "eBay Listings" ? "Listings" : tab}</button>`
+          `<button class="nav ${tab === active ? "active" : ""}" onclick="setActiveTab('${tab}')">${tab === "Products" ? "Drafts" : ["eBay Listings", "Depop Listings"].includes(tab) ? "Listings" : tab}</button>`
         ).join("");
+      }
+
+      function setMarketplaceMode(mode) {
+        marketplaceMode = mode === "depop" ? "depop" : "ebay";
+        localStorage.setItem("autozsMarketplaceMode", marketplaceMode);
+        document.body.dataset.marketplace = marketplaceMode;
+        active = "Products";
+        selectedProductIds.clear();
+        render();
+      }
+
+      function renderMarketplaceSwitch() {
+        const switcher = document.getElementById("marketplace-switch");
+        if (switcher) switcher.innerHTML = ["ebay", "depop"].map((mode) =>
+          `<button class="${marketplaceMode === mode ? "active" : ""}" onclick="setMarketplaceMode('${mode}')">${mode === "ebay" ? "eBay" : "Depop"}</button>`
+        ).join("");
+        const subtitle = document.getElementById("marketplace-subtitle");
+        if (subtitle) subtitle.textContent = marketplaceMode === "depop"
+          ? "Personal clothing-to-Depop automation dashboard"
+          : "Supplier-to-eBay automation dashboard";
       }
 
       function setActiveTab(tab) {
@@ -3543,6 +3615,13 @@
       function renderHeaderStoreSelector() {
         const container = document.getElementById("header-store-selector");
         if (!container) return;
+        if (marketplaceMode === "depop") {
+          const accounts = state.depopAccounts || [];
+          container.innerHTML = `<select aria-label="Selected Depop account">
+            ${accounts.length ? accounts.map((account) => `<option value="${escAttr(account.key)}">${esc(account.label)}${account.username ? ` (@${esc(account.username)})` : ""}</option>`).join("") : `<option value="">Add Depop account in Settings</option>`}
+          </select>`;
+          return;
+        }
         const stores = availableEbayStores();
         const selectedKey = selectedEbayStoreKey();
         const storeOptions = stores.map((store) => `<option value="${escAttr(store.key)}" ${store.key === selectedKey ? "selected" : ""}>${esc(ebayStoreDisplayName(store))}</option>`).join("");
@@ -3558,13 +3637,18 @@
         if (!container) return;
         const worker = primaryWorker();
         const workerLabel = workerStatusLabel(worker);
-        const stats = [
+        const stats = (marketplaceMode === "depop" ? [
+          ["Drafts", draftProducts().length],
+          ["Variants", (state.depopVariants || []).length],
+          ["Queued", (state.depopJobs || []).filter((job) => ["queued", "running"].includes(job.status)).length],
+          ["Published", (state.depopVariants || []).filter((variant) => variant.status === "published").length],
+        ] : [
           ["Drafts", draftProducts().length],
           ["Scheduled", ebayListingItems().filter(listingIsScheduled).length],
           ["Listings", ebayListingItems().filter(listingIsLive).length],
           ["Orders", state.orders.length],
           ["30D Views", Number(state.listingViewsSummary?.views_30d || 0).toLocaleString()],
-        ].map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
+        ]).map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
         const workerClass = worker ? `worker-${worker.status || "offline"}` : "worker-offline";
         container.innerHTML = `${stats}<span class="header-stat ${workerClass}" title="${escAttr(workerStatusTitle(worker))}"><strong>${esc(workerLabel)}</strong></span>`;
       }
@@ -3619,6 +3703,7 @@
 
       function render() {
         hideHoverTooltip();
+        renderMarketplaceSwitch();
         renderNav();
         renderHeaderStoreSelector();
         renderHeaderStats();
@@ -3632,6 +3717,7 @@
           if (active === "Research") panel.innerHTML = researchHtml();
           if (active === "Products") panel.innerHTML = productsHtml();
           if (active === "eBay Listings") panel.innerHTML = listingsHtml();
+          if (active === "Depop Listings") panel.innerHTML = depopListingsHtml();
           if (active === "Calendar") panel.innerHTML = calendarHtml();
           if (active === "Stats") panel.innerHTML = statsHtml();
           if (active === "Marketing") panel.innerHTML = marketingHtml();
@@ -3745,6 +3831,7 @@
           ...latestSourceRefreshJobs(state.sourceRefreshJobs || []).map(sourceRefreshJobActivityEntry),
           ...(state.ebayRevisionJobs || []).map(ebayRevisionJobActivityEntry),
           ...(state.ebayRevisionBatches || []).map(ebayRevisionBatchActivityEntry),
+          ...(state.depopJobs || []).map(depopJobActivityEntry),
         ].filter(Boolean);
         return entries
           .sort((a, b) => {
@@ -3753,6 +3840,22 @@
             return jobActivityTimeValue(b.updatedAt) - jobActivityTimeValue(a.updatedAt);
           })
           .slice(0, 40);
+      }
+
+      function depopJobActivityEntry(job) {
+        const variant = (state.depopVariants || []).find((item) => item.id === job.variant_id);
+        return {
+          kind: "Depop listing",
+          id: job.id,
+          group: jobActivityGroup(job.status),
+          status: job.status,
+          title: variant?.title || `Depop variant ${job.variant_id}`,
+          subtitle: `${job.account_key} · ${job.action}`,
+          meta: [job.scheduled_for ? `Run after ${formatDateTime(job.scheduled_for)}` : "Dedicated Depop profile", `${job.attempts || 0} attempt(s)`],
+          message: job.message || "",
+          updatedAt: job.updated_at || job.created_at,
+          progress: Number(job.progress || 0),
+        };
       }
 
       function productCaptureActivityEntry(item) {
@@ -4105,6 +4208,7 @@
           ["templates", "Templates"],
           ["keywords", "Keywords"],
           ["buyer", "Buyer Accounts"],
+          ["depop", "Depop Accounts"],
           ["notifications", "Notifications"],
         ];
         return `<div class="settings-shell">
@@ -4123,8 +4227,40 @@
         if (settingsSection === "templates") return templateSettingsHtml();
         if (settingsSection === "keywords") return keywordSettingsHtml();
         if (settingsSection === "buyer") return buyerAccountSettingsHtml();
+        if (settingsSection === "depop") return depopAccountSettingsHtml();
         if (settingsSection === "notifications") return notificationSettingsHtml();
         return supplierSettingsHtml();
+      }
+
+      function depopAccountSettingsHtml() {
+        const accounts = state.depopAccounts || [];
+        return `<div class="settings-card"><h3>Depop browser accounts</h3>
+          <p class="muted">Use a dedicated signed-in Chrome profile. Browser writes stay off until you explicitly enable them.</p>
+          ${accounts.map((account) => `<div class="row-between"><div><strong>${esc(account.label)}</strong><div class="muted">@${esc(account.username || "not connected")} · ${esc(account.chrome_profile_root || "profile path not set")}</div></div><span class="status">${account.writes_enabled ? "writes enabled" : "read only"}</span></div>`).join("")}
+          <div class="form-grid">
+            <label>Account key<input id="depop-account-key" value="personal-closet" /></label>
+            <label>Label<input id="depop-account-label" value="Personal Closet" /></label>
+            <label>Username<input id="depop-account-username" placeholder="your Depop username" /></label>
+            <label>Dedicated Chrome profile path<input id="depop-profile-root" placeholder="C:\\AutoZS\\profiles\\depop" /></label>
+            <label><input id="depop-writes-enabled" type="checkbox" /> Enable browser writes</label>
+          </div>
+          <button onclick="saveDepopAccount()">Save Depop account</button>
+        </div>`;
+      }
+
+      async function saveDepopAccount() {
+        await request("/depop/accounts", {
+          method: "POST",
+          body: JSON.stringify({
+            key: document.getElementById("depop-account-key").value.trim(),
+            label: document.getElementById("depop-account-label").value.trim(),
+            username: document.getElementById("depop-account-username").value.trim(),
+            chrome_profile_root: document.getElementById("depop-profile-root").value.trim(),
+            enabled: true,
+            writes_enabled: document.getElementById("depop-writes-enabled").checked,
+          }),
+        });
+        await refreshAll();
       }
 
       function supplierSettingsHtml() {
@@ -5449,7 +5585,15 @@
       }
 
       function draftProducts() {
-        return state.products.filter((product) => !isScheduledProduct(product));
+        return state.products.filter((product) =>
+          !isScheduledProduct(product) && productHasMarketplace(product, marketplaceMode)
+        );
+      }
+
+      function productHasMarketplace(product, marketplace) {
+        const drafts = product.listing_drafts || [];
+        if (marketplace === "depop") return drafts.some((draft) => draft.marketplace === "depop");
+        return drafts.length === 0 || drafts.some((draft) => draft.marketplace === "ebay");
       }
 
       function scheduledProductIdSet() {
@@ -5908,6 +6052,14 @@
       }
 
       function productCardPrimaryActionHtml(product) {
+        if (marketplaceMode === "depop") {
+          const variant = (state.depopVariants || []).find((item) => item.product_id === product.id);
+          return `<div class="product-card-primary-action">
+            <button class="${variant ? "secondary" : ""}" onclick="${variant ? `queueDepopVariant(${variant.id})` : `createDepopVariant(${product.id})`}">
+              ${variant ? (variant.status === "ready" ? "Queue Depop" : esc(variant.status.replaceAll("_", " "))) : "Create variant"}
+            </button>
+          </div>`;
+        }
         if (supplier(product)?.in_stock === false) {
           return `<div class="product-card-primary-action">
             <button class="secondary" disabled title="This supplier product cannot be delivered to the configured location">
@@ -6136,6 +6288,21 @@
             <button class="secondary" onclick="copyEbayApiPayload(${product.id})">Copy API Payload</button>
           </div>
         </details>`;
+      }
+
+      function depopListingsHtml() {
+        const variants = state.depopVariants || [];
+        if (!variants.length) return `<div class="needs-data">No Depop variants yet. Open a Depop product draft and create its first 3–4 image variation.</div>`;
+        return `<div class="section-heading"><div><h2>Depop Listings</h2><div class="muted">Owned inventory using your original photos.</div></div></div>
+          <div class="cards">${variants.map((variant) => {
+            const product = state.products.find((item) => item.id === variant.product_id);
+            const job = (state.depopJobs || []).find((item) => item.variant_id === variant.id && !["completed", "cancelled"].includes(item.status));
+            return `<article class="card">
+              <div class="row-between"><div><strong>${esc(variant.title)}</strong><div class="muted">${esc(variant.variant_key)} · ${variant.image_ids.length}/4 images · $${Number(variant.price).toFixed(2)}</div></div><span class="status">${esc(job?.status || variant.status)}</span></div>
+              <div class="muted">${esc([variant.brand, variant.size, variant.condition, variant.color].filter(Boolean).join(" · ") || product?.sku || "")}</div>
+              <div class="actions"><button onclick="queueDepopVariant(${variant.id})" ${variant.status !== "ready" ? "disabled" : ""}>Queue in Depop worker</button></div>
+            </article>`;
+          }).join("")}</div>`;
       }
 
       function listingsHtml() {
@@ -6506,6 +6673,44 @@
           ${compactFactHtml("Views", listingViewsHtml(item), listingViewsTooltip(item))}
           ${compactFactHtml("Orders", listingOrdersHtml(item), listingOrdersTooltip(item))}
         </div>`;
+      }
+
+      async function createDepopVariant(productId) {
+        const product = state.products.find((item) => item.id === productId);
+        const account = (state.depopAccounts || []).find((item) => item.enabled);
+        if (!product || !account) {
+          message("Add and enable a Depop account in Settings first.");
+          settingsSection = "depop";
+          active = "Settings";
+          render();
+          return;
+        }
+        const draft = (product.listing_drafts || []).find((item) => item.marketplace === "depop") || product.listing_drafts?.[0];
+        const imageIds = (product.images || []).slice(0, 4).map((image) => image.id);
+        const price = Number(prompt("Depop price", draft?.calculated_price || 20));
+        if (!Number.isFinite(price) || price <= 0) return;
+        await request("/depop/variants", {
+          method: "POST",
+          body: JSON.stringify({
+            product_id: product.id,
+            account_key: account.key,
+            variant_key: `look-${Date.now()}`,
+            title: draft?.title || product.title,
+            description: draft?.description || "",
+            price,
+            image_ids: imageIds,
+          }),
+        });
+        await refreshAll();
+      }
+
+      async function queueDepopVariant(variantId) {
+        try {
+          await request("/depop/jobs", { method: "POST", body: JSON.stringify({ variant_id: variantId, action: "create" }) });
+          await refreshAll();
+        } catch (error) {
+          message(error.message);
+        }
       }
 
       function listingViewsHtml(item) {
@@ -8459,7 +8664,7 @@
         } : null;
         const latestSource = newest(state.sourceRefreshJobs || []);
         const latestRevision = newest(state.ebayRevisionBatches || []);
-        const row = (label, item, result, store = "Main Store") => [
+        const row = (label, item, result, store = "a.m.anim-59") => [
           `<strong>${esc(label)}</strong>`,
           esc(store),
           item ? esc(new Date(dateValue(item)).toLocaleString()) : "Never",
@@ -8889,7 +9094,7 @@
             </div>
           </div>
           <div class="metrics">
-            <div class="metric"><span>Scheduled this month</span><strong>${monthEvents.filter((event) => event.type === "scheduled").length}</strong></div>
+            <div class="metric"><span>Scheduled this month</span><strong>${monthEvents.filter((event) => event.type === "scheduled" && !event.needsAttention).length}</strong></div>
             <div class="metric"><span>Needs attention</span><strong>${monthEvents.filter((event) => event.needsAttention).length}</strong></div>
             <div class="metric"><span>Listed this month</span><strong>${monthEvents.filter((event) => event.type === "listed").length}</strong></div>
             <div class="metric"><span>Renewals this month</span><strong>${monthEvents.filter((event) => event.type === "renewal").length}</strong></div>
@@ -8922,16 +9127,27 @@
         return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
       }
 
+      // Two distinct kinds of input reach here: real instants (event timestamps,
+      // which must be converted through displayTimeZone() to find "which day"
+      // they fall on for the viewer) and locally-constructed calendar grid cells
+      // (already "this day" in the browser's own local semantics, with no
+      // real-world instant to convert). A caller passes a Date only for the
+      // latter; everything else (string/instant) takes the zone-aware path.
       function localDateKey(value) {
-        if (!(value instanceof Date)) {
-          const instant = appDate(value);
-          if (!instant) return "";
-          const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: displayTimeZone(), year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(instant).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-          return `${parts.year}-${parts.month}-${parts.day}`;
+        if (value instanceof Date) {
+          if (Number.isNaN(value.getTime())) return "";
+          return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
         }
-        const date = value;
-        if (Number.isNaN(date.getTime())) return "";
-        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+        const instant = appDate(value);
+        if (!instant) return "";
+        const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: displayTimeZone(), year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(instant).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+        return `${parts.year}-${parts.month}-${parts.day}`;
+      }
+
+      function instantDateKey(date, timeZone = displayTimeZone()) {
+        if (!date || Number.isNaN(date.getTime())) return "";
+        const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+        return `${parts.year}-${parts.month}-${parts.day}`;
       }
 
       function calendarGridHtml(monthDate, eventsByDate) {
@@ -8983,8 +9199,11 @@
 
       function calendarEventCounts(events) {
         return events.reduce((counts, event) => {
-          counts[event.type] = (counts[event.type] || 0) + 1;
+          // A job stuck needing review was never actually confirmed scheduled on
+          // eBay, so it should only show as Attention, not double-counted as
+          // both Attention and Scheduled.
           if (event.needsAttention) counts.attention += 1;
+          else counts[event.type] = (counts[event.type] || 0) + 1;
           return counts;
         }, { attention: 0, scheduled: 0, listed: 0, renewal: 0, sold: 0 });
       }
@@ -9169,13 +9388,13 @@
       }
 
       function calendarEventFromDate(event) {
-        const date = new Date(event.date);
-        if (Number.isNaN(date.getTime())) return null;
+        const date = event.type === "scheduled" ? scheduleDate(event.date) : appDate(event.date);
+        if (!date || Number.isNaN(date.getTime())) return null;
         return {
           ...event,
           date,
-          dateKey: localDateKey(date),
-          timeLabel: date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+          dateKey: instantDateKey(date),
+          timeLabel: date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: displayTimeZone() })
         };
       }
 

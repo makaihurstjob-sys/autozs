@@ -392,6 +392,117 @@ async function hasRunningListingJob() {
   }
 }
 
+async function readRunningListingJob() {
+  try {
+    const jobs = await localApiJson("/listing-jobs?status=running&limit=1");
+    if (!Array.isArray(jobs) || !jobs.length) return null;
+    return jobs[0];
+  } catch {
+    return undefined;
+  }
+}
+
+const LISTING_JOB_RUNNER_TAB_KEY = "autozsListingJobRunnerTabs";
+
+async function readListingJobRunnerTabId(jobId) {
+  const stored = await chrome.storage.local.get(LISTING_JOB_RUNNER_TAB_KEY);
+  const id = (stored?.[LISTING_JOB_RUNNER_TAB_KEY] || {})[String(jobId)];
+  return id === undefined ? null : Number(id);
+}
+
+async function writeListingJobRunnerTabId(jobId, tabId) {
+  const stored = await chrome.storage.local.get(LISTING_JOB_RUNNER_TAB_KEY);
+  const map = { ...(stored?.[LISTING_JOB_RUNNER_TAB_KEY] || {}) };
+  map[String(jobId)] = tabId;
+  await chrome.storage.local.set({ [LISTING_JOB_RUNNER_TAB_KEY]: map });
+}
+
+async function reopenOrphanedListingJob(job) {
+  if (!job?.id || !job?.assistant_url) return false;
+  // Background tabs (active:false) are throttled by Chrome and can go several
+  // seconds without a committed URL, so chrome.tabs.query by URL pattern can
+  // miss a tab that is alive and loading fine — which made every reopen cycle
+  // create ANOTHER duplicate tab instead of recognizing the one it just made.
+  // Track the exact tab id we created for this job and trust chrome.tabs.get
+  // (existence, not URL) before falling back to the looser URL-based search.
+  const trackedTabId = await readListingJobRunnerTabId(job.id);
+  if (trackedTabId !== null) {
+    try {
+      const trackedTab = await chrome.tabs.get(trackedTabId);
+      if (trackedTab.discarded || trackedTab.status === "unloaded") {
+        await chrome.tabs.reload(trackedTab.id);
+      }
+      return true;
+    } catch {
+      // Tab no longer exists; fall through to the URL-based search / reopen.
+    }
+  }
+  const tabs = await chrome.tabs.query({ url: ["https://www.ebay.com/*", "https://sell.ebay.com/*"] });
+  // A working runner navigates from the assistant URL to /lstng?draftId=...,
+  // which drops autozs_job_id. Matching only on that param made the background
+  // treat a healthy job as orphaned and open a SECOND runner, and two tabs
+  // share one workflow key, so they corrupt each other. Any eBay listing or
+  // prelist tab counts as a live runner.
+  const runner = tabs.find(
+    (tab) =>
+      isListingJobRunnerUrl(tab.url, job.id) ||
+      isListingJobRunnerUrl(tab.pendingUrl, job.id) ||
+      isEbayListingWorkflowUrl(tab.url) ||
+      isEbayListingWorkflowUrl(tab.pendingUrl)
+  );
+  if (runner) {
+    // Session-restored runner tabs sit discarded/unloaded with a matching URL
+    // but no live content script; wake them or the job stalls forever.
+    if (runner.discarded || runner.status === "unloaded") {
+      await chrome.tabs.reload(runner.id);
+    }
+    await writeListingJobRunnerTabId(job.id, runner.id);
+    return true;
+  }
+  // The API's 30-minute watchdog keys off updated_at, which a reopened tab
+  // never refreshes on its own, so a recovered job was still being flagged
+  // "worker stopped reporting". Heartbeat here, but only a few times so a job
+  // that genuinely cannot progress still fails instead of looping forever.
+  const reopens = await readListingJobReopenCount(job.id);
+  if (reopens >= 3) return false;
+  const stored = await chrome.storage.local.get(LISTING_JOB_LAST_OPENED_KEY);
+  const lastOpened = Number(stored?.[LISTING_JOB_LAST_OPENED_KEY] || 0);
+  if (Date.now() - lastOpened < 75 * 1000) return false;
+  await chrome.storage.local.set({ [LISTING_JOB_LAST_OPENED_KEY]: Date.now() });
+  await writeListingJobReopenCount(job.id, reopens + 1);
+  const created = await chrome.tabs.create({ url: job.assistant_url, active: false });
+  await writeListingJobRunnerTabId(job.id, created.id);
+  await heartbeatRunningListingJob(job.id, reopens + 1);
+  return true;
+}
+
+const LISTING_JOB_REOPEN_KEY = "autozsListingJobReopens";
+
+async function readListingJobReopenCount(jobId) {
+  const stored = await chrome.storage.local.get(LISTING_JOB_REOPEN_KEY);
+  return Number((stored?.[LISTING_JOB_REOPEN_KEY] || {})[String(jobId)] || 0);
+}
+
+async function writeListingJobReopenCount(jobId, count) {
+  const stored = await chrome.storage.local.get(LISTING_JOB_REOPEN_KEY);
+  const counts = { ...(stored?.[LISTING_JOB_REOPEN_KEY] || {}) };
+  counts[String(jobId)] = count;
+  await chrome.storage.local.set({ [LISTING_JOB_REOPEN_KEY]: counts });
+}
+
+async function heartbeatRunningListingJob(jobId, attempt) {
+  try {
+    await fetch(`${LOCAL_API}/listing-jobs/${encodeURIComponent(jobId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "running",
+        message: `Runner tab was reopened by AutoZS (recovery ${attempt}/3); job is still in progress.`,
+      }),
+    });
+  } catch {}
+}
+
 async function claimNextListingJob() {
   const response = await fetch(`${LOCAL_API}/listing-jobs/next`, {
     method: "POST",
@@ -401,6 +512,16 @@ async function claimNextListingJob() {
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`AutoZS API returned ${response.status}`);
   return response.json();
+}
+
+function isEbayListingWorkflowUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return /(^|\.)ebay\.com$/i.test(parsed.hostname)
+      && /^\/(?:lstng|sl\/list|sl\/prelist)\b/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function isListingJobRunnerUrl(url, jobId = null) {
@@ -427,13 +548,25 @@ async function openListingJobRunner(result) {
     // editor and prevents stale draft ownership from leaking between products.
     await chrome.tabs.remove(existing.id);
   }
-  await chrome.tabs.create({ url: job.assistant_url, active: false });
+  // The reopen counter is keyed only by job id and otherwise never clears, so a
+  // job that once burned all 3 reopens (e.g. during a crash) stays unrecoverable
+  // under that id forever, even after being fully requeued and freshly claimed.
+  await writeListingJobReopenCount(job.id, 0);
+  const created = await chrome.tabs.create({ url: job.assistant_url, active: false });
+  await writeListingJobRunnerTabId(job.id, created.id);
   return true;
 }
 
 async function openNextListingJob() {
   if (!(await canRunAutozsWorkerJobs())) return;
-  if (await hasRunningListingJob()) return;
+  const running = await readRunningListingJob();
+  if (running === undefined) return;
+  if (running) {
+    // A job reserved in the API without a live runner tab would otherwise sit
+    // until the 30-minute stale watchdog kills it; reopen its runner instead.
+    await reopenOrphanedListingJob(running);
+    return;
+  }
   const stored = await chrome.storage.local.get(LISTING_JOB_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[LISTING_JOB_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 75 * 1000) return;

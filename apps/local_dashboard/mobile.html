@@ -778,6 +778,12 @@
         updateApiStatus(health);
       } catch (error) {
         updateApiStatus(null);
+        // Without this the health lamp sits on its placeholder forever and
+        // looks like the worker is being checked when nothing is loading.
+        const lamp = document.getElementById("health-lamp");
+        if (lamp) lamp.className = "health-lamp red";
+        setText("health-verdict", "Cannot reach AutoZS");
+        setText("health-note", "Check Tailscale on this iPhone, then refresh.");
         setError("Windows API unavailable. Open Tailscale on this iPhone, confirm it is connected, then refresh AutoZS.");
         return;
       }
@@ -786,9 +792,10 @@
         api("/workers"),
         api("/products"),
         api("/ebay/listings"),
-        // Without an explicit limit the API returns only the first 100 jobs,
-        // which can omit the running one and make the health lamp read red.
-        api("/listing-jobs?limit=250"),
+        // Deliberately unlimited: /listing-jobs rebuilds the eBay package for
+        // every job, so raising the limit to 250 pushed this past 45s and the
+        // whole dashboard stopped rendering.
+        api("/listing-jobs"),
         api("/source-refresh/jobs"),
         api("/ebay/revision-jobs"),
         api("/ebay/revision-batches"),
@@ -946,7 +953,7 @@
       const now = Date.now();
       const listingIsDue = (listing) => {
         const job = latestJobByProduct.get(Number(listing.product_id));
-        const start = apiDateMs(job?.listing_schedule_at, NaN);
+        const start = scheduleDateMs(job?.listing_schedule_at, NaN);
         return Number.isFinite(start) && start <= now && job?.status === "completed";
       };
       const liveListings = scopedListings.filter((listing) => {
@@ -1078,10 +1085,17 @@
         if (entry.group === "attention") result.attention += 1;
         return result;
       }, { running: 0, queued: 0, attention: 0 });
-      updateWorkerHealth(listingJobs);
       setText("running-count", counts.running);
       setText("queued-count", counts.queued);
       setText("attention-count", counts.attention);
+      // Runs last and never throws: the health lamp is a nice-to-have and must
+      // not be able to stop the stats or queue list from rendering.
+      try {
+        updateWorkerHealth(listingJobs);
+      } catch (error) {
+        setText("health-verdict", "Health check unavailable");
+        setText("health-note", "The queue data below is still accurate.");
+      }
 
       const container = document.getElementById("alerts");
       if (!entries.length) {
@@ -1278,7 +1292,7 @@
       const events = [];
       latestJobByProduct.forEach((job, productId) => {
         if (!job.listing_schedule_at || ["cancelled", "tombstoned"].includes(String(job.status || "").toLowerCase())) return;
-        const instant = apiDate(job.listing_schedule_at);
+        const instant = scheduleDate(job.listing_schedule_at);
         if (Number.isNaN(instant.getTime())) return;
         const listing = listingByProduct.get(productId);
         const product = productById.get(productId);
@@ -1757,6 +1771,61 @@
 
     function apiDateMs(value, fallback = 0) {
       const time = apiDate(value).getTime();
+      return Number.isFinite(time) ? time : fallback;
+    }
+
+    function zoneOffsetMs(date, timeZone) {
+      const parts = Object.fromEntries(
+        new Intl.DateTimeFormat("en-US", {
+          timeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hourCycle: "h23",
+        }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+      );
+      const asUtc = Date.UTC(
+        Number(parts.year),
+        Number(parts.month) - 1,
+        Number(parts.day),
+        Number(parts.hour),
+        Number(parts.minute),
+        Number(parts.second)
+      );
+      return asUtc - date.getTime();
+    }
+
+    function naiveZonedTimeToDate(text, timeZone) {
+      const [datePart, timePart = "00:00:00"] = String(text).trim().split(/[T ]/);
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour = 0, minute = 0, second = 0] = timePart.split(":").map(Number);
+      if (![year, month, day].every(Number.isFinite)) return new Date(NaN);
+      const wallUtc = Date.UTC(year, month - 1, day, hour, minute, Math.trunc(second) || 0);
+      // Resolve twice so a DST transition between the guess and the real instant settles on the correct offset.
+      let instant = wallUtc;
+      for (let pass = 0; pass < 2; pass += 1) {
+        instant = wallUtc - zoneOffsetMs(new Date(instant), timeZone);
+      }
+      return new Date(instant);
+    }
+
+    // listing_schedule_at is stored as naive Eastern wall time (the seller works
+    // in ET; eBay's own controls are Pacific) — see the extension's identical
+    // parseListingSchedule. apiDate() reads offset-less values as UTC, which put
+    // scheduled items on the wrong calendar day and made "due" comparisons fire
+    // hours early/late. Values that carry an explicit offset are honored as written.
+    function scheduleDate(value) {
+      if (value === null || value === undefined || value === "") return new Date(NaN);
+      const text = String(value).trim();
+      const hasExplicitOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+      return hasExplicitOffset ? new Date(text) : naiveZonedTimeToDate(text, "America/New_York");
+    }
+
+    function scheduleDateMs(value, fallback = 0) {
+      const time = scheduleDate(value).getTime();
       return Number.isFinite(time) ? time : fallback;
     }
 
