@@ -402,6 +402,15 @@ async function readRunningListingJob() {
   }
 }
 
+// eBay's listing editor renders the DESCRIPTION block lazily. Lazy rendering
+// driven by IntersectionObserver does not fire in a tab that Chrome never
+// paints, so a background runner tab never gets a description editor at all and
+// the fill fails with "eBay requires a description and AutoZS could not write
+// one into the editor". Running the assistant a second time on a tab the user
+// has since looked at succeeds, which is the same effect. Keep runner tabs
+// foreground; the queue is single-flight, so this is one tab at a time.
+const LISTING_RUNNER_TAB_ACTIVE = true;
+
 const LISTING_JOB_RUNNER_TAB_KEY = "autozsListingJobRunnerTabs";
 
 async function readListingJobRunnerTabId(jobId) {
@@ -470,7 +479,12 @@ async function reopenOrphanedListingJob(job) {
   if (Date.now() - lastOpened < 75 * 1000) return false;
   await chrome.storage.local.set({ [LISTING_JOB_LAST_OPENED_KEY]: Date.now() });
   await writeListingJobReopenCount(job.id, reopens + 1);
-  const created = await chrome.tabs.create({ url: job.assistant_url, active: false });
+  // Runner tabs must be ACTIVE. eBay renders the DESCRIPTION block lazily, and
+  // lazy rendering driven by IntersectionObserver never fires in a tab that is
+  // never painted -- so in a background tab the description editor simply does
+  // not exist and the fill reports "could not write one into the editor". See
+  // LISTING_RUNNER_TAB_ACTIVE.
+  const created = await chrome.tabs.create({ url: job.assistant_url, active: LISTING_RUNNER_TAB_ACTIVE });
   await writeListingJobRunnerTabId(job.id, created.id);
   await heartbeatRunningListingJob(job.id, reopens + 1);
   return true;
@@ -552,7 +566,7 @@ async function openListingJobRunner(result) {
   // job that once burned all 3 reopens (e.g. during a crash) stays unrecoverable
   // under that id forever, even after being fully requeued and freshly claimed.
   await writeListingJobReopenCount(job.id, 0);
-  const created = await chrome.tabs.create({ url: job.assistant_url, active: false });
+  const created = await chrome.tabs.create({ url: job.assistant_url, active: LISTING_RUNNER_TAB_ACTIVE });
   await writeListingJobRunnerTabId(job.id, created.id);
   return true;
 }
