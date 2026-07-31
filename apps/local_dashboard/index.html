@@ -3440,6 +3440,11 @@
         const date = appDate(value);
         return !date ? String(value) : date.toLocaleString([], { timeZone: displayTimeZone(), month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
       }
+      function formatScheduleDateTime(value) {
+        if (!value) return "-";
+        const date = scheduleDate(value);
+        return !date ? String(value) : date.toLocaleString([], { timeZone: displayTimeZone(), month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+      }
       function zonedWallTimeToUtcIso(value, timeZone = displayTimeZone()) {
         const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
         if (!match) return "";
@@ -3894,7 +3899,7 @@
       function listingJobActivityEntry(job) {
         const group = jobActivityGroup(job.status);
         const schedule = job.listing_schedule_at
-          ? `eBay start ${formatDateTime(job.listing_schedule_at)}`
+          ? `eBay start ${formatScheduleDateTime(job.listing_schedule_at)}`
           : job.scheduled_for
             ? `Run after ${formatDateTime(job.scheduled_for)}`
             : "Run now";
@@ -6617,10 +6622,10 @@
       function listingJobProgressOverlayHtml(item) {
         const job = item.listing_job || {};
         const percent = listingJobProgressPercent(item);
-        const startDate = job.listing_schedule_at ? appDate(job.listing_schedule_at) : null;
+        const startDate = scheduleDate(job.listing_schedule_at);
         const pastDue = Boolean(startDate && startDate.getTime() <= Date.now());
         const label = pastDue ? "Past-due worker job" : job.status === "running" ? "Scheduling on Windows" : "Queued for Windows worker";
-        const start = job.listing_schedule_at ? formatDateTime(job.listing_schedule_at) : "Start time selected";
+        const start = job.listing_schedule_at ? formatScheduleDateTime(job.listing_schedule_at) : "Start time selected";
         return `<div class="product-card-progress-overlay" aria-live="polite">
           <div class="product-card-progress-box">
             <strong>${esc(label)}</strong>
@@ -6903,7 +6908,7 @@
           `<strong>${esc(job.title)}</strong><div class="draft">${supplierLogoSvgFromUrl(job.source_url)} ${esc(job.sku)} / product ${job.product_id}</div>`,
           `<div>${money(job.price)}</div><div class="draft">Profit ${money(job.estimated_profit)}</div>`,
           `<div>${esc(job.ebay_account_key)}</div><div class="draft">${esc(job.action)}</div>`,
-          job.listing_schedule_at ? `eBay start: ${formatDateTime(job.listing_schedule_at)}` : job.scheduled_for ? `Run: ${formatDateTime(job.scheduled_for)}` : "Now",
+          job.listing_schedule_at ? `eBay start: ${formatScheduleDateTime(job.listing_schedule_at)}` : job.scheduled_for ? `Run: ${formatDateTime(job.scheduled_for)}` : "Now",
           `<span class="status ${job.image_upload_status === "ready" ? "stage-ready" : "stage-images"}">${esc(`${job.local_image_count}/${job.image_count} images`)}</span>`,
           listingJobIssuesHtml(job),
           `<div class="actions">
@@ -7297,32 +7302,41 @@
         render();
       }
 
+      // eBay listing lifecycle timestamps (listing_started_at, listing_renews_at) follow the
+      // same naive-Eastern convention as listing_schedule_at — started_at is written as the
+      // schedule plus one second. Reading them with appDate() treated them as UTC and shifted
+      // everything 4-5 hours early, flipping listings to "live" before they had actually
+      // started and dropping them onto the previous calendar day.
+      function listingStartInstant(item) {
+        return scheduleDate(item.listing_started_at) || scheduleDate(item.listing_job?.listing_schedule_at);
+      }
+
       function listingIsLive(item) {
         const status = String(item.listing_status || "").toLowerCase();
-        const scheduledStart = appDate(item.listing_started_at || item.listing_job?.listing_schedule_at);
+        const scheduledStart = listingStartInstant(item);
         if (scheduledStart && scheduledStart > new Date()) return false;
         if (["active", "live", "listed"].includes(status)) return true;
         const job = item.listing_job;
         if (job?.status !== "completed" || !job.listing_schedule_at) return false;
-        const start = appDate(job.listing_schedule_at);
+        const start = scheduleDate(job.listing_schedule_at);
         return Boolean(start && start <= new Date());
       }
 
       function listingIsScheduled(item) {
         if (listingIsLive(item) || item.listing_job?.status === "tombstoned") return false;
-        const scheduledStart = appDate(item.listing_started_at || item.listing_job?.listing_schedule_at);
+        const scheduledStart = listingStartInstant(item);
         if (scheduledStart && scheduledStart > new Date()) return true;
         if (String(item.listing_status || "").toLowerCase() === "scheduled") return true;
         return Boolean(item.listing_job?.listing_schedule_at);
       }
 
       function listingStartDate(item) {
-        const explicit = item.listing_started_at || (listingIsLive(item) ? item.listing_job?.listing_schedule_at : null);
-        return appDate(explicit);
+        return scheduleDate(item.listing_started_at)
+          || (listingIsLive(item) ? scheduleDate(item.listing_job?.listing_schedule_at) : null);
       }
 
       function listingRenewalDate(item) {
-        const explicit = appDate(item.listing_renews_at);
+        const explicit = scheduleDate(item.listing_renews_at);
         if (explicit && !Number.isNaN(explicit.getTime())) return explicit;
         const start = listingStartDate(item);
         if (!start) return null;

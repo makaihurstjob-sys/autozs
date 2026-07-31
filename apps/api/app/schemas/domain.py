@@ -1752,6 +1752,17 @@ class EbayBrowserAccountStatus(BaseModel):
     message: str
 
 
+class ListingAutomationPauseUpdate(BaseModel):
+    paused: bool
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ListingAutomationPauseStatus(BaseModel):
+    paused: bool
+    reason: str = ""
+    changed_at: str = ""
+
+
 class EbayOAuthStartRead(BaseModel):
     authorization_url: str
     state: str

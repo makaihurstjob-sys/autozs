@@ -4,12 +4,16 @@ from urllib.parse import urlencode
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.domain import EbayListing, ListingJob, ListingJobStatus, Product, ProductStatus
+from app.models.domain import AppSetting, EbayListing, ListingJob, ListingJobStatus, Product, ProductStatus
 from app.services.ebay_browser_account import assert_ebay_browser_account_can_list
 from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing
 from app.services.importer import build_ebay_listing_package, build_listing_readiness
 from app.services.settings import read_pricing_settings
 
+
+AUTOMATION_PAUSE_KEY = "listing_automation_paused"
+AUTOMATION_PAUSE_REASON_KEY = "listing_automation_pause_reason"
+AUTOMATION_PAUSE_CHANGED_KEY = "listing_automation_pause_changed_at"
 
 TERMINAL_STATUSES = {
     ListingJobStatus.saved_draft.value,
@@ -19,6 +23,33 @@ TERMINAL_STATUSES = {
     ListingJobStatus.cancelled.value,
 }
 STALE_RUNNING_MINUTES = 30
+
+
+def read_automation_pause(db: Session) -> dict:
+    setting = db.scalar(select(AppSetting).where(AppSetting.key == AUTOMATION_PAUSE_KEY))
+    reason = db.scalar(select(AppSetting).where(AppSetting.key == AUTOMATION_PAUSE_REASON_KEY))
+    changed_at = db.scalar(select(AppSetting).where(AppSetting.key == AUTOMATION_PAUSE_CHANGED_KEY))
+    return {
+        "paused": bool(setting is not None and setting.value == "true"),
+        "reason": reason.value if reason is not None else "",
+        "changed_at": changed_at.value if changed_at is not None else "",
+    }
+
+
+def set_automation_pause(db: Session, paused: bool, reason: str | None = None) -> dict:
+    values = {
+        AUTOMATION_PAUSE_KEY: "true" if paused else "false",
+        AUTOMATION_PAUSE_REASON_KEY: str(reason or "").strip()[:500] if paused else "",
+        AUTOMATION_PAUSE_CHANGED_KEY: _now_utc_naive().isoformat(timespec="seconds"),
+    }
+    for key, value in values.items():
+        setting = db.scalar(select(AppSetting).where(AppSetting.key == key))
+        if setting is None:
+            db.add(AppSetting(key=key, value=value))
+        else:
+            setting.value = value
+    db.commit()
+    return read_automation_pause(db)
 
 
 def flag_stale_listing_jobs(db: Session, now: datetime | None = None) -> int:
@@ -162,6 +193,20 @@ def start_next_listing_job(
     now: datetime | None = None,
 ) -> ListingJob | None:
     now = _naive_utc(now) or _now_utc_naive()
+    if read_automation_pause(db)["paused"]:
+        return None
+    # Only one listing job may hold a Chrome runner at a time. Concurrent
+    # runners share a single workflow key in the browser and overwrite each
+    # other's product context, which has put one product's data on another
+    # product's draft. The extension checks too, but that check races between
+    # alarm firings and across extension contexts, so enforce it here as well.
+    # A runner that dies is released by flag_stale_listing_jobs, so this
+    # cannot deadlock the queue.
+    running_stmt = select(ListingJob).where(ListingJob.status == ListingJobStatus.running.value)
+    if ebay_account_key:
+        running_stmt = running_stmt.where(ListingJob.ebay_account_key == ebay_account_key)
+    if db.scalar(running_stmt) is not None:
+        return None
     stmt = (
         select(ListingJob)
         .where(ListingJob.status == ListingJobStatus.queued.value)
@@ -337,6 +382,46 @@ def serialize_listing_job(db: Session, job: ListingJob) -> dict:
         "local_image_count": len(package["local_image_paths"]),
         "image_upload_status": package["image_upload_status"],
         "source_url": package["source_url"],
+        "assistant_url": _assistant_url(job.product_id, job.id, job.listing_schedule_at, job.ebay_account_key, job.action, job.ebay_draft_id),
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
+def serialize_listing_job_lite(db: Session, job: ListingJob) -> dict:
+    """Same shape as serialize_listing_job but without build_ebay_listing_package /
+    build_listing_readiness, which run pricing and image scans per job and make a
+    full-queue fetch take tens of seconds. Callers that only need scheduling state
+    (the calendars) use this so they can read every job instead of silently
+    truncating the list and dropping jobs off the calendar entirely."""
+    product = db.get(Product, job.product_id)
+    return {
+        "id": job.id,
+        "product_id": job.product_id,
+        "sku": product.sku if product else "missing",
+        "title": product.title if product else "Missing product",
+        "price": None,
+        "estimated_profit": None,
+        "meets_minimum_profit": None,
+        "ebay_account_key": job.ebay_account_key,
+        "action": job.action,
+        "status": job.status,
+        "scheduled_for": job.scheduled_for,
+        "listing_schedule_at": job.listing_schedule_at,
+        "started_at": job.started_at,
+        "completed_at": job.completed_at,
+        "attempts": job.attempts,
+        "ebay_draft_id": job.ebay_draft_id,
+        "message": job.message,
+        "manual_ready": False,
+        "api_ready": False,
+        "missing_manual": [],
+        "missing_api": [],
+        "warnings": [],
+        "image_count": 0,
+        "local_image_count": 0,
+        "image_upload_status": "unknown",
+        "source_url": None,
         "assistant_url": _assistant_url(job.product_id, job.id, job.listing_schedule_at, job.ebay_account_key, job.action, job.ebay_draft_id),
         "created_at": job.created_at,
         "updated_at": job.updated_at,

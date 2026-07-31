@@ -116,6 +116,8 @@ from app.schemas.domain import (
     GiftCardRead,
     GiftCardUpdate,
     ListingQueueItem,
+    ListingAutomationPauseStatus,
+    ListingAutomationPauseUpdate,
     ListingJobCreate,
     ListingDraftVerification,
     ListingJobRead,
@@ -196,8 +198,11 @@ from app.services.importer import (
 from app.services.listing_jobs import (
     enqueue_listing_jobs,
     list_listing_jobs as list_listing_jobs_service,
+    read_automation_pause,
     read_listing_job,
     serialize_listing_job,
+    serialize_listing_job_lite,
+    set_automation_pause,
     start_listing_job,
     start_next_listing_job,
     update_listing_job,
@@ -1628,11 +1633,36 @@ def list_listing_queue(db: Session = Depends(get_db)) -> list[ListingQueueItem]:
 @router.get("/listing-jobs", response_model=list[ListingJobRead])
 def list_listing_job_queue(
     status: str | None = None,
-    limit: int = Query(100, ge=1, le=250),
+    limit: int = Query(100, ge=1, le=1000),
+    lite: bool = False,
     db: Session = Depends(get_db),
 ) -> list[ListingJobRead]:
     jobs = list_listing_jobs_service(db, status=status, limit=limit)
-    return [ListingJobRead(**serialize_listing_job(db, job)) for job in jobs]
+    serialize = serialize_listing_job_lite if lite else serialize_listing_job
+    return [ListingJobRead(**serialize(db, job)) for job in jobs]
+
+
+@router.get("/listing-jobs/automation-pause", response_model=ListingAutomationPauseStatus)
+def read_listing_automation_pause(db: Session = Depends(get_db)) -> ListingAutomationPauseStatus:
+    return ListingAutomationPauseStatus(**read_automation_pause(db))
+
+
+@router.post("/listing-jobs/automation-pause", response_model=ListingAutomationPauseStatus)
+def update_listing_automation_pause(
+    payload: ListingAutomationPauseUpdate, db: Session = Depends(get_db)
+) -> ListingAutomationPauseStatus:
+    return ListingAutomationPauseStatus(**set_automation_pause(db, payload.paused, payload.reason))
+
+
+@router.get("/listing-jobs/{job_id}", response_model=ListingJobRead)
+def read_listing_job_route(job_id: int, db: Session = Depends(get_db)) -> ListingJobRead:
+    """Serializing one job is cheap; the list endpoint rebuilds the eBay
+    package and readiness for every job, which takes tens of seconds. The
+    extension polls for a single tracked job, so it must not pay that cost."""
+    job = read_listing_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Listing job not found")
+    return ListingJobRead(**serialize_listing_job(db, job))
 
 
 @router.post("/listing-jobs", response_model=list[ListingJobRead])

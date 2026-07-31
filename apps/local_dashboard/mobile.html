@@ -792,10 +792,12 @@
         api("/workers"),
         api("/products"),
         api("/ebay/listings"),
-        // Deliberately unlimited: /listing-jobs rebuilds the eBay package for
-        // every job, so raising the limit to 250 pushed this past 45s and the
-        // whole dashboard stopped rendering.
-        api("/listing-jobs"),
+        // lite=1 skips the per-job eBay package/readiness rebuild that made a full
+        // fetch take tens of seconds. Without the full list the default limit of 100
+        // silently dropped jobs (the list is ordered by created_at, so any job whose
+        // created_at was backdated to reprioritise it fell off the end) and those jobs
+        // vanished from the calendar entirely while the desktop still showed them.
+        api("/listing-jobs?limit=1000&lite=1"),
         api("/source-refresh/jobs"),
         api("/ebay/revision-jobs"),
         api("/ebay/revision-batches"),
@@ -1301,7 +1303,7 @@
       });
       scopedListings.forEach((listing) => {
         if (!listing.renews_at) return;
-        const instant = apiDate(listing.renews_at);
+        const instant = scheduleDate(listing.renews_at);
         if (Number.isNaN(instant.getTime())) return;
         const product = productById.get(Number(listing.product_id));
         events.push(mobileCalendarEvent("renewal", instant, product, listing, null));
