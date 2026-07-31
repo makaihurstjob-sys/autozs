@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoZS Worker Health</title>
+<style>
+  :root { color-scheme: dark light; }
+  body {
+    margin: 0; padding: 28px 22px;
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #0e1512; color: #e8f1ec;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .head { display: flex; align-items: center; gap: 18px; }
+  .lamp {
+    width: 74px; height: 74px; border-radius: 50%; flex: none;
+    background: #4a5a52; box-shadow: 0 0 0 4px rgba(255,255,255,.05);
+    transition: background .3s, box-shadow .3s;
+  }
+  .lamp.green { background: #34d17a; box-shadow: 0 0 26px 4px rgba(52,209,122,.45); }
+  .lamp.amber { background: #f0b731; box-shadow: 0 0 26px 4px rgba(240,183,49,.45); }
+  .lamp.red   { background: #f2564d; box-shadow: 0 0 30px 6px rgba(242,86,77,.55); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .6; } }
+  h1 { font-size: 25px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .verdict { font-size: 16px; opacity: .92; }
+  .action {
+    margin: 22px 0 0; padding: 14px 16px; border-radius: 10px;
+    background: #1b2a22; border: 1px solid #2c4034; font-size: 15px;
+  }
+  .action.red { background: #331d1c; border-color: #6b2f2b; }
+  .action b { display: block; margin-bottom: 5px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 10px; margin-top: 22px; }
+  .cell { background: #16211c; border: 1px solid #24332b; border-radius: 10px; padding: 11px 13px; }
+  .cell .n { font-size: 25px; font-weight: 600; }
+  .cell .k { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; opacity: .62; }
+  .detail { margin-top: 20px; font-size: 13.5px; opacity: .78; }
+  .detail div { margin-top: 5px; }
+  .foot { margin-top: 22px; font-size: 12px; opacity: .5; }
+  code { background: #16211c; padding: 1px 6px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div id="lamp" class="lamp"></div>
+    <div>
+      <h1>AutoZS worker</h1>
+      <div class="verdict" id="verdict">Checking…</div>
+    </div>
+  </div>
+
+  <div class="action" id="action"><b>Status</b><span id="actionText">Loading…</span></div>
+
+  <div class="grid">
+    <div class="cell"><div class="n" id="cQueued">–</div><div class="k">Queued</div></div>
+    <div class="cell"><div class="n" id="cRunning">–</div><div class="k">Running</div></div>
+    <div class="cell"><div class="n" id="cReview">–</div><div class="k">Needs review</div></div>
+    <div class="cell"><div class="n" id="cDone">–</div><div class="k">Completed</div></div>
+  </div>
+
+  <div class="detail">
+    <div id="dRunning"></div>
+    <div id="dLast"></div>
+    <div id="dWorker"></div>
+  </div>
+
+  <div class="foot">
+    Refreshes every 20s. API <code id="apiUrl"></code> ·
+    override with <code>?api=http://host:8000</code>
+  </div>
+</div>
+
+<script>
+const API = new URLSearchParams(location.search).get("api") || "http://127.0.0.1:8000";
+document.getElementById("apiUrl").textContent = API;
+
+// A running job proves liveness by refreshing updated_at (the extension
+// heartbeats every 5 minutes), so silence well past that means a dead runner.
+const STALL_MIN = 12;
+const IDLE_MIN = 20;
+
+const el = (id) => document.getElementById(id);
+const minsSince = (iso) => {
+  if (!iso) return Infinity;
+  // API timestamps are naive UTC.
+  const t = Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + "Z");
+  return Number.isFinite(t) ? (Date.now() - t) / 60000 : Infinity;
+};
+const ago = (m) => (!Number.isFinite(m) ? "never" : m < 1 ? "just now" : m < 60 ? Math.round(m) + " min ago" : (m / 60).toFixed(1) + " h ago");
+
+function assess(jobs, worker) {
+  const by = (s) => jobs.filter((j) => j.status === s);
+  const running = by("running");
+  const queued = by("queued");
+  const review = by("needs_review");
+  const done = by("completed");
+  const lastDone = done
+    .map((j) => minsSince(j.updated_at))
+    .sort((a, b) => a - b)[0];
+  // Idle is judged on any recent job activity, not the last completion:
+  // keying off completions made every normal gap between jobs flash red.
+  const lastActivity = jobs.map((j) => minsSince(j.updated_at)).sort((a, b) => a - b)[0];
+
+  const counts = { queued: queued.length, running: running.length, review: review.length, done: done.length };
+  const runAge = running.length ? minsSince(running[0].updated_at) : null;
+
+  // Red beats amber beats green; first match wins.
+  if (running.length > 1) {
+    return { level: "red", verdict: "Two runners at once",
+      action: "More than one job is running. They share one browser workflow and will corrupt each other's drafts. Ask me to investigate.", counts, running, runAge, lastDone };
+  }
+  if (running.length === 1 && runAge > STALL_MIN) {
+    return { level: "red", verdict: "Runner is stalled",
+      action: `Job ${running[0].id} has not reported for ${Math.round(runAge)} min. Its Chrome tab is probably dead. Ask me to investigate.`, counts, running, runAge, lastDone };
+  }
+  if (!running.length && queued.length && (!Number.isFinite(lastActivity) || lastActivity > IDLE_MIN)) {
+    return { level: "red", verdict: "Queue stuck",
+      action: `${queued.length} job(s) waiting and no worker activity for ${ago(lastActivity)}. The worker may not be claiming. Ask me to investigate.`, counts, running, runAge, lastDone };
+  }
+  if (review.length >= 5) {
+    return { level: "amber", verdict: review.length + " jobs need review",
+      action: "Jobs are failing into needs_review faster than they clear. Worth asking me to look when convenient.", counts, running, runAge, lastDone };
+  }
+  if (review.length) {
+    return { level: "amber", verdict: review.length + " job(s) need review",
+      action: "The pipeline is moving, but some jobs need attention. No rush.", counts, running, runAge, lastDone };
+  }
+  if (running.length) {
+    return { level: "green", verdict: "Working normally",
+      action: "A job is running and reporting in. Nothing needed from you.", counts, running, runAge, lastDone };
+  }
+  if (!queued.length) {
+    return { level: "green", verdict: "Queue is empty",
+      action: "Nothing left to list. Nothing needed from you.", counts, running, runAge, lastDone };
+  }
+  return { level: "green", verdict: "Between jobs",
+    action: "The worker just finished one and will pick up the next shortly.", counts, running, runAge, lastDone };
+}
+
+async function tick() {
+  try {
+    const [jobsRes, workersRes] = await Promise.all([
+      fetch(API + "/listing-jobs?limit=250", { cache: "no-store" }),
+      fetch(API + "/workers", { cache: "no-store" }).catch(() => null),
+    ]);
+    if (!jobsRes.ok) throw new Error("API " + jobsRes.status);
+    const jobs = await jobsRes.json();
+    const workers = workersRes && workersRes.ok ? await workersRes.json() : [];
+    const worker = (workers || []).find((w) => (w.status || "").toLowerCase() === "online");
+
+    const s = assess(jobs, worker);
+    el("lamp").className = "lamp " + s.level;
+    el("verdict").textContent = s.verdict;
+    el("action").className = "action" + (s.level === "red" ? " red" : "");
+    el("actionText").textContent = s.action;
+    el("cQueued").textContent = s.counts.queued;
+    el("cRunning").textContent = s.counts.running;
+    el("cReview").textContent = s.counts.review;
+    el("cDone").textContent = s.counts.done;
+    el("dRunning").textContent = s.running.length
+      ? `Running: job ${s.running[0].id} — ${s.running[0].message || ""} (updated ${ago(s.runAge)})`
+      : "Running: nothing right now";
+    el("dLast").textContent = "Last completion: " + ago(s.lastDone);
+    el("dWorker").textContent = worker
+      ? `Worker: ${worker.label || worker.worker_id} online (seen ${worker.seconds_since_seen}s ago)`
+      : "Worker: no online worker reporting";
+  } catch (err) {
+    el("lamp").className = "lamp red";
+    el("verdict").textContent = "Cannot reach AutoZS";
+    el("action").className = "action red";
+    el("actionText").textContent =
+      "The API is not responding at " + API + ". Check that AutoZS is running, then ask me to investigate.";
+  }
+}
+
+tick();
+setInterval(tick, 20000);
+</script>
+</body>
+</html>

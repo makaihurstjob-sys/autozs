@@ -657,6 +657,33 @@
       <div class="calendar-detail" id="calendar-detail"></div>
     </section>
 
+    <style>
+      .worker-health {
+        display: flex; align-items: center; gap: 12px;
+        margin: 0 0 10px; padding: 12px 14px;
+        border-radius: 14px; background: rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08);
+      }
+      .health-lamp {
+        width: 26px; height: 26px; border-radius: 50%; flex: none;
+        background: #4a5a52; transition: background .3s, box-shadow .3s;
+      }
+      .health-lamp.green { background: #34d17a; box-shadow: 0 0 12px rgba(52,209,122,.5); }
+      .health-lamp.amber { background: #f0b731; box-shadow: 0 0 12px rgba(240,183,49,.5); }
+      .health-lamp.red { background: #f2564d; box-shadow: 0 0 14px rgba(242,86,77,.6); animation: healthPulse 1.6s ease-in-out infinite; }
+      @keyframes healthPulse { 50% { opacity: .55; } }
+      .worker-health .health-text { min-width: 0; }
+      .worker-health strong { display: block; font-size: 15px; }
+      .worker-health span { display: block; font-size: 12.5px; opacity: .72; }
+    </style>
+    <section class="worker-health" id="worker-health" aria-label="Worker health">
+      <div class="health-lamp" id="health-lamp"></div>
+      <div class="health-text">
+        <strong id="health-verdict">Checking…</strong>
+        <span id="health-note">Reading worker state.</span>
+      </div>
+    </section>
+
     <section class="queue-summary" id="queue-summary">
       <div class="mini-metric"><label>Running</label><strong id="running-count">0</strong></div>
       <div class="mini-metric"><label>Queued</label><strong id="queued-count">0</strong></div>
@@ -759,7 +786,9 @@
         api("/workers"),
         api("/products"),
         api("/ebay/listings"),
-        api("/listing-jobs"),
+        // Without an explicit limit the API returns only the first 100 jobs,
+        // which can omit the running one and make the health lamp read red.
+        api("/listing-jobs?limit=250"),
         api("/source-refresh/jobs"),
         api("/ebay/revision-jobs"),
         api("/ebay/revision-batches"),
@@ -973,6 +1002,63 @@
       return !scopedListings.some((listing) => Number(listing.product_id) === Number(product.id) && ["active", "listed", "live", "scheduled"].includes(String(listing.status || "").toLowerCase()));
     }
 
+    // Red means "a human is needed"; amber means "look when convenient".
+    // A working job proves liveness every 5 minutes, so silence past 12
+    // means the runner is dead rather than busy.
+    function updateWorkerHealth(listingJobs) {
+      const jobs = listingJobs || [];
+      const withStatus = (status) => jobs.filter((job) => String(job.status || "") === status);
+      const running = withStatus("running");
+      const queued = withStatus("queued");
+      const review = withStatus("needs_review");
+      const minutesSince = (value) => {
+        if (!value) return Infinity;
+        const parsed = apiDateMs(value);
+        return Number.isFinite(parsed) ? (Date.now() - parsed) / 60000 : Infinity;
+      };
+      // Idle is judged on *any* recent job activity, not the last completion:
+      // keying off completions made every normal gap between jobs flash red.
+      const lastActivity = jobs
+        .map((job) => minutesSince(job.updated_at))
+        .sort((a, b) => a - b)[0];
+      const runAge = running.length ? minutesSince(running[0].updated_at) : null;
+
+      let level = "green";
+      let verdict = "Working normally";
+      let note = "A job is running and reporting in.";
+      if (running.length > 1) {
+        level = "red";
+        verdict = "Two runners at once";
+        note = "They share one browser workflow and corrupt each other. Ask Claude to investigate.";
+      } else if (running.length === 1 && runAge > 12) {
+        level = "red";
+        verdict = "Runner stalled";
+        note = `Job ${running[0].id} has been silent ${Math.round(runAge)} min. Ask Claude to investigate.`;
+      } else if (!running.length && queued.length && (!Number.isFinite(lastActivity) || lastActivity > 15)) {
+        level = "red";
+        verdict = "Queue stuck";
+        note = `${queued.length} waiting and no worker activity for ${Number.isFinite(lastActivity) ? Math.round(lastActivity) + " min" : "a long time"}. Ask Claude to investigate.`;
+      } else if (review.length >= 5) {
+        level = "amber";
+        verdict = `${review.length} jobs need review`;
+        note = "Failing faster than they clear. Worth a look when convenient.";
+      } else if (review.length) {
+        level = "amber";
+        verdict = `${review.length} job(s) need review`;
+        note = "Pipeline is moving. No rush.";
+      } else if (!running.length && !queued.length) {
+        verdict = "Queue is empty";
+        note = "Nothing left to list.";
+      } else if (!running.length) {
+        verdict = "Between jobs";
+        note = "The next job starts shortly.";
+      }
+      const lamp = document.getElementById("health-lamp");
+      if (lamp) lamp.className = `health-lamp ${level}`;
+      setText("health-verdict", verdict);
+      setText("health-note", note);
+    }
+
     function updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue, products }) {
       const productById = new Map(products.map((product) => [Number(product.id), product]));
       const entries = [
@@ -992,6 +1078,7 @@
         if (entry.group === "attention") result.attention += 1;
         return result;
       }, { running: 0, queued: 0, attention: 0 });
+      updateWorkerHealth(listingJobs);
       setText("running-count", counts.running);
       setText("queued-count", counts.queued);
       setText("attention-count", counts.attention);
