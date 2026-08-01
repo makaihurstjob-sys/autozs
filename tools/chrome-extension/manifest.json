@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoZS Source Capture",
-  "version": "0.2.42",
+  "version": "0.2.43",
   "description": "Capture product data from supplier pages into AutoZS.",
   "action": {
     "default_popup": "popup.html",
@@ -46,6 +46,7 @@
         "assets/import-to-autozs.png"
       ],
       "matches": [
+        "https://www.amazon.com/*",
         "https://www.homedepot.com/*",
         "https://www.lowes.com/*",
         "https://www.ebay.com/*",
@@ -71,6 +72,7 @@
         "https://www.homedepot.com/p/*",
         "https://www.lowes.com/pd/*",
         "https://www.amazon.com/dp/*",
+        "https://www.amazon.com/*/dp/*",
         "https://www.amazon.com/gp/product/*"
       ],
       "js": [
