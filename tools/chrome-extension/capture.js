@@ -61,17 +61,9 @@ async function autozsApiFetch(path, options = {}) {
   if (!autozsApiNeedsProxy()) {
     return fetch(`${API}${path}`, options);
   }
-  // Direct first, with a timeout so a stalled request cannot hang the import.
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    const direct = await fetch(`${API}${path}`, { ...options, signal: controller.signal });
-    clearTimeout(timer);
-    AUTOZS_API_ROUTE = "direct";
-    return direct;
-  } catch (directError) {
-    AUTOZS_API_ROUTE = `direct-failed:${directError.name}:${String(directError.message).slice(0, 40)}`;
-  }
+  // No direct attempt on Amazon: it never completes, it only stalls, so trying
+  // first would add a timeout's delay to every single call.
+  AUTOZS_API_ROUTE = "proxy";
   // Callback form: chrome.runtime.lastError is the only place the real failure
   // reason shows up, and the promise form swallows it as an undefined reply.
   //
@@ -105,9 +97,12 @@ async function autozsApiFetch(path, options = {}) {
     if (reply && !reply.error) break;
     await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
   }
-  if (!reply) throw new Error(`No response from the AutoZS background worker. [${AUTOZS_API_ROUTE}]`);
-  if (reply.error) throw new Error(`${reply.error} [${AUTOZS_API_ROUTE}]`);
-  AUTOZS_API_ROUTE = "proxy";
+  // A worker that answers nothing is usually a STALE service worker script:
+  // Chrome can keep running a cached background.js that predates the proxy
+  // handler, and the symptom is silence, not an error. Clearing the profile's
+  // "Service Worker" directory forces re-registration.
+  if (!reply) throw new Error("No response from the AutoZS background worker (it may be running a stale script).");
+  if (reply.error) throw new Error(reply.error);
   // Re-wrap as a Response so callers keep using .ok/.status/.json()/.text().
   return new Response(reply.body, {
     status: reply.status || (reply.ok ? 200 : 500),
