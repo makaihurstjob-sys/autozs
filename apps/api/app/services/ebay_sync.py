@@ -722,7 +722,20 @@ def _missing_active_report_row_should_tombstone(db: Session, listing: EbayListin
     )
     if job is None or job.listing_schedule_at is None:
         return False
-    return job.listing_schedule_at <= now
+    return _scheduled_start_passed(job.listing_schedule_at, now)
+
+
+_LISTING_SCHEDULE_ZONE = ZoneInfo("America/New_York")
+_SCHEDULED_TOMBSTONE_GRACE = timedelta(minutes=30)
+
+
+def _scheduled_start_passed(schedule_at: datetime, now: datetime) -> bool:
+    """listing_schedule_at rows are naive wall times: most store Eastern wall
+    time, some store UTC. Interpreting as Eastern yields the later UTC moment,
+    so a scheduled listing is never tombstoned before its real start; the
+    grace period covers report snapshots taken just before the start time."""
+    start_utc = schedule_at.replace(tzinfo=_LISTING_SCHEDULE_ZONE).astimezone(timezone.utc).replace(tzinfo=None)
+    return start_utc + _SCHEDULED_TOMBSTONE_GRACE <= now
 
 
 def _tombstone_stale_scheduled_jobs(db: Session, listing: EbayListing) -> None:
@@ -820,9 +833,9 @@ def _parse_datetime(value: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(normalized)
         if parsed.tzinfo is not None:
-            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return _to_listing_wall_time(parsed)
         if zone_name:
-            return _zoned_report_datetime_to_utc(parsed, zone_name)
+            return _zoned_report_datetime_to_wall_time(parsed, zone_name)
         return parsed
     except ValueError:
         pass
@@ -839,13 +852,24 @@ def _parse_datetime(value: str) -> datetime | None:
     ):
         try:
             parsed = datetime.strptime(normalized, pattern)
-            return _zoned_report_datetime_to_utc(parsed, zone_name) if zone_name else parsed
+            return _zoned_report_datetime_to_wall_time(parsed, zone_name) if zone_name else parsed
         except ValueError:
             continue
     return None
 
 
-def _zoned_report_datetime_to_utc(value: datetime, abbreviation: str) -> datetime:
+def _to_listing_wall_time(value: datetime) -> datetime:
+    """Listing lifecycle timestamps are stored as naive Eastern wall time, the
+    same convention as ListingJob.listing_schedule_at. Storing them as naive UTC
+    instead put every synced listing ~4 hours ahead of the schedule that created
+    it, which rolled evening listings onto the next day and made the dashboard
+    calendars disagree with eBay (a listing scheduled for Aug 3 8:00 PM ET came
+    back as Aug 4 00:00). Always land on Eastern wall time here."""
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(_LISTING_SCHEDULE_ZONE).replace(tzinfo=None)
+
+
+def _zoned_report_datetime_to_wall_time(value: datetime, abbreviation: str) -> datetime:
     zone = {
         "PDT": "America/Los_Angeles",
         "PST": "America/Los_Angeles",
@@ -856,7 +880,7 @@ def _zoned_report_datetime_to_utc(value: datetime, abbreviation: str) -> datetim
         "EDT": "America/New_York",
         "EST": "America/New_York",
     }.get(abbreviation.upper(), "UTC")
-    return value.replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc).replace(tzinfo=None)
+    return _to_listing_wall_time(value.replace(tzinfo=ZoneInfo(zone)))
 
 
 def _unique_placeholder_sku(db: Session, requested: str) -> str:
