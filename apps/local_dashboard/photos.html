@@ -396,9 +396,14 @@
       function updateHint() {
         if (!queue.length) return;
         const variant = variants.find((v) => v.id === selectedVariantId);
-        hintEl.textContent = variant
-          ? `Swipe right to approve into "${variant.color}"`
-          : "Pick a variation below, then swipe right to approve";
+        if (!variant) {
+          hintEl.textContent = "Pick a variation below, then swipe right to approve";
+          return;
+        }
+        const suggested = queue[0] && queue[0].variant_id === variant.id;
+        hintEl.textContent = suggested
+          ? `Matched to "${variant.color}" from the reviewer's order - swipe right to confirm`
+          : `Swipe right to approve into "${variant.color}"`;
       }
 
       function render() {
@@ -421,6 +426,10 @@
         const next = queue[1];
         if (next) deck.append(makeCard(next, true));
         deck.append(makeCard(queue[0], false));
+        // A pending photo that already carries a variant was matched through its
+        // review id; pre-select it so the swipe is a confirmation, not a lookup.
+        selectedVariantId = queue[0].variant_id || null;
+        renderChips();
         updateHint();
       }
 

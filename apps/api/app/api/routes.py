@@ -944,6 +944,16 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
             variants_existing += 1
         variant_by_label[variation.label.strip().lower()] = variant
 
+    # Resolve colours against every variant this product has, not just the ones
+    # in this payload -- a photo-only re-import still has to match the variants
+    # stored on a previous pass.
+    for variant in db.scalars(
+        select(DepopListingVariant).where(DepopListingVariant.product_id == product.id)
+    ).all():
+        label = (variant.color or "").strip().lower()
+        if label:
+            variant_by_label.setdefault(label, variant)
+
     photos_created = 0
     photos_skipped = 0
 
@@ -954,6 +964,7 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
         kind: str,
         variant_label: str = "",
         source_asin: str = "",
+        review_id: str = "",
         variant_id: int | None = None,
         width: int = 0,
         height: int = 0,
@@ -979,6 +990,7 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
                 kind=kind,
                 image_url=url,
                 thumb_url=(thumb_url or "").strip(),
+                review_id=review_id[:32],
                 source_asin=source_asin[:32],
                 variant_label=variant_label[:128],
                 variant_id=variant_id,
@@ -1002,11 +1014,29 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
             sort_order=index,
         )
 
+    # A review photo can often be attributed automatically: its data-reviewid
+    # points at a review body that names the colour. Only data-reviewid is
+    # trustworthy here -- the carousel's data-asin reports whichever variation
+    # the page was showing, not the one the reviewer bought. A resolved match is
+    # stored as a suggestion (status stays pending) so it can be overridden.
+    review_colors = {
+        str(key).strip(): str(value).strip()
+        for key, value in payload.review_colors.items()
+        if str(key).strip() and str(value).strip()
+    }
+    suggested = 0
     for index, photo in enumerate(payload.review_photos):
+        label = review_colors.get(photo.review_id.strip(), "") if photo.review_id else ""
+        variant = variant_by_label.get(label.lower()) if label else None
+        if variant is not None:
+            suggested += 1
         _add_photo(
             image_url=photo.image_url,
             thumb_url=photo.thumb_url,
             kind="review",
+            review_id=photo.review_id,
+            variant_label=label,
+            variant_id=variant.id if variant is not None else None,
             width=photo.width,
             height=photo.height,
             sort_order=index,

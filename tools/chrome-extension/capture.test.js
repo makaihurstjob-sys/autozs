@@ -932,6 +932,22 @@ function runAmazonVariationCapture() {
     // Seller gallery / UI sprite on the same CDN, no review marker -> excluded.
     reviewNode("https://m.media-amazon.com/images/I/sprite._AC_SX679_.jpg"),
   ];
+  // Carousel thumbnails. data-asin is the VIEWED variation (Black here) for every
+  // photo regardless of what the reviewer bought, so only data-reviewid may be
+  // used to attribute a photo.
+  const carouselButtons = [
+    { dataset: { url: "https://m.media-amazon.com/images/I/rev1._AC_UC154,154_.jpg", reviewid: "RREV1", asin: "B0BLACK001" } },
+    { dataset: { url: "https://m.media-amazon.com/images/I/rev2._AC_UC154,154_.jpg", reviewid: "RREV2", asin: "B0BLACK001" } },
+  ];
+  // Only RREV1's body is rendered on the product page; RREV2's is not, so that
+  // photo must stay unattributed rather than fall back to data-asin.
+  const reviewBodies = [
+    {
+      id: "RREV1",
+      querySelector: (selector) =>
+        /format-strip/.test(selector) ? { textContent: "Color: Lake Blue, Style: Standard" } : null,
+    },
+  ];
   const context = {
     console,
     URL,
@@ -952,6 +968,8 @@ function runAmazonVariationCapture() {
         return null;
       },
       querySelectorAll: (selector) => {
+        if (/button\[data-reviewid\]/.test(selector)) return carouselButtons;
+        if (selector === '[data-hook="review"]') return reviewBodies;
         if (/community|cm_cr_carousel|reviewsMedley|review-image-tile/.test(selector)) return reviewNodes;
         return [];
       },
@@ -985,6 +1003,18 @@ if (depopExtras.review_photos.length !== 2) {
 }
 if (depopExtras.review_photos[0].image_url !== "https://m.media-amazon.com/images/I/rev1.jpg") {
   throw new Error(`Expected the review photo upscaled to the original, got ${depopExtras.review_photos[0].image_url}`);
+}
+// Each photo must carry the review it came from -- the only trustworthy key.
+if (depopExtras.review_photos[0].review_id !== "RREV1" || depopExtras.review_photos[1].review_id !== "RREV2") {
+  throw new Error(`Expected review ids on the photos, got ${JSON.stringify(depopExtras.review_photos)}`);
+}
+// The colour map covers only the review body the page rendered, so RREV2 stays
+// unresolved instead of being mislabelled from the viewed variation's ASIN.
+if (depopExtras.review_colors.RREV1 !== "Lake Blue") {
+  throw new Error(`Expected RREV1 mapped to its reviewer's colour, got ${JSON.stringify(depopExtras.review_colors)}`);
+}
+if ("RREV2" in depopExtras.review_colors) {
+  throw new Error("RREV2 has no rendered review body and must not be given a colour.");
 }
 // The product record itself must still carry exactly one image.
 if (amazonVariants.image_urls.split("\n").filter(Boolean).length > 1) {

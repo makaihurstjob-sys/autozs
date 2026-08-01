@@ -47,10 +47,14 @@ class DepopSourcePhoto(Base, TimestampMixin):
 
     Two kinds land here. ``variation`` photos are the first gallery image for a
     child ASIN, so their ``variant_label`` is already known and trustworthy.
-    ``review`` photos come from the customer-images carousel, which Amazon
-    renders detached from the review bodies that name a colour -- there is no
-    reliable attribution for them, so they arrive unassigned and get linked to a
-    variant by hand during review.
+    ``review`` photos come from the customer-images carousel. They can often be
+    attributed automatically by joining ``review_id`` to the review body that
+    names a colour, but the product page renders only a handful of review
+    bodies, so any photo whose review is not displayed arrives unassigned and is
+    linked by hand during swipe review.
+
+    While ``status`` is ``pending``, a populated ``variant_id`` is a *suggestion*
+    the reviewer can accept or override; once approved it is the assignment.
     """
 
     __tablename__ = "depop_source_photos"
@@ -61,6 +65,11 @@ class DepopSourcePhoto(Base, TimestampMixin):
     kind: Mapped[str] = mapped_column(String(32), default="review", index=True)
     image_url: Mapped[str] = mapped_column(Text)
     thumb_url: Mapped[str] = mapped_column(Text, default="")
+    # The carousel's data-asin is the ASIN of whatever variation is being VIEWED,
+    # not the one the reviewer bought -- the same photo reports a different asin
+    # on each variation's page. data-reviewid is the only stable join key back to
+    # the review body that names the colour.
+    review_id: Mapped[str] = mapped_column(String(32), default="", index=True)
     source_asin: Mapped[str] = mapped_column(String(32), default="")
     variant_label: Mapped[str] = mapped_column(String(128), default="")
     variant_id: Mapped[int | None] = mapped_column(

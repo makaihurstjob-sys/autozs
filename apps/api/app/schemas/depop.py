@@ -80,6 +80,7 @@ class AmazonReviewPhotoIn(BaseModel):
     thumb_url: str = ""
     width: int = 0
     height: int = 0
+    review_id: str = Field(default="", max_length=32)
 
 
 class AmazonCaptureImport(BaseModel):
@@ -92,6 +93,8 @@ class AmazonCaptureImport(BaseModel):
     title: str = ""
     variations: list[AmazonVariationIn] = Field(default_factory=list)
     review_photos: list[AmazonReviewPhotoIn] = Field(default_factory=list)
+    # reviewId -> colour, scraped from whatever review bodies the page rendered.
+    review_colors: dict[str, str] = Field(default_factory=dict)
 
 
 class DepopSourcePhotoRead(BaseModel):
@@ -100,6 +103,7 @@ class DepopSourcePhotoRead(BaseModel):
     kind: str
     image_url: str
     thumb_url: str
+    review_id: str = ""
     source_asin: str
     variant_label: str
     variant_id: int | None = None

@@ -484,13 +484,54 @@ function amazonVariations() {
 }
 
 /**
+ * Maps each carousel photo to the review it came from.
+ *
+ * The thumbnail buttons carry data-reviewid AND data-asin. Only data-reviewid
+ * is usable: data-asin is the ASIN of whichever variation is currently being
+ * VIEWED, so the identical photo reports "Lake Blue" on one variation's page and
+ * "Black" on another. Verified on B0GWCSTRCD vs B0GWCWMYY8 -- same 12 photos,
+ * same review ids, different data-asin.
+ */
+function amazonReviewIdByImage() {
+  const map = {};
+  const buttons = Array.from(
+    document.querySelectorAll("#cm_cr_carousel_images_section button[data-reviewid]") || []
+  );
+  for (const button of buttons) {
+    const url = button.dataset?.url || button.getAttribute?.("data-url") || "";
+    const reviewId = button.dataset?.reviewid || button.getAttribute?.("data-reviewid") || "";
+    const full = amazonFullSizeImage(url);
+    if (full && reviewId) map[full] = reviewId;
+  }
+  return map;
+}
+
+/**
+ * reviewId -> colour, read from the review bodies rendered on the page.
+ * The product page shows only a handful of reviews, so this resolves some
+ * photos and leaves the rest for manual assignment; the full reviews page
+ * (sign-in required) is what closes the gap.
+ */
+function amazonReviewColorsByReviewId() {
+  const colors = {};
+  const reviews = Array.from(document.querySelectorAll('[data-hook="review"]') || []);
+  for (const review of reviews) {
+    const id = review.id || "";
+    const strip =
+      review.querySelector?.('[data-hook="format-strip"], [data-hook="format-strip-linkless"]')
+        ?.textContent || "";
+    const match = String(strip).replace(/\s+/g, " ").match(/Color:\s*([^,|]+)/i);
+    if (id && match) colors[id] = match[1].trim();
+  }
+  return colors;
+}
+
+/**
  * Customer review photos from the product page.
  *
  * Amazon marks them with an aicid=community-reviews query flag, which is what
  * separates a real reviewer upload from the seller gallery, avatars and UI
- * sprites that share the same CDN. These arrive UNATTRIBUTED: the carousel is
- * rendered detached from the review bodies that name a colour, so which
- * variation a photo belongs to is decided during swipe review, not here.
+ * sprites that share the same CDN.
  */
 function amazonReviewPhotos() {
   const nodes = Array.from(
@@ -498,6 +539,7 @@ function amazonReviewPhotos() {
       '#cm_cr_carousel_images_section img, #reviewsMedley img, [data-hook="review-image-tile"]'
     ) || []
   );
+  const reviewIds = amazonReviewIdByImage();
   const seen = new Set();
   const photos = [];
   for (const node of nodes) {
@@ -506,7 +548,13 @@ function amazonReviewPhotos() {
     const full = amazonFullSizeImage(raw);
     if (!full || seen.has(full)) continue;
     seen.add(full);
-    photos.push({ image_url: full, thumb_url: raw, width: 0, height: 0 });
+    photos.push({
+      image_url: full,
+      thumb_url: raw,
+      width: 0,
+      height: 0,
+      review_id: reviewIds[full] || "",
+    });
   }
   return photos;
 }
@@ -568,6 +616,7 @@ function captureAmazonProductFromPage(cleanSourceUrl, clean) {
       price: amazonSourcePrice() || 0,
       variations,
       review_photos: reviewPhotos,
+      review_colors: amazonReviewColorsByReviewId(),
     },
     source_price: amazonSourcePrice(),
     source_purchase_unit: null,
