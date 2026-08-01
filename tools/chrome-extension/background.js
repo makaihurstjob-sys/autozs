@@ -1154,6 +1154,25 @@ async function clickAt(sendCommand, x, y) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Amazon pages cannot reach the AutoZS API directly: the identical fetch that
+  // returns 200 in ~200ms from a Home Depot page never leaves the network stack
+  // on amazon.com. Service-worker fetches are not bound by the page's policy, so
+  // Amazon capture proxies its API traffic through here.
+  if (message?.type === "autozs-api-proxy") {
+    (async () => {
+      const path = String(message.path || "");
+      if (!path.startsWith("/")) throw new Error("API proxy path must start with a slash.");
+      const response = await fetch(`${LOCAL_API}${path}`, {
+        method: message.method || "GET",
+        headers: message.headers || undefined,
+        body: message.body === undefined ? undefined : message.body,
+        cache: "no-store",
+      });
+      const text = await response.text();
+      sendResponse({ ok: response.ok, status: response.status, body: text });
+    })().catch((error) => sendResponse({ ok: false, status: 0, error: error.message || String(error) }));
+    return true;
+  }
   if (message?.type === "autozs-worker-mode") {
     (async () => {
       sendResponse({

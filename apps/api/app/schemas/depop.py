@@ -144,6 +144,8 @@ class DepopImportResult(BaseModel):
     variants_existing: int
     photos_created: int
     photos_skipped: int
+    # Review photos auto-attributed to a variation via their review id.
+    photos_matched: int = 0
     variants: list[DepopVariantRead] = Field(default_factory=list)
     photos: list[DepopSourcePhotoRead] = Field(default_factory=list)
 

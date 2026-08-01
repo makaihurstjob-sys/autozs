@@ -1064,6 +1064,7 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
         variants_existing=variants_existing,
         photos_created=photos_created,
         photos_skipped=photos_skipped,
+        photos_matched=suggested,
         variants=[_depop_variant_read(item) for item in variants],
         photos=[DepopSourcePhotoRead.model_validate(item) for item in photos],
     )

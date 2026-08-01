@@ -466,10 +466,23 @@
       const hasDepopExtras =
         depopExtras && ((depopExtras.variations || []).length || (depopExtras.review_photos || []).length);
       if (!refreshContext && hasDepopExtras) {
+        // The reviews page attributes every photo to the colour the reviewer
+        // bought and carries more of them, but needs a signed-in session. When
+        // it is unavailable we keep the carousel photos captured off this page.
+        try {
+          progress(88, "Reading review photos with variation info...");
+          const detailed = await amazonDetailedReviewPhotos(depopExtras.parent_asin);
+          if (detailed) {
+            depopExtras.review_photos = detailed.photos;
+            depopExtras.review_colors = { ...(depopExtras.review_colors || {}), ...detailed.colors };
+          }
+        } catch {}
         try {
           progress(92, "Saving Amazon variations and review photos...");
           const depopResult = await importDepopAmazonCapture(product.id, depopExtras);
-          depopStatus = `; ${depopResult.variants_created} new variation(s), ${depopResult.photos_created} photo(s) queued for review`;
+          depopStatus =
+            `; ${depopResult.variants_created} new variation(s), ${depopResult.photos_created} photo(s) queued` +
+            (depopResult.photos_matched ? ` (${depopResult.photos_matched} auto-matched to a variation)` : "");
         } catch (depopError) {
           depopStatus = `; variation/review-photo import failed: ${depopError.message}`;
         }

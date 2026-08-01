@@ -34,7 +34,7 @@ function fallbackTheme() {
 
 async function readAppTheme() {
   try {
-    const response = await fetch(`${API}/settings`, { cache: "no-store" });
+    const response = await autozsApiFetch("/settings", { cache: "no-store" });
     if (!response.ok) throw new Error(`settings returned ${response.status}`);
     const settings = await response.json();
     return settings.ui_theme === "dark" || settings.ui_theme === "light" ? settings.ui_theme : fallbackTheme();
@@ -43,8 +43,80 @@ async function readAppTheme() {
   }
 }
 
+/**
+ * Amazon pages cannot talk to the AutoZS API from the page at all: the same
+ * fetch that answers 200 in ~200ms on a Home Depot page never even reaches the
+ * network stack on amazon.com. Service-worker fetches are not bound by the
+ * page's policy, so on Amazon every API call is proxied through the background
+ * worker. Every other supplier keeps the direct path that already works.
+ */
+function autozsApiNeedsProxy() {
+  // Runs from the popup and service worker too, where there is no page location.
+  return /(^|\.)amazon\.com$/i.test(globalThis.location?.hostname || "");
+}
+
+var AUTOZS_API_ROUTE = "unknown";
+
+async function autozsApiFetch(path, options = {}) {
+  if (!autozsApiNeedsProxy()) {
+    return fetch(`${API}${path}`, options);
+  }
+  // Direct first, with a timeout so a stalled request cannot hang the import.
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const direct = await fetch(`${API}${path}`, { ...options, signal: controller.signal });
+    clearTimeout(timer);
+    AUTOZS_API_ROUTE = "direct";
+    return direct;
+  } catch (directError) {
+    AUTOZS_API_ROUTE = `direct-failed:${directError.name}:${String(directError.message).slice(0, 40)}`;
+  }
+  // Callback form: chrome.runtime.lastError is the only place the real failure
+  // reason shows up, and the promise form swallows it as an undefined reply.
+  //
+  // The worker is an MV3 service worker that idles out and restarts, and a
+  // message landing during teardown fails with "message port closed" even
+  // though the worker is healthy. Retry so a wake race is not a failed import.
+  const sendOnce = () =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "autozs-api-proxy",
+            path,
+            method: options.method || "GET",
+            headers: options.headers,
+            body: options.body,
+          },
+          (response) => {
+            const failure = chrome.runtime.lastError;
+            resolve(failure ? { error: `background worker: ${failure.message}` } : response);
+          }
+        );
+      } catch (error) {
+        resolve({ error: `background worker unreachable: ${error.message || error}` });
+      }
+    });
+
+  let reply = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    reply = await sendOnce();
+    if (reply && !reply.error) break;
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+  }
+  if (!reply) throw new Error(`No response from the AutoZS background worker. [${AUTOZS_API_ROUTE}]`);
+  if (reply.error) throw new Error(`${reply.error} [${AUTOZS_API_ROUTE}]`);
+  AUTOZS_API_ROUTE = "proxy";
+  // Re-wrap as a Response so callers keep using .ok/.status/.json()/.text().
+  return new Response(reply.body, {
+    status: reply.status || (reply.ok ? 200 : 500),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 async function checkLocalApi() {
-  const response = await fetch(`${API}/health`, { cache: "no-store" });
+  const response = await autozsApiFetch("/health", { cache: "no-store" });
   if (!response.ok) throw new Error(`API returned ${response.status}`);
   return response.json();
 }
@@ -411,14 +483,19 @@ function amazonAsin() {
  * suffix is stripped so the stored URL is the full-resolution original.
  */
 /**
- * Amazon serves every image at a size-suffixed URL (..._AC_UC154,154_....jpg).
- * Dropping the suffix yields the full-resolution original -- a review thumbnail
- * at 154px becomes the 1632x1224 upload the reviewer actually posted.
+ * Amazon serves every image at a size-suffixed URL. Dropping the suffix yields
+ * the full-resolution original -- a review thumbnail becomes the 1632x1224
+ * upload the reviewer actually posted.
+ *
+ * Two suffix shapes exist and both must be handled: the carousel uses a
+ * trailing underscore (._AC_UC154,154_QL85_.jpg) while the reviews page does
+ * not (._SY88.jpg). Requiring the trailing underscore silently leaves every
+ * reviews-page photo at thumbnail size.
  */
 function amazonFullSizeImage(src) {
   return String(src || "")
     .split("?")[0]
-    .replace(/\._[A-Z0-9,_]+_\.(jpg|jpeg|png|webp)$/i, ".$1");
+    .replace(/\._[A-Z0-9,_]+\.(jpg|jpeg|png|webp)$/i, ".$1");
 }
 
 function amazonPrimaryImage() {
@@ -557,6 +634,61 @@ function amazonReviewPhotos() {
     });
   }
   return photos;
+}
+
+const AMAZON_REVIEWS_URL = (asin) =>
+  `https://www.amazon.com/product-reviews/${asin}/?ie=UTF8&reviewerType=all_reviews&mediaType=media_reviews_only`;
+
+/**
+ * The good path: pull review photos from the media-filtered reviews page.
+ *
+ * That page keeps each review's photos INSIDE its review body, so every photo is
+ * attributable to the colour the reviewer actually bought -- unlike the
+ * product-page carousel, which is rendered detached from the review bodies. It
+ * also exposes far more photos (28 vs 12 on the reference listing).
+ *
+ * Requires a signed-in Amazon session. Fetched same-origin from the product page
+ * so session cookies ride along; returns null when signed out or unparseable,
+ * and the caller falls back to the carousel photos.
+ */
+async function amazonDetailedReviewPhotos(parentAsin) {
+  const asin = String(parentAsin || "").trim();
+  if (!asin) return null;
+  let doc;
+  try {
+    const response = await fetch(AMAZON_REVIEWS_URL(asin), { credentials: "include" });
+    if (!response.ok) return null;
+    if (/\/ap\/signin/i.test(response.url || "")) return null;
+    const html = await response.text();
+    doc = new DOMParser().parseFromString(html, "text/html");
+  } catch {
+    return null;
+  }
+  const reviews = Array.from(doc.querySelectorAll('[data-hook="review"]') || []);
+  if (!reviews.length) return null;
+
+  const photos = [];
+  const colors = {};
+  const seen = new Set();
+  for (const review of reviews) {
+    const id = review.id || "";
+    const strip =
+      review.querySelector('[data-hook="format-strip"], [data-hook="format-strip-linkless"]')
+        ?.textContent || "";
+    const color = String(strip).replace(/\s+/g, " ").match(/Color:\s*([^,|]+)/i)?.[1]?.trim() || "";
+    if (id && color) colors[id] = color;
+    const tiles = Array.from(
+      review.querySelectorAll('img.review-image-tile, [data-hook="review-image-tile"]') || []
+    );
+    for (const tile of tiles) {
+      const raw = tile.getAttribute("src") || tile.getAttribute("data-src") || "";
+      const full = amazonFullSizeImage(raw);
+      if (!full || seen.has(full)) continue;
+      seen.add(full);
+      photos.push({ image_url: full, thumb_url: raw, width: 0, height: 0, review_id: id });
+    }
+  }
+  return photos.length ? { photos, colors } : null;
 }
 
 function amazonSourcePrice() {
@@ -1245,7 +1377,7 @@ function dedupeHomeDepotImageVariants(urls) {
 }
 
 async function importCapturedProduct(payload) {
-  const response = await fetch(`${API}/products/import-captured`, {
+  const response = await autozsApiFetch("/products/import-captured", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1255,7 +1387,7 @@ async function importCapturedProduct(payload) {
 }
 
 async function importDepopAmazonCapture(productId, extras) {
-  const response = await fetch(`${API}/depop/amazon-import`, {
+  const response = await autozsApiFetch("/depop/amazon-import", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ product_id: productId, ...extras }),
@@ -1265,7 +1397,7 @@ async function importDepopAmazonCapture(productId, extras) {
 }
 
 async function downloadProductImages(productId) {
-  const response = await fetch(`${API}/products/${productId}/download-images`, {
+  const response = await autozsApiFetch(`/products/${productId}/download-images`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -1285,7 +1417,7 @@ async function downloadProductImages(productId) {
 }
 
 async function prepareProductImages(productId, size = 1000) {
-  const response = await fetch(`${API}/products/${productId}/prepare-images?size=${encodeURIComponent(size)}`, {
+  const response = await autozsApiFetch(`/products/${productId}/prepare-images?size=${encodeURIComponent(size)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });

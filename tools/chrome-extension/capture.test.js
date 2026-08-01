@@ -1016,6 +1016,83 @@ if (depopExtras.review_colors.RREV1 !== "Lake Blue") {
 if ("RREV2" in depopExtras.review_colors) {
   throw new Error("RREV2 has no rendered review body and must not be given a colour.");
 }
+
+// Signed in, the media-filtered reviews page keeps each review's photos inside
+// its own review body, so every photo is attributable and there are more of
+// them. Signed out it must fall back to the carousel rather than throw.
+async function runAmazonDetailedReviews({ signedOut = false } = {}) {
+  const reviewsHtml = `
+    <div data-hook="review" id="RREV1">
+      <span data-hook="format-strip">Color: Black, Style: Standard</span>
+      <img class="review-image-tile" src="https://m.media-amazon.com/images/I/a1._SY88.jpg">
+      <img class="review-image-tile" src="https://m.media-amazon.com/images/I/a2._SY88.jpg">
+    </div>
+    <div data-hook="review" id="RREV2">
+      <span data-hook="format-strip">Color: Taro</span>
+      <img class="review-image-tile" src="https://m.media-amazon.com/images/I/b1._SY88.jpg">
+      <img class="review-image-tile" src="https://m.media-amazon.com/images/I/b1._SY200.jpg">
+    </div>`;
+  const context = {
+    console,
+    URL,
+    DOMParser: require("util").TextDecoder ? undefined : undefined,
+    fetch: async () =>
+      signedOut
+        ? { ok: true, url: "https://www.amazon.com/ap/signin?openid.x=1", text: async () => "" }
+        : { ok: true, url: "https://www.amazon.com/product-reviews/B0PARENT01/", text: async () => reviewsHtml },
+    document: { querySelectorAll: () => [], querySelector: () => null },
+    location: { hostname: "www.amazon.com", pathname: "/dp/B0BLACK001", href: "https://www.amazon.com/dp/B0BLACK001" },
+  };
+  // Minimal DOMParser over the fixture: good enough for the selectors used.
+  context.DOMParser = class {
+    parseFromString(html) {
+      const blocks = [...html.matchAll(/<div data-hook="review" id="([^"]+)">([\s\S]*?)<\/div>/g)];
+      const parsed = blocks.map(([, id, inner]) => ({
+        id,
+        querySelector: (sel) =>
+          /format-strip/.test(sel)
+            ? { textContent: (inner.match(/<span data-hook="format-strip">([^<]+)</) || [])[1] || "" }
+            : null,
+        querySelectorAll: () =>
+          [...inner.matchAll(/<img class="review-image-tile" src="([^"]+)"/g)].map(([, src]) => ({
+            getAttribute: (name) => (name === "src" ? src : null),
+          })),
+      }));
+      return { querySelectorAll: (sel) => (/data-hook="review"/.test(sel) ? parsed : []) };
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  return vm.runInContext("amazonDetailedReviewPhotos('B0PARENT01')", context);
+}
+
+runAmazonDetailedReviews()
+  .then((detailed) => {
+    if (!detailed) throw new Error("Expected detailed review photos when signed in.");
+    // b1 appears at two rendered sizes and must collapse to one full-size entry.
+    if (detailed.photos.length !== 3) {
+      throw new Error(`Expected 3 deduped photos, got ${JSON.stringify(detailed.photos)}`);
+    }
+    if (detailed.colors.RREV1 !== "Black" || detailed.colors.RREV2 !== "Taro") {
+      throw new Error(`Expected every review attributed, got ${JSON.stringify(detailed.colors)}`);
+    }
+    if (detailed.photos.some((photo) => !photo.review_id)) {
+      throw new Error("Every detailed review photo must carry its review id.");
+    }
+    if (detailed.photos[0].image_url !== "https://m.media-amazon.com/images/I/a1.jpg") {
+      throw new Error(`Expected full-size review photo, got ${detailed.photos[0].image_url}`);
+    }
+    return runAmazonDetailedReviews({ signedOut: true });
+  })
+  .then((signedOut) => {
+    if (signedOut !== null) {
+      throw new Error(`Signed out must fall back to the carousel (null), got ${JSON.stringify(signedOut)}`);
+    }
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 // The product record itself must still carry exactly one image.
 if (amazonVariants.image_urls.split("\n").filter(Boolean).length > 1) {
   throw new Error("Variation capture must not add extra images to the product record.");
