@@ -6306,19 +6306,51 @@
         </details>`;
       }
 
+      // A variant is only a LISTING once Depop has it. Until then it is a draft,
+      // however complete it looks -- importing an Amazon listing creates a variant
+      // per colour, and none of those have touched Depop yet.
+      function depopVariantStage(variant, job) {
+        if (variant.status === "published" || variant.depop_listing_id) return "live";
+        if (job && ["queued", "running"].includes(job.status)) return "queued";
+        return "draft";
+      }
+
+      function depopVariantCardHtml(variant, job) {
+        const product = state.products.find((item) => item.id === variant.product_id);
+        const missingImages = !variant.image_ids.length;
+        const needsPrice = !Number(variant.price);
+        const blockers = [
+          missingImages ? "needs photos" : "",
+          needsPrice ? "needs a price" : "",
+        ].filter(Boolean);
+        return `<article class="card">
+          <div class="row-between"><div><strong>${esc(variant.title)}</strong><div class="muted">${esc(variant.variant_key)} · ${variant.image_ids.length}/4 images · ${Number(variant.price) ? `$${Number(variant.price).toFixed(2)}` : "no price"}</div></div><span class="status">${esc(job?.status || variant.status)}</span></div>
+          <div class="muted">${esc([variant.brand, variant.size, variant.condition, variant.color].filter(Boolean).join(" · ") || product?.sku || "")}</div>
+          ${blockers.length ? `<div class="muted">Before it can be listed: ${esc(blockers.join(", "))}.</div>` : ""}
+          <div class="actions"><button onclick="queueDepopVariant(${variant.id})" ${variant.status !== "ready" ? "disabled" : ""}>Queue in Depop worker</button></div>
+        </article>`;
+      }
+
       function depopListingsHtml() {
         const variants = state.depopVariants || [];
-        if (!variants.length) return `<div class="needs-data">No Depop variants yet. Open a Depop product draft and create its first 3–4 image variation.</div>`;
-        return `<div class="section-heading"><div><h2>Depop Listings</h2><div class="muted">Owned inventory using your original photos.</div></div></div>
-          <div class="cards">${variants.map((variant) => {
-            const product = state.products.find((item) => item.id === variant.product_id);
-            const job = (state.depopJobs || []).find((item) => item.variant_id === variant.id && !["completed", "cancelled"].includes(item.status));
-            return `<article class="card">
-              <div class="row-between"><div><strong>${esc(variant.title)}</strong><div class="muted">${esc(variant.variant_key)} · ${variant.image_ids.length}/4 images · $${Number(variant.price).toFixed(2)}</div></div><span class="status">${esc(job?.status || variant.status)}</span></div>
-              <div class="muted">${esc([variant.brand, variant.size, variant.condition, variant.color].filter(Boolean).join(" · ") || product?.sku || "")}</div>
-              <div class="actions"><button onclick="queueDepopVariant(${variant.id})" ${variant.status !== "ready" ? "disabled" : ""}>Queue in Depop worker</button></div>
-            </article>`;
-          }).join("")}</div>`;
+        if (!variants.length) return `<div class="needs-data">No Depop variants yet. Import an Amazon listing to create one variant per colour.</div>`;
+        const openJobFor = (variant) =>
+          (state.depopJobs || []).find((item) => item.variant_id === variant.id && !["completed", "cancelled"].includes(item.status));
+        const groups = { draft: [], queued: [], live: [] };
+        for (const variant of variants) groups[depopVariantStage(variant, openJobFor(variant))].push(variant);
+        const section = (key, heading, blurb) =>
+          groups[key].length
+            ? `<div class="section-heading"><div><h2>${esc(heading)} (${groups[key].length})</h2><div class="muted">${esc(blurb)}</div></div></div>
+               <div class="cards">${groups[key].map((variant) => depopVariantCardHtml(variant, openJobFor(variant))).join("")}</div>`
+            : "";
+        return [
+          section("live", "Live on Depop", "Published and selling."),
+          section("queued", "Queued", "Handed to the Depop worker, not published yet."),
+          // Not just "Drafts": the nav already uses that for product drafts, and
+          // the header stat counts those, so an unqualified "Drafts (6)" next to
+          // "Drafts 0" reads like a bug.
+          section("draft", "Draft variations", "Not on Depop yet - waiting on photos, a price, and review."),
+        ].filter(Boolean).join("");
       }
 
       function listingsHtml() {
