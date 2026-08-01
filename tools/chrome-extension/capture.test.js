@@ -907,6 +907,90 @@ if (amazon.description !== "Rustproof") {
   throw new Error(`Expected 'See more' filtered from bullets, got ${JSON.stringify(amazon.description)}`);
 }
 
+// One Amazon parent listing fans out into a Depop listing per sibling variation,
+// plus the customer review photos. Both ride along on depop_amazon.
+function runAmazonVariationCapture() {
+  const imageBlock = {
+    parentAsin: "B0PARENT01",
+    colorToAsin: { Black: { asin: "B0BLACK001" }, "Lake Blue": { asin: "B0BLUE0001" } },
+    colorImages: {
+      // The synthetic "initial" bucket is not a real variation and must be skipped.
+      initial: [{ hiRes: "https://m.media-amazon.com/images/I/initial._AC_SL1500_.jpg" }],
+      Black: [
+        { hiRes: "https://m.media-amazon.com/images/I/black._AC_SL1500_.jpg", thumb: "https://m.media-amazon.com/images/I/black._AC_US40_.jpg" },
+        { hiRes: "https://m.media-amazon.com/images/I/black2._AC_SL1500_.jpg" },
+      ],
+      "Lake Blue": [{ large: "https://m.media-amazon.com/images/I/blue._AC_SL1500_.jpg" }],
+    },
+  };
+  const reviewNode = (src) => ({ getAttribute: (name) => (name === "src" ? src : null) });
+  const reviewNodes = [
+    reviewNode("https://m.media-amazon.com/images/I/rev1._AC_UC154,154_QL85_.jpg?aicid=community-reviews"),
+    // Same photo at a different rendered size -> must dedupe to one entry.
+    reviewNode("https://m.media-amazon.com/images/I/rev1._AC_UC300,300_QL85_.jpg?aicid=community-reviews"),
+    reviewNode("https://m.media-amazon.com/images/I/rev2._AC_UC154,154_QL85_.jpg?aicid=community-reviews"),
+    // Seller gallery / UI sprite on the same CDN, no review marker -> excluded.
+    reviewNode("https://m.media-amazon.com/images/I/sprite._AC_SX679_.jpg"),
+  ];
+  const context = {
+    console,
+    URL,
+    window: { matchMedia: () => ({ matches: false }) },
+    location: {
+      href: "https://www.amazon.com/Bag/dp/B0BLACK001",
+      hostname: "www.amazon.com",
+      pathname: "/Bag/dp/B0BLACK001",
+    },
+    document: {
+      title: "Amazon.com: Bag",
+      body: { innerText: "Bag detail page" },
+      documentElement: { innerHTML: "" },
+      images: [],
+      scripts: [{ textContent: `var obj = jQuery.parseJSON('${JSON.stringify(imageBlock)}');` }],
+      querySelector: (selector) => {
+        if (selector === "#productTitle") return { innerText: "Vegan Leather Bag" };
+        return null;
+      },
+      querySelectorAll: (selector) => {
+        if (/community|cm_cr_carousel|reviewsMedley|review-image-tile/.test(selector)) return reviewNodes;
+        return [];
+      },
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(`${source}; result = captureSourceProductFromPage();`, context);
+  return context.result;
+}
+
+const amazonVariants = runAmazonVariationCapture();
+const depopExtras = amazonVariants.depop_amazon;
+if (!depopExtras) throw new Error("Expected depop_amazon on the Amazon capture payload.");
+if (depopExtras.parent_asin !== "B0PARENT01") {
+  throw new Error(`Expected parent ASIN, got ${depopExtras.parent_asin}`);
+}
+if (depopExtras.variations.length !== 2) {
+  throw new Error(`Expected 2 variations with "initial" skipped, got ${JSON.stringify(depopExtras.variations)}`);
+}
+const blackVariation = depopExtras.variations.find((item) => item.label === "Black");
+if (!blackVariation || blackVariation.asin !== "B0BLACK001") {
+  throw new Error(`Expected Black mapped to its child ASIN, got ${JSON.stringify(blackVariation)}`);
+}
+if (blackVariation.image_url !== "https://m.media-amazon.com/images/I/black.jpg") {
+  throw new Error(`Expected the first image at full resolution, got ${blackVariation.image_url}`);
+}
+if (depopExtras.review_photos.length !== 2) {
+  throw new Error(
+    `Expected 2 deduped review photos with non-review images excluded, got ${JSON.stringify(depopExtras.review_photos)}`
+  );
+}
+if (depopExtras.review_photos[0].image_url !== "https://m.media-amazon.com/images/I/rev1.jpg") {
+  throw new Error(`Expected the review photo upscaled to the original, got ${depopExtras.review_photos[0].image_url}`);
+}
+// The product record itself must still carry exactly one image.
+if (amazonVariants.image_urls.split("\n").filter(Boolean).length > 1) {
+  throw new Error("Variation capture must not add extra images to the product record.");
+}
+
 
 runEbayAccountFallbackTest()
   .then(runEbayMissingDraftVerificationTest)

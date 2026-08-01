@@ -410,9 +410,19 @@ function amazonAsin() {
  * Amazon serves the hero image at a size-suffixed URL (..._AC_SX679_.jpg); the
  * suffix is stripped so the stored URL is the full-resolution original.
  */
+/**
+ * Amazon serves every image at a size-suffixed URL (..._AC_UC154,154_....jpg).
+ * Dropping the suffix yields the full-resolution original -- a review thumbnail
+ * at 154px becomes the 1632x1224 upload the reviewer actually posted.
+ */
+function amazonFullSizeImage(src) {
+  return String(src || "")
+    .split("?")[0]
+    .replace(/\._[A-Z0-9,_]+_\.(jpg|jpeg|png|webp)$/i, ".$1");
+}
+
 function amazonPrimaryImage() {
-  const stripSizeSuffix = (src) =>
-    String(src || "").replace(/\._[A-Z0-9,_]+_\.(jpg|jpeg|png|webp)(\?.*)?$/i, ".$1");
+  const stripSizeSuffix = amazonFullSizeImage;
   const fromHero = document.querySelector("#landingImage, #imgTagWrapperId img, #main-image-container img");
   // data-a-dynamic-image maps candidate URLs to [w,h]; the largest is the hero.
   const dynamic = fromHero?.getAttribute?.("data-a-dynamic-image");
@@ -427,6 +437,78 @@ function amazonPrimaryImage() {
   if (/^https?:/i.test(direct)) return stripSizeSuffix(direct);
   const og = document.querySelector('meta[property="og:image"]')?.content || "";
   return /^https?:/i.test(og) ? stripSizeSuffix(og) : "";
+}
+
+/**
+ * Amazon inlines the gallery model as a jQuery.parseJSON('...') string literal.
+ * It carries colorImages (variation label -> image list) and colorToAsin
+ * (variation label -> child ASIN), which together describe every sibling
+ * variation without visiting a single extra page.
+ */
+function amazonImageBlockData() {
+  const script = (document.scripts ? Array.from(document.scripts) : [])
+    .map((node) => node.textContent || "")
+    .find((text) => /colorImages/.test(text) && /jQuery\.parseJSON/.test(text));
+  if (!script) return null;
+  const match = script.match(/jQuery\.parseJSON\('([\s\S]*?)'\)/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1].replace(/\\'/g, "'"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every sibling variation with its own child ASIN and first gallery image.
+ * A product with no variations exposes only the synthetic "initial" bucket,
+ * which is skipped -- the primary image already covers that case.
+ */
+function amazonVariations() {
+  const data = amazonImageBlockData();
+  const colorImages = data?.colorImages || {};
+  const labels = Object.keys(colorImages).filter((name) => name && name !== "initial");
+  return labels
+    .map((label) => {
+      const first = (colorImages[label] || [])[0] || {};
+      const image = amazonFullSizeImage(first.hiRes || first.large || first.thumb || "");
+      if (!image) return null;
+      return {
+        label,
+        asin: String(data?.colorToAsin?.[label]?.asin || "").toUpperCase(),
+        image_url: image,
+        thumb_url: String(first.thumb || first.large || ""),
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Customer review photos from the product page.
+ *
+ * Amazon marks them with an aicid=community-reviews query flag, which is what
+ * separates a real reviewer upload from the seller gallery, avatars and UI
+ * sprites that share the same CDN. These arrive UNATTRIBUTED: the carousel is
+ * rendered detached from the review bodies that name a colour, so which
+ * variation a photo belongs to is decided during swipe review, not here.
+ */
+function amazonReviewPhotos() {
+  const nodes = Array.from(
+    document.querySelectorAll(
+      '#cm_cr_carousel_images_section img, #reviewsMedley img, [data-hook="review-image-tile"]'
+    ) || []
+  );
+  const seen = new Set();
+  const photos = [];
+  for (const node of nodes) {
+    const raw = node.getAttribute("src") || node.getAttribute("data-src") || "";
+    if (!/aicid=community-reviews/i.test(raw)) continue;
+    const full = amazonFullSizeImage(raw);
+    if (!full || seen.has(full)) continue;
+    seen.add(full);
+    photos.push({ image_url: full, thumb_url: raw, width: 0, height: 0 });
+  }
+  return photos;
 }
 
 function amazonSourcePrice() {
@@ -473,9 +555,20 @@ function captureAmazonProductFromPage(cleanSourceUrl, clean) {
     .filter((text) => text && !/see more|show more/i.test(text))
     .slice(0, 12);
   const unavailable = /currently unavailable|out of stock/i.test(document.body?.innerText || "");
+  const variations = amazonVariations();
+  const reviewPhotos = amazonReviewPhotos();
   return {
     source_url: cleanSourceUrl(),
     title,
+    // Stripped off before /products/import-captured and posted separately to
+    // /depop/amazon-import -- the product importer has no schema for these.
+    depop_amazon: {
+      parent_asin: String(amazonImageBlockData()?.parentAsin || "").toUpperCase(),
+      title,
+      price: amazonSourcePrice() || 0,
+      variations,
+      review_photos: reviewPhotos,
+    },
     source_price: amazonSourcePrice(),
     source_purchase_unit: null,
     source_bulk_package: false,
@@ -1107,6 +1200,16 @@ async function importCapturedProduct(payload) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+async function importDepopAmazonCapture(productId, extras) {
+  const response = await fetch(`${API}/depop/amazon-import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ product_id: productId, ...extras }),
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();

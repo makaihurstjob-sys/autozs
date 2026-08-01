@@ -3570,7 +3570,18 @@
         const tabs = marketplaceMode === "depop" ? depopTabs : ebayTabs;
         document.getElementById("nav").innerHTML = `<button class="nav nav-add-products" onclick="openAddProducts('launcher')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add Products</button>` + tabs.map((tab) =>
           `<button class="nav ${tab === active ? "active" : ""}" onclick="setActiveTab('${tab}')">${tab === "Products" ? "Drafts" : ["eBay Listings", "Depop Listings"].includes(tab) ? "Listings" : tab}</button>`
-        ).join("");
+        ).join("") + (marketplaceMode === "depop"
+          ? `<button class="nav" onclick="openPhotoReview()">Photos</button>`
+          : "");
+      }
+
+      // The swipe review is a full-screen touch surface, so it lives on its own
+      // page rather than inside a dashboard panel.
+      function openPhotoReview(productId) {
+        const url = new URL("photos.html", location.href);
+        if (API) url.searchParams.set("api", API);
+        if (productId) url.searchParams.set("product_id", productId);
+        window.open(url.href, "_blank", "noopener");
       }
 
       function setMarketplaceMode(mode) {

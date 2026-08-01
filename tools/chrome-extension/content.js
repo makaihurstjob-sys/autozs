@@ -442,6 +442,11 @@
       const payload = await captureWhenReady((percent, text) => progress(percent, text));
       if (payload.detected_shipping !== null && payload.detected_shipping !== undefined) payload.source_shipping = payload.detected_shipping;
       delete payload.detected_shipping;
+      // Amazon variation/review-photo data rides along on the capture payload but
+      // is not part of the product-import schema; post it separately once the
+      // product exists and we have its id.
+      const depopExtras = payload.depop_amazon;
+      delete payload.depop_amazon;
       if (refreshContext) payload.refresh_job_id = refreshContext.jobId;
       progress(58, refreshContext ? "Importing the latest source price into AutoZS..." : "Importing the product into AutoZS...");
       const product = await importCapturedProduct(payload);
@@ -457,12 +462,24 @@
           imageStatus = `image download failed: ${imageError.message}`;
         }
       }
+      let depopStatus = "";
+      const hasDepopExtras =
+        depopExtras && ((depopExtras.variations || []).length || (depopExtras.review_photos || []).length);
+      if (!refreshContext && hasDepopExtras) {
+        try {
+          progress(92, "Saving Amazon variations and review photos...");
+          const depopResult = await importDepopAmazonCapture(product.id, depopExtras);
+          depopStatus = `; ${depopResult.variants_created} new variation(s), ${depopResult.photos_created} photo(s) queued for review`;
+        } catch (depopError) {
+          depopStatus = `; variation/review-photo import failed: ${depopError.message}`;
+        }
+      }
       setStatus(
         `Imported ${product.sku}; shipping ${
           payload.source_shipping === undefined ? "unknown" : payload.source_shipping === 0 ? "free" : `$${Number(payload.source_shipping).toFixed(2)}`
         }; ${payload.subscription_discount_percent ? `${payload.subscription_discount_percent}% subscription discount; ` : ""}${
           payload.image_urls ? payload.image_urls.split("\\n").length : 0
-        } image URL(s); ${imageStatus}.`
+        } image URL(s); ${imageStatus}${depopStatus}.`
       );
       button.textContent = "Imported";
       if (refreshContext) {

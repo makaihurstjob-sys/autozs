@@ -1,17 +1,20 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import base64
 import hmac
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
+from app.core.config import get_settings
+from app.core.store_keys import DEFAULT_EBAY_STORE_KEY
 from app.models.domain import (
     AutomationRun,
     CandidateProduct,
@@ -28,9 +31,11 @@ from app.models.domain import (
     FinancialAccount,
     FulfillmentTask,
     GiftCard,
+    ListingDraft,
     Order,
     PriceSnapshot,
     Product,
+    ProductImage,
     ProductStatus,
     PushSubscription,
     ResearchJob,
@@ -39,6 +44,29 @@ from app.models.domain import (
     SupplierOrder,
     SupplierProduct,
 )
+from app.models.depop import (
+    DepopAccount,
+    DepopListingJob,
+    DepopListingVariant,
+    DepopSourcePhoto,
+)
+from app.schemas.depop import (
+    AmazonCaptureImport,
+    DepopAccountRead,
+    DepopAccountUpsert,
+    DepopImportResult,
+    DepopJobCreate,
+    DepopJobRead,
+    DepopJobUpdate,
+    DepopPhotoDecision,
+    DepopPhotoQueueItem,
+    DepopPhotoReviewRead,
+    DepopSourcePhotoRead,
+    DepopVariantCreate,
+    DepopVariantRead,
+    DepopVariantUpdate,
+)
+from app.schemas.z_finance import ZFinanceSyncRequest
 from app.schemas.domain import (
     CatalogAutomationRunRead,
     CatalogSettingsUpdate,
@@ -292,6 +320,12 @@ from app.services.finance import (
     import_finance_entries,
     upsert_financial_account,
 )
+from app.services.z_finance import (
+    build_orders as build_z_finance_orders,
+    build_payouts as build_z_finance_payouts,
+    build_summary as build_z_finance_summary,
+    sync_from_z_finance,
+)
 from app.services.products import approve_candidate
 from app.services.research import create_mock_candidates
 from app.services.settings import read_pricing_settings, write_pricing_settings
@@ -322,6 +356,20 @@ from app.services.push_notifications import (
 )
 
 router = APIRouter()
+
+
+def _require_z_finance_bearer(request: Request) -> None:
+    configured = get_settings().autozs_z_finance_token
+    if not configured:
+        raise HTTPException(status_code=503, detail="Z Finance integration is not configured")
+    authorization = request.headers.get("Authorization", "")
+    supplied = authorization[7:] if authorization.startswith("Bearer ") else ""
+    if not supplied or not hmac.compare_digest(supplied, configured):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 @router.post("/browser-recovery/home-depot-backup")
@@ -786,6 +834,521 @@ def reject_candidate_route(candidate_id: int, db: Session = Depends(get_db)) -> 
     db.commit()
     db.refresh(candidate)
     return candidate
+
+
+def _depop_variant_read(variant: DepopListingVariant) -> DepopVariantRead:
+    try:
+        image_ids = [int(value) for value in json.loads(variant.image_ids_json or "[]")]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        image_ids = []
+    return DepopVariantRead(
+        id=variant.id,
+        product_id=variant.product_id,
+        account_key=variant.account_key,
+        variant_key=variant.variant_key,
+        title=variant.title,
+        description=variant.description,
+        price=variant.price,
+        image_ids=image_ids,
+        size=variant.size,
+        brand=variant.brand,
+        category=variant.category,
+        condition=variant.condition,
+        color=variant.color,
+        status=variant.status,
+        depop_listing_id=variant.depop_listing_id,
+        published_at=variant.published_at,
+        created_at=variant.created_at,
+        updated_at=variant.updated_at,
+    )
+
+
+@router.get("/depop/accounts", response_model=list[DepopAccountRead])
+def list_depop_accounts(db: Session = Depends(get_db)) -> list[DepopAccount]:
+    return list(db.scalars(select(DepopAccount).order_by(DepopAccount.label)).all())
+
+
+@router.post("/depop/accounts", response_model=DepopAccountRead)
+def upsert_depop_account(payload: DepopAccountUpsert, db: Session = Depends(get_db)) -> DepopAccount:
+    account = db.scalar(select(DepopAccount).where(DepopAccount.key == payload.key))
+    if account is None:
+        account = DepopAccount(key=payload.key, label=payload.label)
+        db.add(account)
+    for field, value in payload.model_dump().items():
+        setattr(account, field, value)
+    db.commit()
+    db.refresh(account)
+    return account
+
+
+def _depop_variant_key(variation: object, index: int) -> str:
+    asin = str(getattr(variation, "asin", "") or "").strip()
+    if asin:
+        return asin
+    label = str(getattr(variation, "label", "") or "").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", label).strip("-")
+    return slug or f"variation-{index + 1}"
+
+
+def _resolve_depop_account_key(db: Session, requested: str) -> str:
+    if requested:
+        return requested
+    account = db.scalar(
+        select(DepopAccount).where(DepopAccount.enabled.is_(True)).order_by(DepopAccount.id)
+    )
+    return account.key if account is not None else ""
+
+
+@router.post("/depop/amazon-import", response_model=DepopImportResult)
+def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(get_db)) -> DepopImportResult:
+    """Turn one scraped Amazon parent listing into Depop variants + swipe candidates.
+
+    Deliberately tolerant: it runs before a Depop account exists so capture is
+    never blocked on account setup, and re-importing the same listing is a no-op
+    for anything already stored.
+    """
+    product = db.get(Product, payload.product_id)
+    if product is None or product.status == ProductStatus.deleted.value:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    account_key = _resolve_depop_account_key(db, payload.account_key)
+    base_title = (payload.title or product.title or "").strip()
+
+    variants_created = 0
+    variants_existing = 0
+    variant_by_label: dict[str, DepopListingVariant] = {}
+    for index, variation in enumerate(payload.variations):
+        variant_key = _depop_variant_key(variation, index)
+        variant = db.scalar(
+            select(DepopListingVariant).where(
+                DepopListingVariant.product_id == product.id,
+                DepopListingVariant.variant_key == variant_key,
+            )
+        )
+        if variant is None:
+            variant = DepopListingVariant(
+                product_id=product.id,
+                account_key=account_key,
+                variant_key=variant_key,
+                title=f"{base_title} - {variation.label}".strip(" -")[:512] or variation.label,
+                description="",
+                price=0.0,
+                image_ids_json="[]",
+                color=variation.label[:64],
+                status="draft",
+            )
+            db.add(variant)
+            db.flush()
+            variants_created += 1
+        else:
+            variants_existing += 1
+        variant_by_label[variation.label.strip().lower()] = variant
+
+    photos_created = 0
+    photos_skipped = 0
+
+    def _add_photo(
+        *,
+        image_url: str,
+        thumb_url: str,
+        kind: str,
+        variant_label: str = "",
+        source_asin: str = "",
+        variant_id: int | None = None,
+        width: int = 0,
+        height: int = 0,
+        sort_order: int = 0,
+    ) -> None:
+        nonlocal photos_created, photos_skipped
+        url = (image_url or "").strip()
+        if not url:
+            photos_skipped += 1
+            return
+        existing = db.scalar(
+            select(DepopSourcePhoto).where(
+                DepopSourcePhoto.product_id == product.id,
+                DepopSourcePhoto.image_url == url,
+            )
+        )
+        if existing is not None:
+            photos_skipped += 1
+            return
+        db.add(
+            DepopSourcePhoto(
+                product_id=product.id,
+                kind=kind,
+                image_url=url,
+                thumb_url=(thumb_url or "").strip(),
+                source_asin=source_asin[:32],
+                variant_label=variant_label[:128],
+                variant_id=variant_id,
+                status="pending",
+                width=width,
+                height=height,
+                sort_order=sort_order,
+            )
+        )
+        photos_created += 1
+
+    for index, variation in enumerate(payload.variations):
+        variant = variant_by_label.get(variation.label.strip().lower())
+        _add_photo(
+            image_url=variation.image_url,
+            thumb_url=variation.thumb_url,
+            kind="variation",
+            variant_label=variation.label,
+            source_asin=variation.asin,
+            variant_id=variant.id if variant is not None else None,
+            sort_order=index,
+        )
+
+    for index, photo in enumerate(payload.review_photos):
+        _add_photo(
+            image_url=photo.image_url,
+            thumb_url=photo.thumb_url,
+            kind="review",
+            width=photo.width,
+            height=photo.height,
+            sort_order=index,
+        )
+
+    db.commit()
+
+    variants = list(
+        db.scalars(
+            select(DepopListingVariant)
+            .where(DepopListingVariant.product_id == product.id)
+            .order_by(DepopListingVariant.id)
+        ).all()
+    )
+    photos = list(
+        db.scalars(
+            select(DepopSourcePhoto)
+            .where(DepopSourcePhoto.product_id == product.id)
+            .order_by(DepopSourcePhoto.kind, DepopSourcePhoto.sort_order, DepopSourcePhoto.id)
+        ).all()
+    )
+    return DepopImportResult(
+        product_id=product.id,
+        variants_created=variants_created,
+        variants_existing=variants_existing,
+        photos_created=photos_created,
+        photos_skipped=photos_skipped,
+        variants=[_depop_variant_read(item) for item in variants],
+        photos=[DepopSourcePhotoRead.model_validate(item) for item in photos],
+    )
+
+
+@router.get("/depop/photo-queue", response_model=list[DepopPhotoQueueItem])
+def list_depop_photo_queue(db: Session = Depends(get_db)) -> list[DepopPhotoQueueItem]:
+    """Products that have captured photos, newest first, with review progress."""
+    photos = list(
+        db.scalars(
+            select(DepopSourcePhoto).order_by(DepopSourcePhoto.product_id, DepopSourcePhoto.id)
+        ).all()
+    )
+    if not photos:
+        return []
+    product_ids = {photo.product_id for photo in photos}
+    products = {
+        product.id: product
+        for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    }
+    variant_counts: dict[int, int] = {}
+    for variant in db.scalars(
+        select(DepopListingVariant).where(DepopListingVariant.product_id.in_(product_ids))
+    ).all():
+        variant_counts[variant.product_id] = variant_counts.get(variant.product_id, 0) + 1
+
+    grouped: dict[int, dict[str, object]] = {}
+    for photo in photos:
+        entry = grouped.setdefault(
+            photo.product_id,
+            {"pending": 0, "approved": 0, "rejected": 0, "cover": ""},
+        )
+        if photo.status in ("pending", "approved", "rejected"):
+            entry[photo.status] = int(entry[photo.status]) + 1
+        if not entry["cover"] and photo.kind == "variation":
+            entry["cover"] = photo.image_url
+
+    items: list[DepopPhotoQueueItem] = []
+    for product_id, entry in grouped.items():
+        product = products.get(product_id)
+        if product is None or product.status == ProductStatus.deleted.value:
+            continue
+        items.append(
+            DepopPhotoQueueItem(
+                product_id=product_id,
+                product_title=product.title,
+                variants=variant_counts.get(product_id, 0),
+                pending=int(entry["pending"]),
+                approved=int(entry["approved"]),
+                rejected=int(entry["rejected"]),
+                cover_image=str(entry["cover"]),
+            )
+        )
+    # Anything still needing review floats to the top.
+    items.sort(key=lambda item: (item.pending == 0, -item.product_id))
+    return items
+
+
+@router.get("/depop/photo-review/{product_id}", response_model=DepopPhotoReviewRead)
+def read_depop_photo_review(product_id: int, db: Session = Depends(get_db)) -> DepopPhotoReviewRead:
+    product = db.get(Product, product_id)
+    if product is None or product.status == ProductStatus.deleted.value:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variants = list(
+        db.scalars(
+            select(DepopListingVariant)
+            .where(DepopListingVariant.product_id == product_id)
+            .order_by(DepopListingVariant.id)
+        ).all()
+    )
+    photos = list(
+        db.scalars(
+            select(DepopSourcePhoto)
+            .where(DepopSourcePhoto.product_id == product_id)
+            .order_by(DepopSourcePhoto.kind, DepopSourcePhoto.sort_order, DepopSourcePhoto.id)
+        ).all()
+    )
+    return DepopPhotoReviewRead(
+        product_id=product_id,
+        product_title=product.title,
+        variants=[_depop_variant_read(item) for item in variants],
+        photos=[DepopSourcePhotoRead.model_validate(item) for item in photos],
+    )
+
+
+@router.get("/depop/source-photos", response_model=list[DepopSourcePhotoRead])
+def list_depop_source_photos(
+    product_id: int | None = Query(default=None),
+    status: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[DepopSourcePhoto]:
+    stmt = select(DepopSourcePhoto).order_by(
+        DepopSourcePhoto.kind, DepopSourcePhoto.sort_order, DepopSourcePhoto.id
+    )
+    if product_id is not None:
+        stmt = stmt.where(DepopSourcePhoto.product_id == product_id)
+    if status:
+        stmt = stmt.where(DepopSourcePhoto.status == status)
+    if kind:
+        stmt = stmt.where(DepopSourcePhoto.kind == kind)
+    return list(db.scalars(stmt).all())
+
+
+@router.post("/depop/source-photos/{photo_id}/decision", response_model=DepopSourcePhotoRead)
+def decide_depop_source_photo(
+    photo_id: int, payload: DepopPhotoDecision, db: Session = Depends(get_db)
+) -> DepopSourcePhoto:
+    """Record a swipe. Approving with a variant also wires the photo into that
+    variant's publish payload, so the swipe queue feeds the existing Depop
+    listing path instead of being a parallel store."""
+    photo = db.get(DepopSourcePhoto, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    variant: DepopListingVariant | None = None
+    if payload.variant_id is not None:
+        variant = db.get(DepopListingVariant, payload.variant_id)
+        if variant is None or variant.product_id != photo.product_id:
+            raise HTTPException(status_code=400, detail="Variant must belong to the same product")
+
+    photo.status = payload.status
+    photo.variant_id = variant.id if variant is not None else None
+    if variant is not None:
+        photo.variant_label = variant.color or photo.variant_label
+
+    if payload.status == "approved" and variant is not None:
+        image = db.scalar(
+            select(ProductImage).where(
+                ProductImage.product_id == photo.product_id,
+                ProductImage.image_url == photo.image_url,
+            )
+        )
+        if image is None:
+            highest = db.scalar(
+                select(func.max(ProductImage.sort_order)).where(
+                    ProductImage.product_id == photo.product_id
+                )
+            )
+            image = ProductImage(
+                product_id=photo.product_id,
+                image_url=photo.image_url,
+                sort_order=int(highest or 0) + 1,
+            )
+            db.add(image)
+            db.flush()
+        try:
+            image_ids = [int(value) for value in json.loads(variant.image_ids_json or "[]")]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            image_ids = []
+        if image.id not in image_ids and len(image_ids) < 4:
+            image_ids.append(image.id)
+            variant.image_ids_json = json.dumps(image_ids)
+
+    db.commit()
+    db.refresh(photo)
+    return photo
+
+
+@router.get("/depop/variants", response_model=list[DepopVariantRead])
+def list_depop_variants(
+    product_id: int | None = Query(default=None),
+    account_key: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[DepopVariantRead]:
+    stmt = select(DepopListingVariant).order_by(DepopListingVariant.created_at.desc())
+    if product_id is not None:
+        stmt = stmt.where(DepopListingVariant.product_id == product_id)
+    if account_key:
+        stmt = stmt.where(DepopListingVariant.account_key == account_key)
+    return [_depop_variant_read(item) for item in db.scalars(stmt).all()]
+
+
+@router.post("/depop/variants", response_model=DepopVariantRead)
+def create_depop_variant(payload: DepopVariantCreate, db: Session = Depends(get_db)) -> DepopVariantRead:
+    product = db.get(Product, payload.product_id)
+    if product is None or product.status == ProductStatus.deleted.value:
+        raise HTTPException(status_code=404, detail="Product not found")
+    account = db.scalar(select(DepopAccount).where(DepopAccount.key == payload.account_key))
+    if account is None or not account.enabled:
+        raise HTTPException(status_code=400, detail="Select an enabled Depop account")
+    image_ids = list(dict.fromkeys(payload.image_ids))
+    if image_ids:
+        owned = set(
+            db.scalars(
+                select(ProductImage.id).where(
+                    ProductImage.product_id == product.id, ProductImage.id.in_(image_ids)
+                )
+            ).all()
+        )
+        if owned != set(image_ids):
+            raise HTTPException(status_code=400, detail="Every image must belong to this product")
+    existing = db.scalar(
+        select(DepopListingVariant).where(
+            DepopListingVariant.product_id == product.id,
+            DepopListingVariant.variant_key == payload.variant_key,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="This product already has that Depop variant")
+    variant = DepopListingVariant(
+        product_id=product.id,
+        account_key=payload.account_key,
+        variant_key=payload.variant_key,
+        title=payload.title,
+        description=payload.description,
+        price=payload.price,
+        image_ids_json=json.dumps(image_ids),
+        size=payload.size,
+        brand=payload.brand,
+        category=payload.category,
+        condition=payload.condition,
+        color=payload.color,
+        status="ready" if 3 <= len(image_ids) <= 4 else "draft",
+    )
+    db.add(variant)
+    if not any(draft.marketplace == "depop" for draft in product.listing_drafts):
+        product.listing_drafts.append(
+            ListingDraft(
+                marketplace="depop",
+                title=payload.title,
+                description=payload.description,
+                calculated_price=payload.price,
+                status="draft",
+            )
+        )
+    db.commit()
+    db.refresh(variant)
+    return _depop_variant_read(variant)
+
+
+@router.patch("/depop/variants/{variant_id}", response_model=DepopVariantRead)
+def update_depop_variant(
+    variant_id: int, payload: DepopVariantUpdate, db: Session = Depends(get_db)
+) -> DepopVariantRead:
+    variant = db.get(DepopListingVariant, variant_id)
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Depop variant not found")
+    changes = payload.model_dump(exclude_unset=True)
+    image_ids = changes.pop("image_ids", None)
+    if image_ids is not None:
+        image_ids = list(dict.fromkeys(image_ids))
+        owned = set(
+            db.scalars(
+                select(ProductImage.id).where(
+                    ProductImage.product_id == variant.product_id, ProductImage.id.in_(image_ids)
+                )
+            ).all()
+        )
+        if owned != set(image_ids):
+            raise HTTPException(status_code=400, detail="Every image must belong to this product")
+        variant.image_ids_json = json.dumps(image_ids)
+    for field, value in changes.items():
+        setattr(variant, field, value)
+    if "status" not in changes:
+        count = len(json.loads(variant.image_ids_json or "[]"))
+        variant.status = "ready" if 3 <= count <= 4 else "draft"
+    db.commit()
+    db.refresh(variant)
+    return _depop_variant_read(variant)
+
+
+@router.get("/depop/jobs", response_model=list[DepopJobRead])
+def list_depop_jobs(db: Session = Depends(get_db)) -> list[DepopListingJob]:
+    return list(db.scalars(select(DepopListingJob).order_by(DepopListingJob.created_at.desc())).all())
+
+
+@router.post("/depop/jobs", response_model=DepopJobRead)
+def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) -> DepopListingJob:
+    variant = db.get(DepopListingVariant, payload.variant_id)
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Depop variant not found")
+    account = db.scalar(select(DepopAccount).where(DepopAccount.key == variant.account_key))
+    if account is None or not account.enabled:
+        raise HTTPException(status_code=400, detail="Depop account is unavailable")
+    if not account.writes_enabled:
+        raise HTTPException(status_code=409, detail="Enable Depop browser writes before queueing")
+    image_count = len(json.loads(variant.image_ids_json or "[]"))
+    if image_count < 3 or image_count > 4:
+        raise HTTPException(status_code=400, detail="Depop variants require 3 or 4 original images")
+    existing = db.scalar(
+        select(DepopListingJob).where(
+            DepopListingJob.variant_id == variant.id,
+            DepopListingJob.status.in_(["queued", "running"]),
+        )
+    )
+    if existing is not None:
+        return existing
+    job = DepopListingJob(
+        variant_id=variant.id,
+        account_key=variant.account_key,
+        action=payload.action,
+        status="queued",
+        scheduled_for=payload.scheduled_for,
+        message="Waiting for the dedicated Depop Chrome profile.",
+    )
+    variant.status = "queued"
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.patch("/depop/jobs/{job_id}", response_model=DepopJobRead)
+def update_depop_job(
+    job_id: int, payload: DepopJobUpdate, db: Session = Depends(get_db)
+) -> DepopListingJob:
+    job = db.get(DepopListingJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Depop job not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(job, field, value)
+    db.commit()
+    db.refresh(job)
+    return job
 
 
 @router.get("/products", response_model=list[ProductRead])
@@ -2290,7 +2853,7 @@ def sync_sandbox_order(db: Session = Depends(get_db)) -> Order:
 
 @router.post("/orders/sync", response_model=EbaySyncRunRead)
 def queue_order_sync(
-    account_key: str = Query("main-store", min_length=1, max_length=128),
+    account_key: str = Query(DEFAULT_EBAY_STORE_KEY, min_length=1, max_length=128),
     db: Session = Depends(get_db),
 ) -> EbaySyncRunRead:
     run = queue_ebay_order_sync(db, account_key=account_key, force=True)
@@ -2660,6 +3223,75 @@ def add_subscription_expense(
 @router.post("/finance/entries/import")
 def import_financial_entries(entries: list[FinanceEntryImport], db: Session = Depends(get_db)) -> dict[str, int]:
     return {"imported": import_finance_entries(db, [entry.model_dump() for entry in entries])}
+
+
+@router.get("/api/z-finance/summary", dependencies=[Depends(_require_z_finance_bearer)])
+def read_z_finance_summary(
+    period: str = Query("all"),
+    start_date: date | None = Query(None, alias="startDate"),
+    end_date: date | None = Query(None, alias="endDate"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return build_z_finance_summary(
+            db,
+            period,
+            start_date,
+            end_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/api/z-finance/orders", dependencies=[Depends(_require_z_finance_bearer)])
+def read_z_finance_orders(
+    period: str = Query("all"),
+    start_date: date | None = Query(None, alias="startDate"),
+    end_date: date | None = Query(None, alias="endDate"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return build_z_finance_orders(
+            db,
+            period,
+            start_date,
+            end_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/api/z-finance/payouts", dependencies=[Depends(_require_z_finance_bearer)])
+def read_z_finance_payouts(
+    period: str = Query("all"),
+    start_date: date | None = Query(None, alias="startDate"),
+    end_date: date | None = Query(None, alias="endDate"),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return build_z_finance_payouts(
+            db,
+            period,
+            start_date,
+            end_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/api/z-finance/sync", dependencies=[Depends(_require_z_finance_bearer)])
+def run_z_finance_sync(payload: ZFinanceSyncRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        return sync_from_z_finance(
+            db,
+            start_date=payload.startDate,
+            end_date=payload.endDate,
+            reset_cursor=payload.resetCursor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Z Finance sync failed") from exc
 
 
 def _stats_cutoff(selected_range: str) -> datetime | None:
