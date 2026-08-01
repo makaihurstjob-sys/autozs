@@ -426,8 +426,32 @@ async function writeListingJobRunnerTabId(jobId, tabId) {
   await chrome.storage.local.set({ [LISTING_JOB_RUNNER_TAB_KEY]: map });
 }
 
+// The content script reports progress (fill steps, liveness pings) by PATCHing the
+// job, so updated_at moving is proof a runner is alive no matter what
+// chrome.tabs reports. Pings are ~5 minutes apart, so the window has to be wider
+// than that or a healthy runner looks dead between pings.
+const LISTING_RUNNER_PROGRESS_GRACE_MS = 6 * 60 * 1000;
+
+function listingJobRecentlyProgressed(job, nowMs = Date.now()) {
+  const raw = job?.updated_at;
+  if (!raw) return false;
+  const text = String(raw).trim();
+  // API timestamps are naive UTC; Date.parse needs the marker to not read them as local.
+  const parsed = Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`);
+  if (!Number.isFinite(parsed)) return false;
+  return nowMs - parsed < LISTING_RUNNER_PROGRESS_GRACE_MS;
+}
+
 async function reopenOrphanedListingJob(job) {
   if (!job?.id || !job?.assistant_url) return false;
+  // Never reopen a runner that just reported progress. Reopening destroys the
+  // in-flight editor and restarts the workflow from the top, and the description
+  // step runs near the end -- so a job that is mid-fill gets restarted before it
+  // ever reaches the description and then reports "could not write one into the
+  // editor". Observed live on job 106: recovery 1/3, recovery 2/3, a liveness
+  // ping proving the content script was alive, then recovery 3/3 on top of it.
+  // Truly dead jobs are still caught by the API's 30-minute stale watchdog.
+  if (listingJobRecentlyProgressed(job)) return true;
   // Background tabs (active:false) are throttled by Chrome and can go several
   // seconds without a committed URL, so chrome.tabs.query by URL pattern can
   // miss a tab that is alive and loading fine — which made every reopen cycle

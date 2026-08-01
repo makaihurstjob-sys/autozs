@@ -11,6 +11,8 @@ async function runNativePcInputTest() {
   const removedCookies = [];
   const browsingDataRemovals = [];
   let tabQueryResults = [];
+  let runningListingJobs = [];
+  const reloadedTabs = [];
   const storage = { autozsWorkerMode: "operations" };
   const fetched = [];
   const context = {
@@ -30,7 +32,7 @@ async function runNativePcInputTest() {
         };
       }
       if (url.endsWith("/listing-jobs?status=running&limit=1")) {
-        return { ok: true, status: 200, json: async () => [] };
+        return { ok: true, status: 200, json: async () => runningListingJobs };
       }
       if (url.endsWith("/listing-jobs/next")) {
         return {
@@ -159,6 +161,9 @@ async function runNativePcInputTest() {
           return { id: 23, ...options };
         },
         update: async () => {},
+        reload: async (tabId) => {
+          reloadedTabs.push(tabId);
+        },
         remove: (tabId, callback) => {
           closedTabs.push(tabId);
           callback?.();
@@ -202,17 +207,17 @@ async function runNativePcInputTest() {
     throw new Error("Expected a fresh Home Depot cleanup when the refresh batch changes.");
   }
   const reportFilename = context.reportDownloadFilename(
-    { runId: 42, accountKey: "Main Store", reportType: "active_listings" },
+    { runId: 42, accountKey: "a.m.anim-59", reportType: "active_listings" },
     "eBay-all-active-listings-report.csv"
   );
-  if (reportFilename !== "AutoZS/ebay-active-listings-main-store-run-42.csv") {
+  if (reportFilename !== "AutoZS/ebay-active-listings-a-m-anim-59-run-42.csv") {
     throw new Error(`Unexpected tagged report filename: ${reportFilename}`);
   }
   const trafficFilename = context.reportDownloadFilename(
-    { runId: 43, accountKey: "Main Store", reportType: "traffic" },
+    { runId: 43, accountKey: "a.m.anim-59", reportType: "traffic" },
     "active-listings-traffic.csv"
   );
-  if (trafficFilename !== "AutoZS/ebay-traffic-main-store-run-43.csv") {
+  if (trafficFilename !== "AutoZS/ebay-traffic-a-m-anim-59-run-43.csv") {
     throw new Error(`Unexpected tagged traffic filename: ${trafficFilename}`);
   }
   await context.openNextProductCapture();
@@ -222,7 +227,7 @@ async function runNativePcInputTest() {
   }
 
   await context.uploadRevisionResultDownload(
-    { batchId: 3, accountKey: "main-store", filename: "result.csv" },
+    { batchId: 3, accountKey: "a.m.anim-59", filename: "result.csv" },
     { finalUrl: "https://www.ebay.com/result.csv", filename: "/Downloads/AutoZS/result.csv" }
   );
   const directImport = fetched.find((request) => request.url.endsWith("/ebay/revision-batches/3/results"));
@@ -232,13 +237,13 @@ async function runNativePcInputTest() {
     throw new Error(`Unexpected direct revision payload: ${JSON.stringify(directPayload)}`);
   }
   await context.uploadTrafficReportDownload(
-    { runId: 43, accountKey: "main-store", filename: "traffic.csv" },
+    { runId: 43, accountKey: "a.m.anim-59", filename: "traffic.csv" },
     { finalUrl: "https://www.ebay.com/traffic.csv", filename: "/Downloads/AutoZS/traffic.csv" }
   );
   const trafficImport = fetched.find((request) => request.url.endsWith("/stats/traffic/import-file"));
   if (!trafficImport) throw new Error(`Expected direct traffic report import, got ${JSON.stringify(fetched)}`);
   const trafficPayload = JSON.parse(trafficImport.options.body);
-  if (trafficPayload.run_id !== 43 || trafficPayload.account_key !== "main-store" || !trafficPayload.report_base64) {
+  if (trafficPayload.run_id !== 43 || trafficPayload.account_key !== "a.m.anim-59" || !trafficPayload.report_base64) {
     throw new Error(`Unexpected direct traffic payload: ${JSON.stringify(trafficPayload)}`);
   }
 
@@ -340,6 +345,130 @@ async function runNativePcInputTest() {
   }
   await context.openNextListingJob();
   if (createdTabs.length !== 1) throw new Error("Expected listing poll throttle to prevent duplicate tabs.");
+
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  runningListingJobs = [{
+    id: 77,
+    status: "running",
+    assistant_url: "https://www.ebay.com/lstng?draftId=abc&autozs_job_id=77#autozs_job_id=77",
+  }];
+  tabQueryResults = [];
+  await context.openNextListingJob();
+  if (fetched.some((request) => request.url.endsWith("/listing-jobs/next"))) {
+    throw new Error("Expected no new claim while a job is already running.");
+  }
+  if (createdTabs.length !== 1 || !context.isListingJobRunnerUrl(createdTabs[0].url, 77)) {
+    throw new Error(`Expected the orphaned running job runner to reopen, got ${JSON.stringify(createdTabs)}`);
+  }
+
+  createdTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  tabQueryResults = [{ id: 9, url: "https://www.ebay.com/lstng?draftId=abc&autozs_job_id=77" }];
+  await context.openNextListingJob();
+  if (createdTabs.length !== 0) {
+    throw new Error(`Expected no reopen while the runner tab is alive, got ${JSON.stringify(createdTabs)}`);
+  }
+
+  // Regression: a runner that reported progress seconds ago is alive by
+  // definition, whatever chrome.tabs reports. Reopening restarts the workflow
+  // from the top and the description step runs near the end, so a job that is
+  // mid-fill never survives to write one -- then reports it could not. Seen live
+  // on job 106: recovery 1/3, recovery 2/3, a liveness ping proving the content
+  // script was working, then recovery 3/3 stacked on top of it.
+  const quietJob = {
+    id: 77,
+    status: "running",
+    assistant_url: "https://www.ebay.com/lstng?draftId=abc&autozs_job_id=77#autozs_job_id=77",
+  };
+  createdTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  storage.autozsListingJobReopens = {};
+  storage.autozsListingJobRunnerTabs = {};
+  tabQueryResults = [];
+  runningListingJobs = [{
+    ...quietJob,
+    updated_at: new Date(Date.now() - 30 * 1000).toISOString().replace("Z", ""),
+  }];
+  await context.openNextListingJob();
+  if (createdTabs.length !== 0) {
+    throw new Error(
+      `Expected no reopen for a runner that reported progress 30s ago, got ${JSON.stringify(createdTabs)}`
+    );
+  }
+
+  // ...but a runner that has genuinely gone quiet must still be recovered.
+  createdTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  storage.autozsListingJobReopens = {};
+  storage.autozsListingJobRunnerTabs = {};
+  tabQueryResults = [];
+  runningListingJobs = [{
+    ...quietJob,
+    updated_at: new Date(Date.now() - 20 * 60 * 1000).toISOString().replace("Z", ""),
+  }];
+  await context.openNextListingJob();
+  if (createdTabs.length !== 1) {
+    throw new Error(
+      `Expected a silent orphaned runner to still be reopened, got ${JSON.stringify(createdTabs)}`
+    );
+  }
+  runningListingJobs = [quietJob];
+
+  // A runner that has navigated on to the editor no longer carries
+  // autozs_job_id; it must still count as alive or a second tab gets opened
+  // and the two runners corrupt each other's draft.
+  createdTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  tabQueryResults = [{ id: 12, url: "https://www.ebay.com/lstng?draftId=5351561921310&mode=AddItem" }];
+  await context.openNextListingJob();
+  if (createdTabs.length !== 0) {
+    throw new Error(`Expected an editor tab without autozs params to count as a live runner, got ${JSON.stringify(createdTabs)}`);
+  }
+
+  createdTabs.length = 0;
+  reloadedTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  tabQueryResults = [{ id: 9, url: "https://www.ebay.com/lstng?draftId=abc&autozs_job_id=77", discarded: true }];
+  await context.openNextListingJob();
+  if (reloadedTabs.length !== 1 || reloadedTabs[0] !== 9 || createdTabs.length !== 0) {
+    throw new Error(`Expected a discarded runner tab to be reloaded, got ${JSON.stringify({ reloadedTabs, createdTabs })}`);
+  }
+  // A reopened runner must refresh the job so the API's 30-minute watchdog
+  // stops flagging recovered jobs as "worker stopped reporting", and must give
+  // up after a few tries so a hopeless job still fails.
+  createdTabs.length = 0;
+  fetched.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  storage.autozsListingJobReopens = {};
+  runningListingJobs = [{
+    id: 77,
+    status: "running",
+    assistant_url: "https://www.ebay.com/lstng?draftId=abc&autozs_job_id=77#autozs_job_id=77",
+  }];
+  tabQueryResults = [];
+  await context.openNextListingJob();
+  const heartbeat = fetched.find(
+    (request) => request.url.endsWith("/listing-jobs/77") && request.options.method === "PATCH"
+  );
+  if (!heartbeat || !/reopened by AutoZS/.test(String(heartbeat.options.body))) {
+    throw new Error(`Expected a heartbeat PATCH for the reopened job, got ${JSON.stringify(fetched.map((f) => f.url))}`);
+  }
+  if (storage.autozsListingJobReopens["77"] !== 1) {
+    throw new Error(`Expected the reopen count to be tracked, got ${JSON.stringify(storage.autozsListingJobReopens)}`);
+  }
+
+  createdTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  storage.autozsListingJobReopens = { "77": 3 };
+  await context.openNextListingJob();
+  if (createdTabs.length !== 0) {
+    throw new Error(`Expected reopen attempts to stop after 3 tries, got ${JSON.stringify(createdTabs)}`);
+  }
+
+  runningListingJobs = [];
+  tabQueryResults = [];
 
   const closedBeforeFreshListingRunner = closedTabs.length;
   createdTabs.length = 0;
