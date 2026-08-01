@@ -1294,11 +1294,18 @@
       const events = [];
       latestJobByProduct.forEach((job, productId) => {
         if (!job.listing_schedule_at || ["cancelled", "tombstoned"].includes(String(job.status || "").toLowerCase())) return;
-        const instant = scheduleDate(job.listing_schedule_at);
-        if (Number.isNaN(instant.getTime())) return;
         const listing = listingByProduct.get(productId);
         const product = productById.get(productId);
-        const isListed = String(job.status || "").toLowerCase() === "completed" && instant.getTime() <= now;
+        const isCompleted = String(job.status || "").toLowerCase() === "completed";
+        // Once a job is completed, eBay's own start time is the truth and
+        // listing_schedule_at is only the plan it was created from. Plotting the plan
+        // put listings that published early on a day they are not actually on, so a
+        // day with 7 real listings showed 11. Prefer the real start when we have one.
+        const planned = scheduleDate(job.listing_schedule_at);
+        const actual = isCompleted && listing?.started_at ? scheduleDate(listing.started_at) : null;
+        const instant = actual && !Number.isNaN(actual.getTime()) ? actual : planned;
+        if (Number.isNaN(instant.getTime())) return;
+        const isListed = isCompleted && instant.getTime() <= now;
         events.push(mobileCalendarEvent(isListed ? "listed" : "scheduled", instant, product, listing, job));
       });
       scopedListings.forEach((listing) => {
