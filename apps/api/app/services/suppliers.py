@@ -35,16 +35,19 @@ SUPPLIER_CATALOG: tuple[dict[str, object], ...] = (
     {
         "key": "amazon",
         "label": "Amazon",
-        "enabled": False,
-        "status": "manual_only",
+        "enabled": True,
+        "status": "active",
         "domains": ["amazon.com"],
         "capabilities": {
             "url_import": True,
-            "browser_capture": False,
+            "browser_capture": True,
             "automatic_price_refresh": False,
             "browser_fulfillment": False,
         },
-        "note": "Manual source records only.",
+        # Browser capture is the Depop sourcing path. Only the primary product
+        # image is captured (Depop listings do not reuse the supplier gallery),
+        # so image_urls holds exactly one URL.
+        "note": "Browser capture enabled for Depop sourcing; captures the primary image only.",
     },
     {
         "key": "walmart",

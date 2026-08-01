@@ -105,8 +105,12 @@ function detectEbaySignedInUsernameFromPage() {
     }
     const hiMatch = text.match(/\bHi[, ]+([A-Za-z0-9._-]{2,64})\b/i);
     if (hiMatch && usernameLike(hiMatch[1])) return cleanUsername(hiMatch[1]);
-    const signedInMatch = text.match(/\b(?:signed in as|account|username|user id)[: ]+([A-Za-z0-9._-]{2,64})\b/i);
-    if (signedInMatch) return cleanUsername(signedInMatch[1]);
+    // A bare "account" matched eBay's own "Account options" menu and reported
+    // the store as signed in as "options", which blocked jobs outright. Require
+    // a phrase that actually precedes a username, and hold it to the same
+    // username shape the "Hi <name>" branch uses.
+    const signedInMatch = text.match(/\b(?:signed in as|account name|username|user id)[: ]+([A-Za-z0-9._-]{2,64})\b/i);
+    if (signedInMatch && usernameLike(signedInMatch[1])) return cleanUsername(signedInMatch[1]);
     const fallback = cleanUsername(text);
     return allowFallback && fallback && (allowPlain || usernameLike(fallback)) ? fallback : "";
   };
@@ -385,6 +389,118 @@ if (typeof window !== "undefined" && typeof document !== "undefined" && typeof s
   startEbayDraftPresenceReporter();
 }
 
+function isAmazonProductPage() {
+  return /(^|\.)amazon\.com$/i.test(location.hostname || "") && Boolean(amazonAsin());
+}
+
+function amazonAsin() {
+  const fromPath = (location.pathname || "").match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})(?:[/?]|$)/i);
+  if (fromPath) return fromPath[1].toUpperCase();
+  const asinInput = document.querySelector('input#ASIN, input[name="ASIN"], #ASIN');
+  const value = asinInput?.value || asinInput?.getAttribute?.("value") || "";
+  if (/^[A-Z0-9]{10}$/i.test(value)) return value.toUpperCase();
+  const detailBullets = document.body?.innerText || "";
+  const fromText = detailBullets.match(/\bASIN\s*[:\s]\s*([A-Z0-9]{10})\b/i);
+  return fromText ? fromText[1].toUpperCase() : "";
+}
+
+/**
+ * Depop listings do not reuse the supplier gallery, so Amazon capture takes the
+ * PRIMARY image only -- not the rest of the gallery and not the video poster.
+ * Amazon serves the hero image at a size-suffixed URL (..._AC_SX679_.jpg); the
+ * suffix is stripped so the stored URL is the full-resolution original.
+ */
+function amazonPrimaryImage() {
+  const stripSizeSuffix = (src) =>
+    String(src || "").replace(/\._[A-Z0-9,_]+_\.(jpg|jpeg|png|webp)(\?.*)?$/i, ".$1");
+  const fromHero = document.querySelector("#landingImage, #imgTagWrapperId img, #main-image-container img");
+  // data-a-dynamic-image maps candidate URLs to [w,h]; the largest is the hero.
+  const dynamic = fromHero?.getAttribute?.("data-a-dynamic-image");
+  if (dynamic) {
+    try {
+      const entries = Object.entries(JSON.parse(dynamic));
+      const best = entries.sort((a, b) => (b[1]?.[0] || 0) - (a[1]?.[0] || 0))[0];
+      if (best?.[0]) return stripSizeSuffix(best[0]);
+    } catch {}
+  }
+  const direct = fromHero?.getAttribute?.("data-old-hires") || fromHero?.src || "";
+  if (/^https?:/i.test(direct)) return stripSizeSuffix(direct);
+  const og = document.querySelector('meta[property="og:image"]')?.content || "";
+  return /^https?:/i.test(og) ? stripSizeSuffix(og) : "";
+}
+
+function amazonSourcePrice() {
+  const parse = (text) => {
+    const match = String(text || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d{1,2})?)/);
+    const value = match ? Number(match[1]) : NaN;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+  // Ordered most- to least-trustworthy. The paired whole/fraction spans are the
+  // live buybox price; .a-offscreen is the accessible full string.
+  const whole = document.querySelector("#corePrice_feature_div .a-price-whole, #corePriceDisplay_desktop_feature_div .a-price-whole");
+  const fraction = document.querySelector("#corePrice_feature_div .a-price-fraction, #corePriceDisplay_desktop_feature_div .a-price-fraction");
+  if (whole) {
+    const combined = `${whole.innerText || ""}`.replace(/[^\d]/g, "") + "." + `${fraction?.innerText || "0"}`.replace(/[^\d]/g, "");
+    const paired = parse(combined);
+    if (paired) return paired;
+  }
+  for (const selector of [
+    "#corePrice_feature_div .a-offscreen",
+    "#corePriceDisplay_desktop_feature_div .a-offscreen",
+    "#priceblock_ourprice",
+    "#priceblock_dealprice",
+    "#sns-base-price .a-offscreen",
+    ".a-price .a-offscreen",
+  ]) {
+    const found = parse(document.querySelector(selector)?.textContent);
+    if (found) return found;
+  }
+  return null;
+}
+
+function captureAmazonProductFromPage(cleanSourceUrl, clean) {
+  const asin = amazonAsin();
+  if (!asin) throw new Error("This Amazon page does not look like a product page (no ASIN found).");
+  const title = clean(
+    document.querySelector("#productTitle")?.innerText ||
+      document.querySelector('meta[property="og:title"]')?.content ||
+      document.title
+  );
+  if (!title) throw new Error("Amazon product title could not be read; let the page finish loading and try again.");
+  const image = amazonPrimaryImage();
+  const bullets = [...document.querySelectorAll("#feature-bullets li, #productFactsDesktopExpander li")]
+    .map((node) => clean(node.innerText))
+    .filter((text) => text && !/see more|show more/i.test(text))
+    .slice(0, 12);
+  const unavailable = /currently unavailable|out of stock/i.test(document.body?.innerText || "");
+  return {
+    source_url: cleanSourceUrl(),
+    title,
+    source_price: amazonSourcePrice(),
+    source_purchase_unit: null,
+    source_bulk_package: false,
+    source_bulk_package_reason: "",
+    minimum_order_quantity: 1,
+    detected_shipping: null,
+    source_in_stock: !unavailable,
+    subscription_discount_percent: null,
+    description: bullets.join("\n") || clean(document.querySelector('meta[name="description"]')?.content),
+    // Primary image only, by design -- see amazonPrimaryImage().
+    image_urls: image || "",
+    supplier_sku: asin,
+    capture_build: CAPTURE_BUILD,
+    capture_debug: {
+      supplier: "amazon",
+      asin,
+      primary_image_only: true,
+      images_found: image ? 1 : 0,
+      selected_price: amazonSourcePrice(),
+      bullets: bullets.length,
+      unavailable,
+    },
+  };
+}
+
 function captureSourceProductFromPage() {
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
   const uniq = (values) => [...new Set(values.filter(Boolean).map(clean).filter(Boolean))];
@@ -400,6 +516,13 @@ function captureSourceProductFromPage() {
         url.hash = "";
         return url.href;
       }
+      // Amazon product URLs carry SEO slugs, referral params and session ids that all
+      // resolve to the same ASIN. Collapse to the canonical /dp/<ASIN> form so
+      // re-capturing the same product cannot create a second source record.
+      if (/(^|\.)amazon\.com$/i.test(url.hostname)) {
+        const asin = amazonAsin();
+        if (asin) return `https://www.amazon.com/dp/${asin}`;
+      }
       ["ea_auto_import", "auto_download_test", "autozs_refresh_job", "autozs_refresh_batch", "autozs_error_retry", "autozs_worker_opened_at"].forEach((param) =>
         url.searchParams.delete(param)
       );
@@ -409,6 +532,11 @@ function captureSourceProductFromPage() {
       return location.href;
     }
   };
+  // Amazon has its own extraction path: different DOM, and Depop only wants the
+  // primary image, so none of the Home Depot gallery/price heuristics below apply.
+  if (isAmazonProductPage()) {
+    return captureAmazonProductFromPage(cleanSourceUrl, clean);
+  }
   const visibleText = document.body.innerText || "";
   if (/(^|\.)lowes\.com$/i.test(location.hostname || "")) {
     throw new Error("Lowe's supplier support is scaffolded, but automated capture is not enabled yet.");

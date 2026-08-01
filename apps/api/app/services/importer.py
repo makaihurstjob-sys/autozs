@@ -58,6 +58,14 @@ def normalize_source_url(url: str) -> str:
     except ValueError:
         return url.strip()
     hostname = (parsed.hostname or "").lower()
+    # Amazon product URLs carry SEO slugs, referral tags and session ids that all
+    # resolve to the same ASIN, so collapse them to canonical /dp/<ASIN>. Without
+    # this the same product imported from two different Amazon links becomes two
+    # source records.
+    if hostname == "amazon.com" or hostname.endswith(".amazon.com"):
+        asin_match = re.search(r"/(?:dp|gp/product|gp/aw/d)/([A-Z0-9]{10})(?:[/?]|$)", parsed.path, re.IGNORECASE)
+        if asin_match:
+            return f"https://www.amazon.com/dp/{asin_match.group(1).upper()}"
     known_product_page = (
         (hostname == "homedepot.com" or hostname.endswith(".homedepot.com"))
         and parsed.path.startswith("/p/")
@@ -1335,8 +1343,7 @@ def build_listing_readiness(db: Session, product_id: int) -> dict | None:
 def listing_item_specifics(product: Product, supplier: SupplierProduct | None) -> dict[str, str]:
     specifics: dict[str, str] = {}
     brand = _infer_brand(product.title)
-    if brand:
-        specifics["Brand"] = brand
+    specifics["Brand"] = brand or "Unbranded"
     model = _infer_model_number(product.title, supplier.source_url if supplier else None)
     if model:
         specifics["MPN"] = model

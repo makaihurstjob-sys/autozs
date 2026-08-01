@@ -839,10 +839,79 @@ async function runEbayDraftListBulkVerificationTest() {
   });
 }
 
+// Amazon capture: Depop reuses only the PRIMARY image, so capture must return
+// exactly one image URL even when the page exposes a full gallery, and must
+// collapse the SEO/referral URL to canonical /dp/<ASIN>.
+function runAmazonCapture() {
+  const gallery = {
+    "https://m.media-amazon.com/images/I/hero._AC_SX679_.jpg": [679, 679],
+    "https://m.media-amazon.com/images/I/hero._AC_SX466_.jpg": [466, 466],
+  };
+  const context = {
+    console,
+    URL,
+    window: { matchMedia: () => ({ matches: false }) },
+    location: {
+      href: "https://www.amazon.com/Some-Long-Slug/dp/B08N5WRWNW/ref=sr_1_3?crid=XYZ&sr=8-3",
+      hostname: "www.amazon.com",
+      pathname: "/Some-Long-Slug/dp/B08N5WRWNW/ref=sr_1_3",
+    },
+    document: {
+      title: "Amazon.com: Widget",
+      body: { innerText: "Widget detail page" },
+      documentElement: { innerHTML: "" },
+      images: [],
+      querySelector: (selector) => {
+        if (selector === "#productTitle") return { innerText: "  Stainless Widget  " };
+        if (/landingImage/.test(selector)) {
+          return {
+            getAttribute: (name) => (name === "data-a-dynamic-image" ? JSON.stringify(gallery) : null),
+            src: "https://m.media-amazon.com/images/I/hero._AC_SX466_.jpg",
+          };
+        }
+        return null;
+      },
+      querySelectorAll: (selector) => {
+        if (/feature-bullets/.test(selector)) {
+          return [{ innerText: "Rustproof" }, { innerText: "See more" }];
+        }
+        return [];
+      },
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(`${source}; result = captureSourceProductFromPage();`, context);
+  return context.result;
+}
+
+const amazon = runAmazonCapture();
+if (amazon.source_url !== "https://www.amazon.com/dp/B08N5WRWNW") {
+  throw new Error(`Expected canonical Amazon /dp/ URL, got ${amazon.source_url}`);
+}
+if (amazon.supplier_sku !== "B08N5WRWNW") {
+  throw new Error(`Expected ASIN as supplier_sku, got ${amazon.supplier_sku}`);
+}
+if (amazon.title !== "Stainless Widget") {
+  throw new Error(`Expected trimmed Amazon title, got ${JSON.stringify(amazon.title)}`);
+}
+if (amazon.image_urls.split("\n").filter(Boolean).length !== 1) {
+  throw new Error(`Expected exactly one Amazon image, got ${JSON.stringify(amazon.image_urls)}`);
+}
+if (amazon.image_urls !== "https://m.media-amazon.com/images/I/hero.jpg") {
+  throw new Error(`Expected full-resolution primary image, got ${amazon.image_urls}`);
+}
+if (!amazon.capture_debug || amazon.capture_debug.primary_image_only !== true) {
+  throw new Error("Expected capture_debug to record primary_image_only.");
+}
+if (amazon.description !== "Rustproof") {
+  throw new Error(`Expected 'See more' filtered from bullets, got ${JSON.stringify(amazon.description)}`);
+}
+
+
 runEbayAccountFallbackTest()
   .then(runEbayMissingDraftVerificationTest)
   .then(runEbayDraftListBulkVerificationTest)
-  .then(() => console.log("capture shipping, eBay account fallback, and draft verification tests ok"))
+  .then(() => console.log("capture shipping, Amazon capture, eBay account fallback, and draft verification tests ok"))
   .catch((error) => {
     console.error(error);
     process.exit(1);

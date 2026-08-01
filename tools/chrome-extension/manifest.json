@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoZS Source Capture",
-  "version": "0.2.41",
+  "version": "0.2.42",
   "description": "Capture product data from supplier pages into AutoZS.",
   "action": {
     "default_popup": "popup.html",
@@ -12,7 +12,17 @@
     "48": "assets/icon-48.png",
     "128": "assets/icon-128.png"
   },
-  "permissions": ["activeTab", "alarms", "browsingData", "cookies", "debugger", "downloads", "scripting", "storage", "tabs"],
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "browsingData",
+    "cookies",
+    "debugger",
+    "downloads",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -21,16 +31,27 @@
     "https://desktop-56u49jf.tailb2892a.ts.net:8443/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*",
+    "https://www.amazon.com/*",
     "https://www.homedepot.com/*",
     "https://www.lowes.com/*",
     "https://www.ebay.com/*",
     "https://sell.ebay.com/*",
-    "https://mesg.ebay.com/*"
+    "https://mesg.ebay.com/*",
+    "https://www.depop.com/*"
   ],
   "web_accessible_resources": [
     {
-      "resources": ["assets/autozs-logo.png", "assets/import-to-autozs.png"],
-      "matches": ["https://www.homedepot.com/*", "https://www.lowes.com/*", "https://www.ebay.com/*", "https://sell.ebay.com/*"]
+      "resources": [
+        "assets/autozs-logo.png",
+        "assets/import-to-autozs.png"
+      ],
+      "matches": [
+        "https://www.homedepot.com/*",
+        "https://www.lowes.com/*",
+        "https://www.ebay.com/*",
+        "https://sell.ebay.com/*",
+        "https://www.depop.com/*"
+      ]
     }
   ],
   "content_scripts": [
@@ -40,29 +61,70 @@
         "http://127.0.0.1/*",
         "http://localhost/*"
       ],
-      "js": ["dashboard-bridge.js"],
+      "js": [
+        "dashboard-bridge.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.homedepot.com/p/*", "https://www.lowes.com/pd/*"],
-      "js": ["capture.js", "content.js"],
+      "matches": [
+        "https://www.homedepot.com/p/*",
+        "https://www.lowes.com/pd/*",
+        "https://www.amazon.com/dp/*",
+        "https://www.amazon.com/gp/product/*"
+      ],
+      "js": [
+        "capture.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.homedepot.com/*"],
-      "js": ["home-depot-product-hunt.js", "home-depot-checkout.js"],
+      "matches": [
+        "https://www.homedepot.com/*"
+      ],
+      "js": [
+        "home-depot-product-hunt.js",
+        "home-depot-checkout.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*", "https://mesg.ebay.com/*"],
-      "js": ["ebay-dark-mode.js"],
+      "matches": [
+        "https://www.ebay.com/*",
+        "https://sell.ebay.com/*",
+        "https://mesg.ebay.com/*"
+      ],
+      "js": [
+        "ebay-dark-mode.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     },
     {
-      "matches": ["https://www.ebay.com/*", "https://sell.ebay.com/*", "https://mesg.ebay.com/*"],
-      "js": ["capture.js", "ebay-research.js", "ebay-fill.js", "ebay-reports.js", "ebay-revision-upload.js", "ebay-customer-message.js"],
+      "matches": [
+        "https://www.ebay.com/*",
+        "https://sell.ebay.com/*",
+        "https://mesg.ebay.com/*"
+      ],
+      "js": [
+        "capture.js",
+        "ebay-research.js",
+        "ebay-fill.js",
+        "ebay-reports.js",
+        "ebay-revision-upload.js",
+        "ebay-customer-message.js"
+      ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.depop.com/*"
+      ],
+      "js": [
+        "depop-profile.js"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }
