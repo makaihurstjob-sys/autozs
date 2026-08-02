@@ -27,6 +27,46 @@
       --ok: #36d17d;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
+    :root { --ebay-teal: #16b89b; --depop-red: #e0242f; }
+    /* Marketplace switch: one pill split into an eBay half and a Depop half.
+       The active half lights up and the app accent follows it, so which store
+       you are in is readable at a glance. */
+    body[data-marketplace="depop"] { --accent: #f0616a; --accent-2: #b3161f; }
+    /* Its own row: squeezed into the store row it collapsed the store picker
+       and clipped the icon buttons on a phone-width screen. */
+    .market-row { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+    .market-switch {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      width: 150px;
+      height: 40px;
+      padding: 0;
+      border: 3px solid #17110f;
+      border-radius: 999px;
+      overflow: hidden;
+      background: linear-gradient(90deg, var(--ebay-teal) 0%, var(--ebay-teal) 44%, var(--depop-red) 56%, var(--depop-red) 100%);
+      flex: 0 0 auto;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .market-switch button {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 15px;
+      font-family: inherit;
+      /* The inactive half is dimmed rather than hidden so the pill still reads
+         as a two-way switch and the other store stays tappable. */
+      color: rgba(255, 255, 255, 0.45);
+      transition: color 0.18s ease, transform 0.15s ease;
+    }
+    .market-switch button.active { color: #ffffff; }
+    .market-switch button:active { transform: scale(0.92); }
     * { box-sizing: border-box; }
     html { background: var(--bg); }
     body {
@@ -603,6 +643,12 @@
     <section class="hero" id="hero">
       <div class="logo"><img src="/assets/autozs-logo.png" alt="AutoZS" /></div>
       <div class="top-controls">
+        <div class="market-row">
+          <div class="market-switch" id="market-switch" role="group" aria-label="Marketplace">
+            <button type="button" data-market="ebay" aria-label="eBay">ebay</button>
+            <button type="button" data-market="depop" aria-label="Depop">d</button>
+          </div>
+        </div>
         <div class="store-row">
           <div class="store-picker-wrap">
             <select class="store-picker" id="store-picker" aria-label="Store">
@@ -736,6 +782,24 @@
     let calendarEventFilter = "all";
 
     document.getElementById("dashboard-link").href = dashboardUrl;
+
+    // Marketplace switch. Shares the desktop dashboard's storage key so the two
+    // stay on the same store, and paints the whole app in that store's accent.
+    const MARKETPLACE_KEY = "autozsMarketplaceMode";
+    function applyMarketplace(mode) {
+      const marketplace = mode === "depop" ? "depop" : "ebay";
+      document.body.dataset.marketplace = marketplace;
+      localStorage.setItem(MARKETPLACE_KEY, marketplace);
+      document.querySelectorAll("#market-switch button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.market === marketplace);
+      });
+    }
+    document.getElementById("market-switch").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-market]");
+      if (button) applyMarketplace(button.dataset.market);
+    });
+    applyMarketplace(localStorage.getItem(MARKETPLACE_KEY));
+
     document.getElementById("notify-button").addEventListener("click", openNotificationSettings);
     document.getElementById("notification-close").addEventListener("click", closeNotificationSettings);
     document.getElementById("notification-modal").addEventListener("click", (event) => {
