@@ -2632,9 +2632,8 @@ async function fillDescriptionHtmlSource(htmlValue) {
   // eBay validates its rich model, NOT the HTML source box. Leaving "Show HTML
   // Code" checked means the source text is never parsed in, so the submit is
   // rejected with "A description is required" even though the textarea is full
-  // and reads back at the exact expected length. Toggling the mode back off is
-  // what actually commits the description.
-  return await commitHtmlSourceToRichEditor();
+  // and reads back at the exact expected length.
+  return await commitHtmlSourceToRichEditor(htmlValue);
 }
 
 function richDescriptionLength() {
@@ -2649,19 +2648,48 @@ function richDescriptionLength() {
   }
 }
 
-async function commitHtmlSourceToRichEditor() {
-  const checkbox = findHtmlCodeCheckbox();
-  if (!checkbox) return richDescriptionLength() > 0;
-  if (checkbox.checked) {
-    const visibleTarget = findHtmlCodeLabel(checkbox) || checkbox.closest?.("label") || checkbox;
-    try {
-      visibleTarget.click?.();
-      checkbox.dispatchEvent?.(new Event("input", { bubbles: true }));
-      checkbox.dispatchEvent?.(new Event("change", { bubbles: true }));
-    } catch {}
+async function commitHtmlSourceToRichEditor(htmlValue) {
+  await setHtmlCodeMode(false);
+  // Turning "Show HTML Code" off does NOT parse the source box into the rich
+  // editor: eBay only syncs its own model on a real edit, so the rich side stays
+  // empty. Requiring richDescriptionLength() > 0 here therefore reported failure
+  // for descriptions that had been written perfectly, and the caller went on to
+  // retry strategies that clobbered the good value. Put the HTML in with a real
+  // editing command instead -- that is what eBay keeps.
+  if (htmlValue && richDescriptionLength() === 0) {
+    await fillDescriptionRichFrame(htmlValue);
   }
-  await waitForCondition(() => richDescriptionLength() > 0, 4000, 150);
-  return richDescriptionLength() > 0;
+  await waitForCondition(() => !listingDescriptionIsEmpty(), 4000, 150);
+  return !listingDescriptionIsEmpty();
+}
+
+// The checkbox and its label BOTH flip this control, so clicking several
+// "equivalent" targets in a row lands on an even number of toggles and leaves
+// HTML mode exactly where it started. Click exactly one target, then verify.
+async function setHtmlCodeMode(desired) {
+  const checkbox = findHtmlCodeCheckbox();
+  if (!checkbox) return false;
+  const settled = () => Boolean(findHtmlCodeCheckbox()?.checked) === desired;
+  if (settled()) return true;
+  const target = findHtmlCodeLabel(checkbox) || checkbox.closest?.("label") || checkbox;
+  try {
+    target.click?.();
+  } catch {}
+  if (await waitForCondition(settled, 3000, 100)) return true;
+  // The DOM click can be swallowed while eBay re-renders behind the AutoZS
+  // overlay; fall back to a real browser click on the visible control.
+  try {
+    target.scrollIntoView?.({ block: "center", inline: "center" });
+    await delay(150);
+    const rect = target.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (rect.width > 0 && rect.height > 0 && x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight) {
+      await requestNativeEbayInput({ action: "click", x, y });
+      await waitForCondition(settled, 4000, 100);
+    }
+  } catch {}
+  return settled();
 }
 
 async function enableHtmlCodeMode() {
@@ -2679,44 +2707,13 @@ async function enableHtmlCodeMode() {
     await waitForCondition(() => Boolean(findHtmlCodeCheckbox() || findHtmlCodeControl()), 15000, 250);
   }
 
-  const checkbox = findHtmlCodeCheckbox();
-  if (checkbox) {
-    if (!checkbox.checked || !visibleDescriptionSourceField()) {
-      const visibleTarget = findHtmlCodeLabel(checkbox) || checkbox.closest?.("label") || checkbox;
-      // Start with normal DOM events so React receives the state change even
-      // when native browser input is unavailable or eBay is rendering behind
-      // the AutoZS overlay.
-      try {
-        visibleTarget.click?.();
-        checkbox.dispatchEvent?.(new Event("input", { bubbles: true }));
-        checkbox.dispatchEvent?.(new Event("change", { bubbles: true }));
-        await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 1800, 100);
-      } catch {}
-      if (visibleDescriptionSourceField()) return true;
-      try {
-        visibleTarget.scrollIntoView?.({ block: "center", inline: "center" });
-        await delay(150);
-        const rect = visibleTarget.getBoundingClientRect();
-        const targetX = rect.left + rect.width / 2;
-        const targetY = rect.top + rect.height / 2;
-        const inViewport = targetX >= 0 && targetY >= 0 && targetX <= window.innerWidth && targetY <= window.innerHeight;
-        if (rect.width > 0 && rect.height > 0 && inViewport) {
-          await requestNativeEbayInput({ action: "click", x: targetX, y: targetY });
-          await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4500, 100);
-        }
-      } catch {}
-      if (visibleDescriptionSourceField()) return true;
+  if (findHtmlCodeCheckbox()) {
+    // setHtmlCodeMode is idempotent and verifies the checkbox actually landed
+    // on the requested state, so this no longer stacks up toggles until the
+    // control ends back where it started.
+    if (await setHtmlCodeMode(true)) {
+      if (await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4500, 100)) return true;
     }
-    if (checkbox.checked && !visibleDescriptionSourceField()) {
-      checkbox.click();
-      await delay(300);
-    }
-    if (!checkbox.checked || !visibleDescriptionSourceField()) {
-      const label = findHtmlCodeLabel(checkbox) || checkbox.closest?.("label");
-      (label || checkbox).click();
-      await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4500, 100);
-    }
-    if (visibleDescriptionSourceField()) return true;
   }
 
   const control = findHtmlCodeControl();
@@ -2734,37 +2731,16 @@ function visibleDescriptionSourceField() {
 
 async function clickHtmlCodeCheckbox(target) {
   if (!target) return false;
-  const clickable = target.matches?.('input[type="checkbox"]')
-    ? target
-    : findHtmlCodeCheckboxNear(target) || findHtmlCodeCheckbox() || target;
-  const toggleCheckbox = clickable?.matches?.('input[type="checkbox"]') ? clickable : findHtmlCodeCheckbox();
-  const targets = [
-    findHtmlCodeLabel(clickable),
-    clickable,
-    clickable?.closest?.("label"),
-    clickable?.parentElement,
-    target,
-    target?.parentElement,
-  ].filter(Boolean);
-  for (const item of targets) {
-    item.click?.();
-    // Every one of these targets toggles the same checkbox, so a slow eBay
-    // re-render used to make the next candidate flip HTML mode back off and
-    // leave the description empty. Wait for the source editor, and once the
-    // checkbox reports checked stop clicking and only wait.
-    if (await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4000, 150)) return true;
-    if (toggleCheckbox?.checked) {
-      return Boolean(await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4000, 150));
-    }
+  // When the real checkbox is reachable, go through the single-toggle helper.
+  // The old version clicked up to six "equivalent" targets in a row, and since
+  // the input and its label each flip the same control, an even number of hits
+  // left HTML mode off and the source textarea inert.
+  if (findHtmlCodeCheckbox()) {
+    await setHtmlCodeMode(true);
+    return Boolean(visibleDescriptionSourceField());
   }
-  const checkbox = findHtmlCodeCheckbox();
-  if (checkbox && !checkbox.checked) {
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("input", { bubbles: true }));
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-    await delay(300);
-  }
-  return Boolean(visibleDescriptionSourceField());
+  target.click?.();
+  return Boolean(await waitForCondition(() => Boolean(visibleDescriptionSourceField()), 4000, 150));
 }
 
 async function waitForDescriptionSourceField() {

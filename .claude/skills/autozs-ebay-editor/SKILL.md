@@ -33,6 +33,18 @@ Preference order when filling: value supplied by the package → an option marke
 
 **Every candidate target toggles the same checkbox.** Clicking a list of candidates in sequence flips HTML mode straight back off when eBay re-renders slowly — that is the long-standing "description needs manual pasting" bug. Click once, wait for the source field, and if the checkbox already reads checked, only wait.
 
+**Both writes are needed** (settled live 2026-08-02 on draft `5189958888020`, verified by a `Save for later` → reload round-trip):
+
+1. Toggle HTML mode on, write `textarea[id*="rawEditor"]` via the native `HTMLTextAreaElement` value setter plus `input`+`change`.
+2. Toggle HTML mode back off.
+3. Write the `div[contenteditable="true"]` inside `iframe#se-rte-frame__summary` with `execCommand("insertHTML")`.
+
+**Toggling HTML mode off does NOT parse the source box into the rich editor.** eBay only syncs its own model on a real edit, so after the toggle the raw textarea still reads 3397 chars while the rich editor reads 0. Gating success on `richDescriptionLength() > 0` after a plain toggle-off therefore reports failure for a description that was written fine — that was the real cause of the 26 "AutoZS could not write one" jobs, not the toggle itself. Step 3 is what fills the rich side.
+
+`execCommand("insertHTML")` into the contenteditable **does persist** through eBay's server: after save+reload the raw textarea and the rich editor both come back populated. The earlier claim that eBay wipes it was a measurement artifact.
+
+Do not judge success by the editor's `placeholder` class — it is inert CSS and stays on the element even when the editor is full.
+
 eBay rejects submission outright when the description is empty (`"A description is required."`), so verify it right before submitting, not only at fill time.
 
 ## Schedule
