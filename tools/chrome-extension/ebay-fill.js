@@ -2656,11 +2656,17 @@ async function commitHtmlSourceToRichEditor(htmlValue) {
   // for descriptions that had been written perfectly, and the caller went on to
   // retry strategies that clobbered the good value. Put the HTML in with a real
   // editing command instead -- that is what eBay keeps.
-  if (htmlValue && richDescriptionLength() === 0) {
+  // eBay keeps re-rendering the editor for a beat after the toggle, so injecting
+  // straight away lands in a node that is about to be replaced. Let it settle,
+  // and retry -- fillDescriptionRichFrame's own check passes as soon as the raw
+  // textarea has text, so a miss here otherwise looks like success.
+  for (let attempt = 0; attempt < 3 && htmlValue && richDescriptionLength() === 0; attempt += 1) {
+    await delay(1200);
     await fillDescriptionRichFrame(htmlValue);
   }
-  await waitForCondition(() => !listingDescriptionIsEmpty(), 4000, 150);
-  return !listingDescriptionIsEmpty();
+  if (richDescriptionLength() > 0) return true;
+  // Editor variants without the rich frame still validate off the source box.
+  return !document.querySelector('iframe#se-rte-frame__summary') && !listingDescriptionIsEmpty();
 }
 
 // The checkbox and its label BOTH flip this control, so clicking several
