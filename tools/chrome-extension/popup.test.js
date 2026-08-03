@@ -106,7 +106,7 @@ async function runPopupAccountFallbackTest() {
       calls.push(String(url));
       if (String(url).endsWith("/settings")) return { ok: true, json: async () => ({ ui_theme: "light" }) };
       if (String(url).endsWith("/health")) return { ok: true, json: async () => ({ status: "ok" }) };
-      if (String(url).includes("/ebay/browser-account?account_key=main-store")) {
+      if (String(url).includes("/ebay/browser-account?account_key=a.m.anim-59")) {
         return { ok: true, json: async () => ({ can_list: true, detected_username: "a.m.anim-59" }) };
       }
       throw new Error(`Unexpected fetch ${url}`);
@@ -135,7 +135,7 @@ async function runPopupAccountFallbackTest() {
 
   vm.createContext(context);
   vm.runInContext(source, context);
-  const status = await vm.runInContext('refreshEbayBrowserAccountFromActiveTab("main-store")', context);
+  const status = await vm.runInContext('refreshEbayBrowserAccountFromActiveTab("a.m.anim-59")', context);
   if (status.detected_username !== "a.m.anim-59") {
     throw new Error(`Expected existing account fallback, got ${JSON.stringify(status)}`);
   }

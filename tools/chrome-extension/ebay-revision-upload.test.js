@@ -52,8 +52,8 @@ class FakeElement {
 }
 
 async function runRenamedUploadResultTest() {
-  const expectedFilename = "autozs-price-revisions-main-store-20260702153746.csv";
-  const ebayRenamedFilename = "autozs-price-revisions-main-store-20260702153746-Jul-2026-02-08-37-48-13311709092.csv";
+  const expectedFilename = "autozs-price-revisions-a-m-anim-59-20260702153746.csv";
+  const ebayRenamedFilename = "autozs-price-revisions-a-m-anim-59-20260702153746-Jul-2026-02-08-37-48-13311709092.csv";
   const downloadMenuButton = new FakeElement({ text: "Download results", tagName: "BUTTON" });
   const downloadOutputLink = new FakeElement({
     text: "Download results",
@@ -79,7 +79,7 @@ async function runRenamedUploadResultTest() {
     URLSearchParams,
     API: "http://127.0.0.1:8000",
     location: {
-      search: "?autozs_revision_batch=7&autozs_account_key=main-store",
+      search: "?autozs_revision_batch=7&autozs_account_key=a.m.anim-59",
       pathname: "/sh/reports/uploads",
     },
     window: {},
@@ -110,7 +110,7 @@ async function runRenamedUploadResultTest() {
           ok: true,
           json: async () => ({
             id: 7,
-            account_key: "main-store",
+            account_key: "a.m.anim-59",
             filename: expectedFilename,
             status: "waiting_results",
           }),
@@ -143,7 +143,7 @@ async function runRenamedUploadResultTest() {
 }
 
 async function runNeedsReviewRetryTest() {
-  const expectedFilename = "autozs-price-revisions-main-store-20260703040048.csv";
+  const expectedFilename = "autozs-price-revisions-a-m-anim-59-20260703040048.csv";
   const downloadOutputLink = new FakeElement({
     text: "Download results",
     tagName: "A",
@@ -165,7 +165,7 @@ async function runNeedsReviewRetryTest() {
     setTimeout,
     URLSearchParams,
     API: "http://127.0.0.1:8000",
-    location: { search: "?autozs_revision_batch=5&autozs_account_key=main-store", pathname: "/sh/reports/uploads" },
+    location: { search: "?autozs_revision_batch=5&autozs_account_key=a.m.anim-59", pathname: "/sh/reports/uploads" },
     window: {},
     document: {
       querySelectorAll(selector) { return selector === '[role="row"], tr' ? [row] : []; },
