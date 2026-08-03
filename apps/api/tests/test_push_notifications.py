@@ -193,7 +193,7 @@ def test_new_real_order_sends_one_hype_notification(monkeypatch):
         )
         order = Order(
             ebay_order_id="12-34567-89012",
-            account_id="main-store",
+            account_id="a.m.anim-59",
             status="imported",
             total=20.96,
         )
@@ -235,7 +235,7 @@ def test_existing_orders_are_seeded_for_a_new_phone(monkeypatch):
     with Session(engine) as db:
         db.add(Order(
             ebay_order_id="12-34567-89013",
-            account_id="main-store",
+            account_id="a.m.anim-59",
             status="imported",
             total=11.53,
         ))
@@ -275,7 +275,7 @@ def test_sale_notification_dev_test_uses_latest_real_order(monkeypatch):
         )
         order = Order(
             ebay_order_id="12-34567-89014",
-            account_id="main-store",
+            account_id="a.m.anim-59",
             status="imported",
             total=6.02,
         )

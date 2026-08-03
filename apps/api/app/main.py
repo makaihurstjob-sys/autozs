@@ -12,6 +12,7 @@ from sqlalchemy import inspect, text
 from app.api.routes import router
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.database import Base, SessionLocal, engine
+from app.core.store_keys import DEFAULT_EBAY_STORE_KEY, LEGACY_DEFAULT_EBAY_STORE_KEY
 from app.services.ebay_report_files import watch_ebay_report_inbox
 from app.services.ebay_traffic import sync_ebay_traffic
 from app.services.ebay_accounts import list_ebay_accounts
@@ -115,6 +116,42 @@ def _ensure_lightweight_columns() -> None:
                     "message = 'Safety review required after AutoZS upgrade.' "
                     "WHERE status IN ('queued', 'running', 'paused') AND approved_at IS NULL"
                 )
+            )
+        legacy_store_columns = {
+            "orders": ("account_id",),
+            "ebay_listings": ("account_id",),
+            "ebay_accounts": ("key",),
+            "listing_jobs": ("ebay_account_key",),
+            "ebay_revision_jobs": ("ebay_account_key",),
+            "ebay_sync_runs": ("account_key",),
+            "ebay_revision_templates": ("account_key",),
+            "ebay_revision_batches": ("account_key",),
+            "ebay_traffic_records": ("account_key", "account_id"),
+            "customer_conversations": ("account_id",),
+        }
+        for table, columns in legacy_store_columns.items():
+            if table not in existing_tables:
+                continue
+            existing_columns = {column["name"] for column in inspector.get_columns(table)}
+            for column in columns:
+                if column in existing_columns:
+                    connection.execute(
+                        text(f"UPDATE {table} SET {column} = :canonical WHERE {column} = :legacy"),
+                        {
+                            "canonical": DEFAULT_EBAY_STORE_KEY,
+                            "legacy": LEGACY_DEFAULT_EBAY_STORE_KEY,
+                        },
+                    )
+        if "ebay_accounts" in existing_tables:
+            connection.execute(
+                text(
+                    "UPDATE ebay_accounts SET label = :canonical "
+                    "WHERE key = :canonical AND lower(label) = :legacy_label"
+                ),
+                {
+                    "canonical": DEFAULT_EBAY_STORE_KEY,
+                    "legacy_label": LEGACY_DEFAULT_EBAY_STORE_KEY.replace("-", " "),
+                },
             )
 
 

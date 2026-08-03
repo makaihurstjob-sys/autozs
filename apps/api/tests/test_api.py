@@ -201,7 +201,7 @@ def test_ebay_account_profiles_store_multiple_accounts_without_echoing_secret(cl
 def test_ebay_sync_run_blocks_when_browser_account_mismatches_selected_store(client) -> None:
     account = client.post(
         "/ebay/accounts",
-        json={"label": "Main Store", "account_id": "a.m.anim-59", "environment": "production"},
+        json={"label": "a.m.anim-59", "account_id": "a.m.anim-59", "environment": "production"},
     ).json()
     stats = client.get("/stats/overview?range=all&account=a.m.anim-59").json()
     assert stats["selected_account"] == account["key"]
@@ -227,7 +227,7 @@ def test_ebay_sync_run_blocks_when_browser_account_mismatches_selected_store(cli
 def test_ebay_listing_report_sync_reconciles_one_store(client) -> None:
     account = client.post(
         "/ebay/accounts",
-        json={"label": "Main Store", "account_id": "a.m.anim-59", "environment": "production"},
+        json={"label": "a.m.anim-59", "account_id": "a.m.anim-59", "environment": "production"},
     ).json()
     client.post(
         "/ebay/browser-account",
@@ -257,7 +257,7 @@ def test_ebay_listing_report_sync_reconciles_one_store(client) -> None:
     assert started["status"] == "running"
     assert started["phase"] == "opening_reports"
     assert f"autozs_sync_run={started['id']}" in started["runner_url"]
-    assert "autozs_account_key=main-store" in started["runner_url"]
+    assert "autozs_account_key=a.m.anim-59" in started["runner_url"]
     progress = client.patch(
         f"/ebay/sync-runs/{started['id']}",
         json={"phase": "waiting_for_report", "report_reference": "13311151689", "increment_attempts": True},
@@ -476,7 +476,7 @@ def test_account_ebay_oauth_connects_store_for_analytics(client, monkeypatch) ->
     account = client.post(
         "/ebay/accounts",
         json={
-            "label": "Main Store",
+            "label": "a.m.anim-59",
             "account_id": "a.m.anim-59",
             "environment": "production",
             "client_id": "PRODUCTION-CLIENT-ID",
@@ -1168,7 +1168,7 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
         f"/products/{product_id}/mark-listed",
         json={
             "listing_id": "800000000333",
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "environment": "production",
             "quantity": 1,
             "status": "scheduled",
@@ -1213,15 +1213,15 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     assert jobs[0]["status"] == "needs_review"
     assert jobs[0]["approved_at"] is None
 
-    client.post("/ebay/accounts", json={"label": "Main Store", "account_id": "main-store", "environment": "production"})
+    client.post("/ebay/accounts", json={"label": "a.m.anim-59", "account_id": "a.m.anim-59", "environment": "production"})
     client.post(
         "/ebay/browser-account",
         json={
-            "detected_username": "main-store",
+            "detected_username": "a.m.anim-59",
             "url": "https://www.ebay.com/sh/overview",
             "marketplace": "EBAY_US",
             "source": "test",
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
         },
     )
     not_approved = client.post("/ebay/revision-jobs/next")
@@ -1232,7 +1232,7 @@ def test_margin_recalculation_coalesces_scheduled_ebay_price_revision_jobs(clien
     sheet = client.post(
         "/ebay/revision-sheets/prepare",
         json={
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
             "job_ids": [approved["id"]],
             "template_csv": "#INFO,Version=0.0.2\nAction,Item number,Start price,Quantity\n",
         },
@@ -1266,7 +1266,7 @@ def test_ebay_revision_profit_guard_blocks_approval(client) -> None:
         f"/products/{product_id}/mark-listed",
         json={
             "listing_id": "800000000334",
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "environment": "production",
             "quantity": 1,
             "status": "live",
@@ -1314,7 +1314,7 @@ def test_controlled_revision_canary_requires_guard_and_manual_approval(client) -
         f"/products/{product_id}/mark-listed",
         json={
             "listing_id": "800000000336",
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "environment": "production",
             "quantity": 1,
             "status": "scheduled",
@@ -1344,7 +1344,7 @@ def test_ebay_revision_blocks_unknown_supplier_shipping(client) -> None:
         f"/products/{product_id}/mark-listed",
         json={
             "listing_id": "800000000335",
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "environment": "production",
             "quantity": 1,
             "status": "scheduled",

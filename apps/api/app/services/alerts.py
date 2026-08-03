@@ -17,6 +17,7 @@ from app.models.domain import (
     OperationalAlertSeverity,
     OperationalAlertStatus,
     Product,
+    ProductStatus,
     SourceRefreshJob,
     SourceRefreshJobStatus,
     SupplierProduct,
@@ -186,16 +187,20 @@ def _source_refresh_alert_specs(db: Session, now: datetime) -> list[dict[str, An
     failed = [
         job
         for job in failed
-        if db.scalar(
-            select(SourceRefreshJob.id)
-            .where(
-                SourceRefreshJob.product_id == job.product_id,
-                SourceRefreshJob.id > job.id,
-                SourceRefreshJob.status == SourceRefreshJobStatus.completed.value,
+        if (
+            (product := db.get(Product, job.product_id)) is not None
+            and product.status not in {ProductStatus.paused.value, ProductStatus.deleted.value}
+            and db.scalar(
+                select(SourceRefreshJob.id)
+                .where(
+                    SourceRefreshJob.product_id == job.product_id,
+                    SourceRefreshJob.id > job.id,
+                    SourceRefreshJob.status == SourceRefreshJobStatus.completed.value,
+                )
+                .limit(1)
             )
-            .limit(1)
+            is None
         )
-        is None
     ]
     stale = db.scalars(
         select(SourceRefreshJob).where(

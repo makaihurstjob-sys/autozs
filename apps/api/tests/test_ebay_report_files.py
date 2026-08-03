@@ -14,7 +14,7 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
     engine = create_engine(f"sqlite:///{tmp_path / 'report-test.db'}")
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    report_path = tmp_path / "ebay-active-listings-main-store-run-1.csv"
+    report_path = tmp_path / "ebay-active-listings-a.m.anim-59-run-1.csv"
     report_path.write_text(
         "\ufeffItem number,Title,Variation details,Custom label (SKU),Available quantity,Format,Currency,Start price,"
         "Auction Buy It Now price,Reserve price,Current price,Sold quantity,Watchers,Bids,Start date,End date\n"
@@ -31,13 +31,13 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
             db.add(ListingDraft(product_id=product.id, marketplace="ebay", title=product.title, description="test", status="draft"))
         db.add_all(
             [
-                EbayListing(product_id=products[0].id, listing_id="800262913581", account_id="main-store", status="scheduled", views=7),
-                EbayListing(product_id=products[1].id, listing_id="ACTIVE-MISSING-1", account_id="main-store", status="active"),
-                EbayListing(product_id=products[2].id, listing_id="SCHEDULED-MISSING-1", account_id="main-store", status="scheduled"),
-                EbayListing(product_id=products[3].id, listing_id="STALE-SCHEDULED-1", account_id="main-store", status="scheduled"),
+                EbayListing(product_id=products[0].id, listing_id="800262913581", account_id="a.m.anim-59", status="scheduled", views=7),
+                EbayListing(product_id=products[1].id, listing_id="ACTIVE-MISSING-1", account_id="a.m.anim-59", status="active"),
+                EbayListing(product_id=products[2].id, listing_id="SCHEDULED-MISSING-1", account_id="a.m.anim-59", status="scheduled"),
+                EbayListing(product_id=products[3].id, listing_id="STALE-SCHEDULED-1", account_id="a.m.anim-59", status="scheduled"),
                 ListingJob(
                     product_id=products[3].id,
-                    ebay_account_key="main-store",
+                    ebay_account_key="a.m.anim-59",
                     action="create_draft",
                     status="needs_review",
                     ebay_draft_id="5127501611603",
@@ -45,13 +45,13 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
                 ),
             ]
         )
-        run = EbaySyncRun(id=1, account_key="main-store", status="running", phase="report_downloaded")
+        run = EbaySyncRun(id=1, account_key="a.m.anim-59", status="running", phase="report_downloaded")
         db.add(run)
         db.commit()
 
         rows = parse_ebay_listing_report(report_path)
         assert rows[0]["Custom label (SKU)"] == "SYNC-TARGET"
-        imported = import_ebay_report_file(db, report_path, run_id=1, account_key="main-store")
+        imported = import_ebay_report_file(db, report_path, run_id=1, account_key="a.m.anim-59")
         assert imported.status == "completed"
         assert imported.listings_seen == 1
 
@@ -68,6 +68,55 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
         assert stale_job.status == "tombstoned"
 
 
+def test_automatic_report_accepts_filename_safe_form_of_canonical_dotted_store_key(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'dotted-store-report-test.db'}")
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    report_path = tmp_path / "ebay-active-listings-a-m-anim-59-run-7.csv"
+    report_path.write_text(
+        "Item number,Title,Custom label (SKU),Available quantity,Format,Currency,Start price,Current price,"
+        "Sold quantity,Start date,End date\n"
+        '800000000007,Canonical store item,CANONICAL-STORE-SKU,1,FIXED_PRICE,USD,19.53,19.53,0,'
+        '"Jul-29-26 16:00:01 PDT","Aug-29-26 16:00:01 PDT"\n',
+        encoding="utf-8",
+    )
+
+    with Session() as db:
+        product = Product(sku="CANONICAL-STORE-SKU", title="Canonical store item")
+        db.add(product)
+        db.flush()
+        db.add(ListingDraft(product_id=product.id, marketplace="ebay", title=product.title, description="test", status="draft"))
+        db.add(EbaySyncRun(id=7, account_key="a.m.anim-59", status="running", phase="report_downloaded"))
+        db.commit()
+
+        imported = import_ebay_report_file(db, report_path, run_id=7, account_key="a-m-anim-59")
+
+        assert imported.status == "completed"
+        assert imported.account_key == "a.m.anim-59"
+        listing = db.scalar(select(EbayListing).where(EbayListing.listing_id == "800000000007"))
+        assert listing is not None
+        assert listing.account_id == "a.m.anim-59"
+
+
+def test_automatic_report_rejects_a_different_filename_account(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'wrong-store-report-test.db'}")
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    report_path = tmp_path / "empty.csv"
+    report_path.write_text("Item number,Title\n", encoding="utf-8")
+
+    with Session() as db:
+        db.add(EbaySyncRun(id=8, account_key="a.m.anim-59", status="running", phase="report_downloaded"))
+        db.commit()
+
+        try:
+            import_ebay_report_file(db, report_path, run_id=8, account_key="different-store")
+        except ValueError as exc:
+            assert "does not match sync run a.m.anim-59" in str(exc)
+        else:
+            raise AssertionError("A report from a different account must be rejected")
+
+
 def test_revision_result_download_is_imported_and_archived(tmp_path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'revision-result-test.db'}")
     Base.metadata.create_all(bind=engine)
@@ -80,7 +129,7 @@ def test_revision_result_download_is_imported_and_archived(tmp_path) -> None:
         listing = EbayListing(
             product_id=product.id,
             listing_id="800123456789",
-            account_id="main-store",
+            account_id="a.m.anim-59",
             status="scheduled",
             price=20.0,
         )
@@ -89,7 +138,7 @@ def test_revision_result_download_is_imported_and_archived(tmp_path) -> None:
         job = EbayRevisionJob(
             product_id=product.id,
             ebay_listing_id=listing.id,
-            ebay_account_key="main-store",
+            ebay_account_key="a.m.anim-59",
             old_price=20.0,
             target_price=25.0,
             status="queued",
@@ -100,13 +149,13 @@ def test_revision_result_download_is_imported_and_archived(tmp_path) -> None:
         db.add(job)
         save_ebay_revision_template(
             db,
-            account_key="main-store",
+            account_key="a.m.anim-59",
             filename="edit-price.csv",
             template_csv="Action,Item number,Start price\n",
         )
-        batch = prepare_next_ebay_revision_batch(db, account_key="main-store")
+        batch = prepare_next_ebay_revision_batch(db, account_key="a.m.anim-59")
         assert batch is not None
-        result_path = tmp_path / f"ebay-revision-results-main-store-batch-{batch.id}.csv"
+        result_path = tmp_path / f"ebay-revision-results-a-m-anim-59-batch-{batch.id}.csv"
         result_path.write_text("Action,Item number,Status,Error message\nRevise,800123456789,Success,\n")
 
         imported = scan_ebay_report_inbox(db, inbox=tmp_path)

@@ -20,9 +20,9 @@ def test_finance_overview_tracks_accounts_subscriptions_and_expenses(client) -> 
         "/finance/accounts",
         json={
             "provider": "ebay_chrome",
-            "external_id": "main-store",
+            "external_id": "a.m.anim-59",
             "account_type": "ebay",
-            "name": "Main Store eBay funds",
+            "name": "a.m.anim-59 eBay funds",
             "current_balance": 125.0,
             "available_balance": 75.0,
             "held_balance": 50.0,

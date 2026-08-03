@@ -28,6 +28,11 @@ REVISION_RESULT_PATTERN = re.compile(
 )
 
 
+def _filename_account_key(account_key: str) -> str:
+    """Return the reversible-on-comparison, filename-safe form of a store key."""
+    return re.sub(r"[^a-z0-9]+", "-", str(account_key or "").lower()).strip("-")
+
+
 def ebay_report_inbox() -> Path:
     configured = str(get_settings().ebay_report_inbox or "").strip()
     return Path(configured).expanduser() if configured else Path.home() / "Downloads" / "AutoZS"
@@ -69,14 +74,18 @@ def import_ebay_report_file(db: Session, path: Path, run_id: int, account_key: s
     run = db.get(EbaySyncRun, run_id)
     if run is None:
         raise ValueError(f"AutoZS sync run {run_id} does not exist.")
-    if run.account_key != account_key:
+    # Download filenames cannot preserve dots in a store key, so compare the
+    # filename-safe representations. The persisted store key remains canonical
+    # (for example, ``a.m.anim-59``); no dashed account alias is created.
+    if _filename_account_key(run.account_key) != _filename_account_key(account_key):
         raise ValueError(f"Report account {account_key} does not match sync run {run.account_key}.")
+    canonical_account_key = run.account_key
     if run.status == EbaySyncRunStatus.completed.value:
         return run
     if run.report_type == "traffic":
         import_traffic_file(
             db,
-            account_key=account_key,
+            account_key=canonical_account_key,
             filename=path.name,
             report_base64=base64.b64encode(path.read_bytes()).decode("ascii"),
             run_id=run_id,
@@ -87,7 +96,7 @@ def import_ebay_report_file(db: Session, path: Path, run_id: int, account_key: s
         seen, upserted, unmatched = import_ebay_order_report_rows(
             db,
             rows=parse_ebay_order_report(path.read_bytes(), path.name),
-            account_key=account_key,
+            account_key=canonical_account_key,
             run_id=run_id,
             filename=path.name,
         )
@@ -102,7 +111,7 @@ def import_ebay_report_file(db: Session, path: Path, run_id: int, account_key: s
     return import_listing_report_rows(
         db,
         rows=rows,
-        account_key=account_key,
+        account_key=canonical_account_key,
         run_id=run_id,
         source="automatic_active_listings_report",
         tombstone_missing=True,
@@ -168,7 +177,8 @@ def _import_revision_result_file(
     batch = db.get(EbayRevisionBatch, batch_id)
     if batch is None:
         raise ValueError(f"AutoZS revision batch {batch_id} does not exist")
-    if batch.account_key.lower() != account_key:
+    batch_filename_key = _filename_account_key(batch.account_key)
+    if batch_filename_key != account_key:
         raise ValueError(f"Result account {account_key} does not match revision batch {batch.account_key}")
     text = _read_report_text(path)
     return import_ebay_revision_result(db, batch, result_csv=text, filename=path.name)

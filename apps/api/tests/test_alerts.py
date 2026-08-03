@@ -112,6 +112,23 @@ def test_failed_source_refresh_alert_resolves_after_newer_success() -> None:
     assert [item.id for item in resolved] == [alert.id]
 
 
+def test_failed_source_refresh_does_not_alert_for_paused_product() -> None:
+    db = make_session()
+    product = add_product(db, sku="SRC-PAUSED")
+    product.status = "paused"
+    db.add(SourceRefreshJob(
+        batch_key="refresh-paused",
+        product_id=product.id,
+        status=SourceRefreshJobStatus.failed.value,
+        message="Source is intentionally excluded",
+    ))
+    db.commit()
+
+    source_alerts = [item for item in refresh_operational_alerts(db) if item.source == "source-refresh"]
+
+    assert source_alerts == []
+
+
 def test_summary_counts_active_supplier_alert() -> None:
     db = make_session()
     product = add_product(db, sku="SRC-STOCK")

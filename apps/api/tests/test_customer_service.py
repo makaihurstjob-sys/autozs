@@ -2,7 +2,7 @@ def test_customer_conversation_import_and_human_reply_queue(client) -> None:
     conversation = client.post(
         "/customer-service/conversations/import",
         json={
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "ebay_thread_id": "thread-001",
             "buyer_username": "happy-buyer",
             "subject": "Question about my order",
@@ -41,7 +41,7 @@ def test_customer_conversation_import_and_human_reply_queue(client) -> None:
 
 def test_customer_message_import_is_idempotent(client) -> None:
     payload = {
-        "account_id": "main-store",
+        "account_id": "a.m.anim-59",
         "ebay_thread_id": "thread-repeat",
         "buyer_username": "repeat-buyer",
         "subject": "Repeated sync",
@@ -93,7 +93,7 @@ def test_quick_reply_template_requires_fields_and_manual_review(client) -> None:
     conversation = client.post(
         "/customer-service/conversations/import",
         json={
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "ebay_thread_id": "thread-template",
             "buyer_username": "Jamie",
             "subject": "Address request",
@@ -153,7 +153,7 @@ def test_quick_reply_never_uses_ebay_username_as_buyer_first_name(client) -> Non
     conversation = client.post(
         "/customer-service/conversations/import",
         json={
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "ebay_thread_id": "thread-no-recipient-name",
             "buyer_username": "not-the-buyers-name-123",
             "subject": "Order update",

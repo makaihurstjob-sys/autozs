@@ -240,6 +240,32 @@ def test_listing_jobs_next_only_starts_due_jobs(client) -> None:
     assert due["package"]["sku"] == product["sku"]
 
 
+def test_listing_jobs_next_refuses_a_second_concurrent_runner(client) -> None:
+    configure_matching_browser_account(client)
+    first = create_ready_product(client, "Concurrent Runner One", source_id="770000001")
+    second = create_ready_product(client, "Concurrent Runner Two", source_id="770000002")
+    created = client.post(
+        "/listing-jobs", json={"product_ids": [first["id"], second["id"]]}
+    ).json()
+    due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    for job in created:
+        client.patch(f"/listing-jobs/{job['id']}", json={"status": "queued", "scheduled_for": due})
+
+    started = client.post("/listing-jobs/next").json()
+    assert started["job"]["status"] == "running"
+
+    # Two runner tabs share one workflow key in the browser and corrupt each
+    # other's drafts, so the queue must stay single-flight even though both
+    # remaining jobs are due.
+    blocked = client.post("/listing-jobs/next")
+    assert blocked.status_code == 404
+
+    client.patch(f"/listing-jobs/{started['job']['id']}", json={"status": "completed"})
+    resumed = client.post("/listing-jobs/next").json()
+    assert resumed["job"]["status"] == "running"
+    assert resumed["job"]["id"] != started["job"]["id"]
+
+
 def test_listing_job_needs_review_when_product_is_not_ready(client) -> None:
     configure_matching_browser_account(client)
     product = client.post(
@@ -593,7 +619,7 @@ def test_completed_job_reuses_listing_when_browser_account_label_changes(client)
         "/listing-jobs",
         json={
             "product_ids": [product["id"]],
-            "ebay_account_key": "main-store",
+            "ebay_account_key": "a.m.anim-59",
             "action": "publish",
             "listing_schedule_at": schedule_at,
         },
@@ -615,7 +641,7 @@ def test_completed_job_reuses_listing_when_browser_account_label_changes(client)
     listings = client.get("/ebay/listings").json()
     assert len(listings) == 1
     assert listings[0]["listing_id"] == "800262913583"
-    assert listings[0]["account_id"] == "main-store"
+    assert listings[0]["account_id"] == "a.m.anim-59"
 
 
 def test_product_listing_schedule_can_be_saved_and_cleared(client) -> None:
@@ -676,7 +702,7 @@ def test_unavailable_supplier_cannot_be_enqueued_for_listing(client) -> None:
         "/listing-jobs",
         json={
             "product_ids": [product["id"]],
-            "ebay_account_key": "main-store",
+            "ebay_account_key": "a.m.anim-59",
             "action": "publish",
             "listing_schedule_at": "2026-08-02T19:00:00Z",
         },
@@ -692,7 +718,7 @@ def test_queued_listing_is_blocked_if_supplier_becomes_unavailable(client) -> No
         "/listing-jobs",
         json={
             "product_ids": [product["id"]],
-            "ebay_account_key": "main-store",
+            "ebay_account_key": "a.m.anim-59",
             "action": "publish",
             "scheduled_for": "2099-08-02T19:00:00Z",
             "listing_schedule_at": "2099-08-02T19:00:00Z",

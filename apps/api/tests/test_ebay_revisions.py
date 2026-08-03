@@ -68,13 +68,13 @@ def test_expired_revision_lease_returns_approved_job_to_queue() -> None:
 
 def test_tombstoned_listing_cancels_open_revision_jobs_on_read() -> None:
     db = make_session()
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="tombstoned", price=30.53)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="tombstoned", price=30.53)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         old_price=30.53,
         target_price=31.53,
         status=EbayRevisionJobStatus.needs_review.value,
@@ -92,13 +92,13 @@ def test_tombstoned_listing_cancels_open_revision_jobs_on_read() -> None:
 
 def test_tombstone_helper_cancels_linked_revision_jobs() -> None:
     db = make_session()
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="scheduled", price=30.53)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="scheduled", price=30.53)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         old_price=30.53,
         target_price=31.53,
         status=EbayRevisionJobStatus.queued.value,
@@ -141,13 +141,13 @@ def test_revision_stops_after_repeated_timeouts() -> None:
 
 def test_price_revision_sheet_preserves_info_and_only_writes_guarded_columns() -> None:
     db = make_session()
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="live", price=24.53)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="live", price=24.53)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         target_price=28.53,
         status=EbayRevisionJobStatus.queued.value,
         guard_passed=True,
@@ -160,7 +160,7 @@ def test_price_revision_sheet_preserves_info_and_only_writes_guarded_columns() -
     template = '#INFO,Version=0.0.2,Template=Edit price and quantity\nAction,Item number,Start price,Quantity\n'
     content, prepared_ids = build_ebay_price_revision_csv(
         db,
-        account_key="main-store",
+        account_key="a.m.anim-59",
         job_ids=[job.id],
         template_csv=template,
     )
@@ -187,13 +187,13 @@ def test_pack_revision_sheet_includes_required_pack_title() -> None:
             ListingDraft(product_id=product.id, title="(2X) Minimum order product | FREE SHIPPING", description="Pack"),
         ]
     )
-    listing = EbayListing(product_id=product.id, listing_id="800123456789", account_id="main-store", status="scheduled", price=20.53)
+    listing = EbayListing(product_id=product.id, listing_id="800123456789", account_id="a.m.anim-59", status="scheduled", price=20.53)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=product.id,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         target_price=36.53,
         status=EbayRevisionJobStatus.queued.value,
         guard_passed=True,
@@ -205,7 +205,7 @@ def test_pack_revision_sheet_includes_required_pack_title() -> None:
 
     content, prepared_ids = build_ebay_price_revision_csv(
         db,
-        account_key="main-store",
+        account_key="a.m.anim-59",
         job_ids=[job.id],
         template_csv="Action,Item number,Start price,Quantity\n",
     )
@@ -217,13 +217,13 @@ def test_pack_revision_sheet_includes_required_pack_title() -> None:
 
 def test_real_ebay_template_drops_prefilled_listing_row() -> None:
     db = make_session()
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="live", price=24.53)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="live", price=24.53)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         target_price=28.53,
         status=EbayRevisionJobStatus.queued.value,
         guard_passed=True,
@@ -241,7 +241,7 @@ def test_real_ebay_template_drops_prefilled_listing_row() -> None:
 
     content, _ = build_ebay_price_revision_csv(
         db,
-        account_key="main-store",
+        account_key="a.m.anim-59",
         job_ids=[job.id],
         template_csv=template,
     )
@@ -255,13 +255,13 @@ def test_real_ebay_template_drops_prefilled_listing_row() -> None:
 
 def test_price_revision_sheet_rejects_wrong_account() -> None:
     db = make_session()
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="live", price=24.53)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="live", price=24.53)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         target_price=28.53,
         status=EbayRevisionJobStatus.queued.value,
         guard_passed=True,
@@ -330,13 +330,13 @@ def test_bulk_revision_batch_reconciles_success_and_failure_rows() -> None:
     db = make_session()
     save_ebay_revision_template(
         db,
-        account_key="main-store",
+        account_key="a.m.anim-59",
         filename="edit-price.csv",
         template_csv="#INFO,Version=1.0.0\nAction,Item number,Start price,Quantity\n",
     )
     listings = [
-        EbayListing(product_id=1, listing_id="800123456781", account_id="main-store", status="live", price=20.0),
-        EbayListing(product_id=2, listing_id="800123456782", account_id="main-store", status="scheduled", price=30.0),
+        EbayListing(product_id=1, listing_id="800123456781", account_id="a.m.anim-59", status="live", price=20.0),
+        EbayListing(product_id=2, listing_id="800123456782", account_id="a.m.anim-59", status="scheduled", price=30.0),
     ]
     db.add_all(listings)
     db.flush()
@@ -344,7 +344,7 @@ def test_bulk_revision_batch_reconciles_success_and_failure_rows() -> None:
         EbayRevisionJob(
             product_id=index,
             ebay_listing_id=listing.id,
-            ebay_account_key="main-store",
+            ebay_account_key="a.m.anim-59",
             old_price=listing.price,
             target_price=listing.price + 5,
             status=EbayRevisionJobStatus.queued.value,
@@ -357,7 +357,7 @@ def test_bulk_revision_batch_reconciles_success_and_failure_rows() -> None:
     db.add_all(jobs)
     db.commit()
 
-    batch = prepare_next_ebay_revision_batch(db, account_key="main-store")
+    batch = prepare_next_ebay_revision_batch(db, account_key="a.m.anim-59")
     assert batch is not None
     assert batch.status == EbayRevisionBatchStatus.prepared.value
     assert batch.rows_total == 2
@@ -395,13 +395,13 @@ def test_revision_result_can_be_decoded_from_extension_base64() -> None:
 
 def test_bulk_revision_result_accepts_ebay_itemid_warning_row() -> None:
     db = make_session()
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="scheduled", price=20.0)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="scheduled", price=20.0)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         target_price=22.0,
         status=EbayRevisionJobStatus.running.value,
         guard_passed=True,
@@ -411,7 +411,7 @@ def test_bulk_revision_result_accepts_ebay_itemid_warning_row() -> None:
     db.add(job)
     db.flush()
     batch = EbayRevisionBatch(
-        account_key="main-store",
+        account_key="a.m.anim-59",
         status=EbayRevisionBatchStatus.waiting_results.value,
         job_ids_json=f"[{job.id}]",
         filename="revision.csv",
@@ -438,17 +438,17 @@ def test_bulk_revision_result_pauses_job_missing_from_results() -> None:
     db = make_session()
     save_ebay_revision_template(
         db,
-        account_key="main-store",
+        account_key="a.m.anim-59",
         filename="edit-price.csv",
         template_csv="Action,Item number,Start price\n",
     )
-    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="main-store", status="live", price=20.0)
+    listing = EbayListing(product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="live", price=20.0)
     db.add(listing)
     db.flush()
     job = EbayRevisionJob(
         product_id=1,
         ebay_listing_id=listing.id,
-        ebay_account_key="main-store",
+        ebay_account_key="a.m.anim-59",
         target_price=25.0,
         status=EbayRevisionJobStatus.queued.value,
         guard_passed=True,
@@ -457,7 +457,7 @@ def test_bulk_revision_result_pauses_job_missing_from_results() -> None:
     )
     db.add(job)
     db.commit()
-    batch = prepare_next_ebay_revision_batch(db, account_key="main-store")
+    batch = prepare_next_ebay_revision_batch(db, account_key="a.m.anim-59")
     assert batch is not None
 
     import_ebay_revision_result(
@@ -482,7 +482,7 @@ def test_revision_batches_list_is_newest_first_and_filterable() -> None:
             rows_total=1,
         ),
         EbayRevisionBatch(
-            account_key="main-store",
+            account_key="a.m.anim-59",
             status=EbayRevisionBatchStatus.prepared.value,
             job_ids_json="[2]",
             filename="newest.csv",
@@ -494,5 +494,5 @@ def test_revision_batches_list_is_newest_first_and_filterable() -> None:
     db.commit()
 
     assert [batch.filename for batch in list_ebay_revision_batches(db)] == ["newest.csv", "secondary.csv"]
-    assert [batch.filename for batch in list_ebay_revision_batches(db, account_key="main-store")] == ["newest.csv"]
+    assert [batch.filename for batch in list_ebay_revision_batches(db, account_key="a.m.anim-59")] == ["newest.csv"]
     assert [batch.filename for batch in list_ebay_revision_batches(db, status="completed")] == ["secondary.csv"]

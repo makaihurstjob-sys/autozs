@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain import EbayAccount
+from app.core.store_keys import DEFAULT_EBAY_STORE_KEY
 
 
 CONNECTION_FIELDS = {
@@ -144,5 +145,7 @@ def _unique_account_key(db: Session, key: str) -> str:
 
 
 def _account_key(value: str) -> str:
+    if value.strip().lower() == DEFAULT_EBAY_STORE_KEY:
+        return DEFAULT_EBAY_STORE_KEY
     key = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
     return key or "ebay-account"

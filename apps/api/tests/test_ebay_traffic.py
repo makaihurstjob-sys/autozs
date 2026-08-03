@@ -49,7 +49,7 @@ def test_traffic_import_aggregates_all_official_metrics_and_rankings(client) -> 
     daily = client.post(
         "/stats/traffic/import",
         json={
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
             "account_id": "a.m.anim-59",
             "marketplace_id": "EBAY_US",
             "dimension": "DAY",
@@ -62,7 +62,7 @@ def test_traffic_import_aggregates_all_official_metrics_and_rankings(client) -> 
     listings = client.post(
         "/stats/traffic/import",
         json={
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
             "account_id": "a.m.anim-59",
             "marketplace_id": "EBAY_US",
             "dimension": "LISTING",
@@ -72,7 +72,7 @@ def test_traffic_import_aggregates_all_official_metrics_and_rankings(client) -> 
     assert listings.status_code == 200
     assert listings.json()["records_imported"] == 2
 
-    response = client.get("/stats/traffic?range=30&grain=day&account=main-store")
+    response = client.get("/stats/traffic?range=30&grain=day&account=a.m.anim-59")
     assert response.status_code == 200
     payload = response.json()
     assert payload["data_source"] == "ebay_analytics_api"
@@ -93,7 +93,7 @@ def test_traffic_import_is_idempotent_for_same_account_dimension_and_period(clie
     original = [100, 90, 80, 10, 10, 1, 1, 2, 5, 1, 0.08, 0.1, 1]
     updated = [200, 180, 160, 20, 20, 2, 2, 4, 10, 2, 0.08, 0.1, 2]
     request = {
-        "account_key": "main-store",
+        "account_key": "a.m.anim-59",
         "account_id": "a.m.anim-59",
         "marketplace_id": "EBAY_US",
         "dimension": "DAY",
@@ -103,7 +103,7 @@ def test_traffic_import_is_idempotent_for_same_account_dimension_and_period(clie
     request["report"] = traffic_report("DAY", [(today.isoformat(), updated)])
     assert client.post("/stats/traffic/import", json=request).status_code == 200
 
-    payload = client.get("/stats/traffic?range=30&grain=day&account=main-store").json()
+    payload = client.get("/stats/traffic?range=30&grain=day&account=a.m.anim-59").json()
     assert len(payload["trend"]) == 1
     assert payload["summary"]["total_impressions"] == 200
     assert payload["summary"]["total_views"] == 20
@@ -123,19 +123,19 @@ def test_traffic_falls_back_to_existing_rolling_listing_views(client) -> None:
     ).json()
     marked = client.post(
         f"/products/{product['id']}/mark-listed",
-        json={"listing_id": "800000000099", "account_id": "main-store", "status": "active"},
+        json={"listing_id": "800000000099", "account_id": "a.m.anim-59", "status": "active"},
     )
     assert marked.status_code == 200
     capture = client.post(
         "/ebay/sync-runs/listing-views",
         json={
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
             "rows": [{"listing_id": "800000000099", "views": 37}],
         },
     )
     assert capture.status_code == 200
 
-    payload = client.get("/stats/traffic?range=30&grain=day&account=main-store").json()
+    payload = client.get("/stats/traffic?range=30&grain=day&account=a.m.anim-59").json()
     assert payload["data_source"] == "active_listing_view_scrape"
     assert payload["summary"]["total_views"] == 37
     assert payload["summary"]["listings_measured"] == 1
@@ -154,14 +154,14 @@ def test_listing_traffic_import_updates_product_card_view_measurement(client) ->
     ).json()
     marked = client.post(
         f"/products/{product['id']}/mark-listed",
-        json={"listing_id": "800000000100", "account_id": "main-store", "status": "active"},
+        json={"listing_id": "800000000100", "account_id": "a.m.anim-59", "status": "active"},
     )
     assert marked.status_code == 200
     listing_values = [500, 500, 0, 0, 42, 0, 2, 0, 0, 0, 0.08, 0, 0]
     imported = client.post(
         "/stats/traffic/import",
         json={
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
             "account_id": "a.m.anim-59",
             "marketplace_id": "EBAY_US",
             "dimension": "LISTING",
@@ -184,7 +184,7 @@ def test_listing_traffic_import_updates_product_card_view_measurement(client) ->
 def test_chrome_extension_can_queue_and_import_seller_hub_traffic(client) -> None:
     account = client.post(
         "/ebay/accounts",
-        json={"label": "Main Store", "account_id": "a.m.anim-59", "environment": "production"},
+        json={"label": "a.m.anim-59", "account_id": "a.m.anim-59", "environment": "production"},
     ).json()
     queued = client.post(f"/stats/traffic/sync?range=30&account={account['key']}")
     assert queued.status_code == 200

@@ -136,6 +136,10 @@ def create_source_refresh_batch(
         .where(Product.status != ProductStatus.deleted.value)
         .order_by(Product.created_at.asc(), Product.id.asc())
     )
+    if not force:
+        # Paused products are intentionally outside unattended automation.
+        # A forced refresh remains available for an explicit recheck.
+        query = query.where(Product.status != ProductStatus.paused.value)
     if product_ids is not None:
         if not product_ids:
             return f"refresh-{now:%Y%m%d%H%M%S}-{uuid4().hex[:6]}", 0, []

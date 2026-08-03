@@ -19,8 +19,13 @@ from app.models.domain import (
     SupplierProduct,
     SourceRefreshJob,
 )
+from app.models.depop import DepopAccount, DepopListingJob, DepopListingVariant
+from app.models.z_finance import ZFinancePayout, ZFinanceSyncState, ZFinanceTransaction
 
 __all__ = [
+    "DepopAccount",
+    "DepopListingJob",
+    "DepopListingVariant",
     "CandidateProduct",
     "AppSetting",
     "AutomationRun",
@@ -40,4 +45,7 @@ __all__ = [
     "ResearchJob",
     "SupplierProduct",
     "SourceRefreshJob",
+    "ZFinancePayout",
+    "ZFinanceSyncState",
+    "ZFinanceTransaction",
 ]

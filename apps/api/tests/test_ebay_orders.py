@@ -34,7 +34,7 @@ def test_chrome_order_report_import_is_idempotent_and_matches_listing(client) ->
         f"/products/{product['id']}/mark-listed",
         json={
             "listing_id": "800123456789",
-            "account_id": "main-store",
+            "account_id": "a.m.anim-59",
             "environment": "manual",
             "quantity": 1,
             "status": "active",
@@ -42,16 +42,16 @@ def test_chrome_order_report_import_is_idempotent_and_matches_listing(client) ->
     )
     assert marked.status_code == 200
 
-    queued = client.post("/orders/sync?account_key=main-store").json()
-    claimed = client.post("/orders/sync/next?account_key=main-store").json()
+    queued = client.post("/orders/sync?account_key=a.m.anim-59").json()
+    claimed = client.post("/orders/sync/next?account_key=a.m.anim-59").json()
     assert claimed["id"] == queued["id"]
     assert claimed["status"] == "running"
     assert "autozs_report_type=orders" in claimed["runner_url"]
 
     payload = {
-        "account_key": "main-store",
+        "account_key": "a.m.anim-59",
         "run_id": claimed["id"],
-        "filename": "ebay-orders-main-store-run-1.csv",
+        "filename": "ebay-orders-a.m.anim-59-run-1.csv",
         "report_base64": base64.b64encode(_orders_csv()).decode(),
     }
     first = client.post("/orders/import-file", json=payload)
@@ -68,7 +68,7 @@ def test_chrome_order_report_import_is_idempotent_and_matches_listing(client) ->
     assert orders[0]["ebay_order_id"] == "12-34567-89012"
     assert orders[0]["buyer_username"] == "first-buyer"
     assert orders[0]["recipient_name"] == "Jamie Rivera"
-    assert orders[0]["account_id"] == "main-store"
+    assert orders[0]["account_id"] == "a.m.anim-59"
     assert orders[0]["total"] == 19.53
     assert orders[0]["items"][0]["product_id"] == product["id"]
     assert orders[0]["items"][0]["quantity"] == 1
@@ -98,7 +98,7 @@ def test_order_report_import_rejects_reports_without_order_numbers(client) -> No
     response = client.post(
         "/orders/import-file",
         json={
-            "account_key": "main-store",
+            "account_key": "a.m.anim-59",
             "filename": "orders.csv",
             "report_base64": content,
         },

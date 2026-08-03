@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     autozs_push_vapid_key_file: str = ""
     autozs_push_vapid_subject: str = "mailto:makaihurst.job@gmail.com"
     autozs_push_alert_loop_seconds: int = 60
+    autozs_z_finance_token: str = ""
+    z_finance_base_url: str = ""
+    z_finance_autozs_token: str = ""
+    z_finance_operating_account_id: str = ""
+    z_finance_purchasing_card_id: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

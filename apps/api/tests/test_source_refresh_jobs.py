@@ -53,7 +53,7 @@ def add_ebay_listing(db, product, status="live"):
     listing = EbayListing(
         product_id=product.id,
         listing_id=f"ebay-{product.id}",
-        account_id="main-store",
+        account_id="a.m.anim-59",
         environment="production",
         price=30.0,
         quantity=1,
@@ -113,6 +113,21 @@ def test_automatic_source_refresh_only_tracks_scheduled_and_live_listings() -> N
     assert jobs[0].product_id == listed.id
     assert jobs[0].product_id != draft_only.id
     assert "Queued 1 supplier price refresh" in message
+
+
+def test_automatic_source_refresh_skips_paused_products() -> None:
+    db = make_session()
+    product = add_source_product(db, sku="SRC-PAUSED", updated_at=datetime.utcnow() - timedelta(hours=7))
+    product.status = "paused"
+    db.commit()
+    add_ebay_listing(db, product, status="live")
+
+    batch_key, due_available, jobs, message = create_automatic_source_refresh_batch(db)
+
+    assert batch_key
+    assert due_available == 0
+    assert jobs == []
+    assert "No scheduled or live supplier prices are due" in message
 
 
 def test_lowes_scaffold_is_never_queued_for_automatic_price_refresh() -> None:
