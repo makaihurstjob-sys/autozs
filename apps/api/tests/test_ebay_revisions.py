@@ -588,3 +588,35 @@ def test_ebay_sync_does_not_overwrite_the_engine_draft_price() -> None:
     db.refresh(draft)
     assert draft.calculated_price == 56.53, "sync overwrote the engine price with the live eBay price"
     assert draft.status == "active", "sync should still track listing status"
+
+
+def test_breakeven_revisions_survive_the_guard_and_the_below_cost_skip() -> None:
+    """Breakeven targets zero profit, which must not read as 'selling below cost'.
+
+    Two things would otherwise silently kill the mode: the minimum-profit guard
+    (profit 0.00 < the 2.00 floor) and the below-cost skip, which cent-rounding can
+    trip when the computed profit lands at -0.01.
+    """
+    from app.models.domain import AppSetting
+    from app.services.importer import calculate_listing_price, effective_landed_cost
+    from app.services.settings import read_pricing_settings
+
+    db = make_session()
+    db.add(AppSetting(key="default_pricing_strategy", value="breakeven"))
+    db.add(AppSetting(key="default_min_profit_guard_enabled", value="true"))
+    db.add(AppSetting(key="default_min_profit", value="2.0"))
+    db.commit()
+
+    settings = read_pricing_settings(db)
+    landed = effective_landed_cost(44.97, 0.0, settings)
+    breakeven_price = calculate_listing_price(landed, None, settings).final_price
+
+    _priced_product(db, cost=44.97, draft_price=breakeven_price, live_price=99.53)
+
+    queued, _ = enqueue_ebay_price_revisions(db)
+
+    assert queued == 1, "breakeven proposal was suppressed as below cost"
+    job = db.query(EbayRevisionJob).one()
+    assert job.target_price == breakeven_price
+    assert job.minimum_profit == 0.0, "breakeven must not be held to the normal profit floor"
+    assert job.guard_passed is True, f"guard blocked breakeven: {job.guard_reason}"

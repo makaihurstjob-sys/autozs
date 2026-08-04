@@ -30,6 +30,10 @@ REVISION_LISTING_STATUSES = {"scheduled", "listed", "live", "active"}
 TERMINAL_REVISION_LISTING_STATUSES = {"tombstoned", "deleted", "ended", "cancelled", "inactive"}
 REVISION_LEASE_MINUTES = 15
 MAX_REVISION_ATTEMPTS = 3
+# Breakeven pricing lands on zero profit by design, and rounding the price and the
+# fee to cents can leave the computed profit a cent under. Treat that as breakeven,
+# not as selling below cost -- a genuine below-cost target misses by far more.
+BELOW_COST_TOLERANCE = 0.01
 
 
 def _revision_evidence(db: Session, product_id: int, target_price: float, old_price: float | None) -> dict:
@@ -49,7 +53,10 @@ def _revision_evidence(db: Session, product_id: int, target_price: float, old_pr
         settings,
         minimum_order_quantity,
     )["profit"]
-    minimum_profit = float(settings.get("default_min_profit", 0.0) or 0.0)
+    breakeven_mode = str(settings.get("default_pricing_strategy", "margin")) == "breakeven"
+    # Breakeven pricing targets zero profit on purpose, so holding it to the normal
+    # minimum-profit floor would fail every proposal and the mode could never ship.
+    minimum_profit = 0.0 if breakeven_mode else float(settings.get("default_min_profit", 0.0) or 0.0)
     guard_enabled = bool(settings.get("default_min_profit_guard_enabled", False))
     max_change = float(settings.get("ebay_revision_max_change_percent", 25.0) or 25.0)
     change_percent = (
@@ -151,7 +158,7 @@ def enqueue_ebay_price_revisions(
         # negative is always a data fault (a stale or corrupted draft price), not a
         # pricing decision, so it must not be created or kept alive -- otherwise the
         # same loss-making proposal regenerates on every repricing pass.
-        if evidence["projected_profit"] is not None and evidence["projected_profit"] < 0:
+        if evidence["projected_profit"] is not None and evidence["projected_profit"] < -BELOW_COST_TOLERANCE:
             if active_job is not None and active_job.status != EbayRevisionJobStatus.running.value:
                 active_job.status = EbayRevisionJobStatus.cancelled.value
                 active_job.completed_at = _now()

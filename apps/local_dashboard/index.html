@@ -2456,6 +2456,15 @@
       .settings-field { display: grid; gap: 6px; }
       .settings-field > span { color: var(--muted); font-size: 12px; font-weight: 700; }
       .settings-field.wide { grid-column: 1 / -1; }
+      .settings-hint { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+      .settings-hint-warning {
+        border-left: 3px solid #d97706;
+        background: rgba(217, 119, 6, 0.08);
+        color: #b45309;
+        padding: 8px 10px;
+        border-radius: 4px;
+        font-weight: 600;
+      }
       .settings-toggle {
         align-items: center;
         background: var(--capture-bg);
@@ -4368,7 +4377,7 @@
               <div class="settings-section">
                 <h3>Pricing and monitoring</h3>
                 <div class="settings-form-grid">
-                  <label class="settings-field"><span>Pricing strategy</span><select id="setting-default_pricing_strategy"><option value="margin" ${state.settings.default_pricing_strategy === "margin" ? "selected" : ""}>Margin</option><option value="competitor" ${state.settings.default_pricing_strategy === "competitor" ? "selected" : ""}>Competitor</option><option value="safe_competitor" ${state.settings.default_pricing_strategy === "safe_competitor" ? "selected" : ""}>Safe competitor</option></select></label>
+                  <label class="settings-field"><span>Pricing strategy</span><select id="setting-default_pricing_strategy"><option value="margin" ${state.settings.default_pricing_strategy === "margin" ? "selected" : ""}>Margin</option><option value="competitor" ${state.settings.default_pricing_strategy === "competitor" ? "selected" : ""}>Competitor</option><option value="safe_competitor" ${state.settings.default_pricing_strategy === "safe_competitor" ? "selected" : ""}>Safe competitor</option><option value="breakeven" ${state.settings.default_pricing_strategy === "breakeven" ? "selected" : ""}>Breakeven (overrides all pricing settings)</option></select></label>${state.settings.default_pricing_strategy === "breakeven" ? `<p class="settings-hint settings-hint-warning">Breakeven mode prices every product at exactly cost + fees, for zero profit. It ignores margin, competitor undercut, the minimum-profit floor and rounding. Any supplier price increase turns live listings into losses.</p>` : ""}
                   <label class="settings-field"><span>Desired margin</span><input id="setting-default_margin_percent" type="number" min="0" step="0.01" value="${esc(state.settings.default_margin_percent)}" /></label>
                   <label class="settings-field"><span>Minimum profit per order</span><input id="setting-default_min_profit" type="number" min="0" step="0.01" value="${esc(state.settings.default_min_profit)}" /></label>
                   <label class="settings-toggle"><input id="setting-default_min_profit_guard_enabled" type="checkbox" ${state.settings.default_min_profit_guard_enabled ? "checked" : ""} /> Enforce minimum profit on every price</label>
@@ -4383,6 +4392,7 @@
                   <label class="settings-field"><span>Auto-refresh check cadence (minutes)</span><input id="setting-source_refresh_auto_poll_minutes" type="number" min="1" max="120" step="1" value="${esc(state.settings.source_refresh_auto_poll_minutes ?? 5)}" /></label>
                   <label class="settings-toggle"><input id="setting-default_gift_card_discount_enabled" type="checkbox" ${state.settings.default_gift_card_discount_enabled ? "checked" : ""} /> Apply gift card discount to product cost</label>
                   <label class="settings-field"><span>Gift card discount (%)</span><input id="setting-default_gift_card_discount_percent" type="number" min="0" max="100" step="0.01" value="${esc(state.settings.default_gift_card_discount_percent ?? 6)}" /></label>
+                  <label class="settings-field"><span>Supplier sales tax (%)</span><input id="setting-default_sales_tax_percent" type="number" min="0" max="100" step="0.01" value="${esc(state.settings.default_sales_tax_percent ?? 0)}" placeholder="0" /></label>
                   <label class="settings-toggle"><input id="setting-default_round_to_99" type="checkbox" ${state.settings.default_round_to_99 ? "checked" : ""} /> Round selling prices</label>
                   <label class="settings-field"><span>Rounding cents</span><input id="setting-default_rounding_cents" type="number" min="0" max="0.99" step="0.01" value="${esc(state.settings.default_rounding_cents ?? 0.99)}" placeholder="0.99" /></label>
                   <label class="settings-toggle"><input id="setting-auto_delist_zero_view_enabled" type="checkbox" ${state.settings.auto_delist_zero_view_enabled ? "checked" : ""} /> Flag 0-view listings for automatic delist</label>
@@ -10546,7 +10556,7 @@
       }
 
       async function saveSettings() {
-        const keys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
+        const keys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "default_sales_tax_percent", "auto_delist_zero_view_days"];
         const textKeys = [];
         const payload = {};
         for (const key of keys) {
@@ -10612,7 +10622,7 @@
             browser_fulfillment: false,
           },
         };
-        const numberKeys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "auto_delist_zero_view_days"];
+        const numberKeys = ["default_ebay_fee_rate", "default_promoted_rate", "default_return_risk_rate", "default_undercut_amount", "default_min_profit", "default_risk_buffer", "default_margin_percent", "source_refresh_interval_hours", "source_refresh_auto_batch_size", "source_refresh_auto_poll_minutes", "default_gift_card_discount_percent", "default_sales_tax_percent", "auto_delist_zero_view_days"];
         const pricing = {};
         numberKeys.forEach((key) => {
           const value = Number(document.getElementById(`setting-${key}`).value);

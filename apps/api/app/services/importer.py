@@ -143,6 +143,22 @@ def calculate_listing_price(
     )
     safe_competitor_price = _max_optional(competitor_target, minimum_profit_price)
     strategy = str(settings.get("default_pricing_strategy", "margin"))
+    if strategy == "breakeven":
+        # Deliberately overrides every other pricing setting: no margin, no
+        # competitor undercut, no minimum-profit floor and no rounding, because any
+        # of those would push the price off exact breakeven. The price returned
+        # recovers landed cost and selling fees and nothing more, so profit is 0.00
+        # by construction and ANY later cost increase turns the listing into a loss.
+        breakeven_price = calculate_minimum_profit_price(source_price, _fee_rate_total(settings), 0.0)
+        return ListingPriceDecision(
+            breakeven_price,
+            margin_price,
+            competitor_target,
+            minimum_profit_price,
+            safe_competitor_price,
+            strategy,
+            "Breakeven pricing: recovers landed cost and fees exactly, zero profit",
+        )
     if strategy == "competitor" and competitor_target is not None:
         final_price = competitor_target
         reason = "Competitor pricing: competitor minus configured undercut"
@@ -197,11 +213,27 @@ def calculate_profit(
     return {"fees": fees, "profit": profit}
 
 
+def sales_tax_rate(settings: dict[str, float | bool | str]) -> float:
+    """Supplier sales tax as a fraction of the merchandise subtotal."""
+    try:
+        percent = float(settings.get("default_sales_tax_percent", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(percent, 100.0)) / 100
+
+
 def effective_supplier_cost(source_price: float, settings: dict[str, float | bool | str]) -> float:
-    if not bool(settings.get("default_gift_card_discount_enabled", False)):
-        return float(source_price)
-    discount = max(0.0, min(float(settings.get("default_gift_card_discount_percent", 0.0)), 100.0))
-    return round(float(source_price) * (1 - discount / 100), 2)
+    """Real cash cost of the merchandise, including supplier sales tax.
+
+    Tax is applied before the gift-card discount because a gift card is a payment
+    method, not a price reduction: the supplier charges tax on the full ticket and
+    the card pays the taxed total, so the discount is earned on that total too.
+    """
+    cost = float(source_price) * (1 + sales_tax_rate(settings))
+    if bool(settings.get("default_gift_card_discount_enabled", False)):
+        discount = max(0.0, min(float(settings.get("default_gift_card_discount_percent", 0.0)), 100.0))
+        cost *= 1 - discount / 100
+    return round(cost, 2)
 
 
 def effective_landed_cost(
@@ -1065,6 +1097,10 @@ def build_ebay_listing_package(db: Session, product_id: int, listing_schedule_at
         "effective_source_cost": effective_supplier_cost(order_subtotal, settings) if order_subtotal is not None else None,
         "gift_card_discount_enabled": bool(settings.get("default_gift_card_discount_enabled", False)),
         "gift_card_discount_percent": float(settings.get("default_gift_card_discount_percent", 0.0)),
+        "sales_tax_percent": float(settings.get("default_sales_tax_percent", 0.0) or 0.0),
+        "sales_tax_cost": (
+            round(order_subtotal * sales_tax_rate(settings), 2) if order_subtotal is not None else None
+        ),
         "competitor_price": product.competitor_price,
         "margin_price": price_decision.margin_price,
         "competitor_target_price": price_decision.competitor_target_price,

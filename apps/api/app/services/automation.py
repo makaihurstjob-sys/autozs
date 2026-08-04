@@ -33,11 +33,12 @@ def create_repricing_snapshots(db: Session, product_ids: list[int] | None = None
     )
     if product_ids is not None:
         statement = statement.where(Product.id.in_(product_ids))
+    sales_tax_percent = float(settings.get("default_sales_tax_percent", 0.0) or 0.0)
     products = db.scalars(statement).all()
     snapshots: list[PriceSnapshot] = []
     for product in products:
         supplier = product.supplier_products[0] if product.supplier_products else None
-        decision = decide_reprice(product, supplier, gift_card_discount)
+        decision = decide_reprice(product, supplier, gift_card_discount, sales_tax_percent)
         snapshot = PriceSnapshot(
             product_id=product.id,
             source=SnapshotSource.calculated.value,

@@ -13,6 +13,7 @@ DEFAULT_SETTING_KEYS = {
     "default_min_profit_guard_enabled",
     "default_gift_card_discount_enabled",
     "default_gift_card_discount_percent",
+    "default_sales_tax_percent",
     "default_risk_buffer",
     "default_margin_percent",
     "source_refresh_interval_days",
@@ -81,6 +82,7 @@ FLOAT_SETTING_KEYS = {
     "default_undercut_amount",
     "default_min_profit",
     "default_gift_card_discount_percent",
+    "default_sales_tax_percent",
     "default_risk_buffer",
     "default_margin_percent",
     "source_refresh_interval_days",
@@ -108,6 +110,10 @@ def read_pricing_settings(db: Session) -> dict[str, float | bool | str]:
         "default_min_profit_guard_enabled": False,
         "default_gift_card_discount_enabled": False,
         "default_gift_card_discount_percent": 6.0,
+        # Sales tax charged by the supplier at checkout, as a percent of the
+        # merchandise subtotal. Real cash cost, so it belongs in every floor,
+        # margin and profit-guard calculation.
+        "default_sales_tax_percent": 0.0,
         "default_risk_buffer": config.default_risk_buffer,
         "default_margin_percent": 0.20,
         "source_refresh_interval_days": 7.0,
@@ -219,7 +225,7 @@ def write_pricing_settings(db: Session, updates: dict[str, float | bool | str | 
     for key, value in updates.items():
         if key not in DEFAULT_SETTING_KEYS or value is None:
             continue
-        if key == "default_pricing_strategy" and value not in {"margin", "competitor", "safe_competitor"}:
+        if key == "default_pricing_strategy" and value not in {"margin", "competitor", "safe_competitor", "breakeven"}:
             continue
         if key == "default_listing_schedule_mode" and value not in {"now", "scheduled"}:
             continue

@@ -270,6 +270,8 @@ class EbayListingPackage(BaseModel):
     effective_source_cost: float | None = None
     gift_card_discount_enabled: bool = False
     gift_card_discount_percent: float = 0.0
+    sales_tax_percent: float = 0.0
+    sales_tax_cost: float | None = None
     competitor_price: float | None = None
     margin_price: float | None = None
     competitor_target_price: float | None = None
@@ -1430,6 +1432,7 @@ class SettingsRead(BaseModel):
     default_min_profit_guard_enabled: bool = False
     default_gift_card_discount_enabled: bool = False
     default_gift_card_discount_percent: float = 6.0
+    default_sales_tax_percent: float = 0.0
     default_risk_buffer: float
     default_margin_percent: float = 0.20
     source_refresh_interval_days: float = 7.0
@@ -1499,6 +1502,7 @@ class PricingSettingsUpdate(BaseModel):
     default_min_profit_guard_enabled: bool | None = None
     default_gift_card_discount_enabled: bool | None = None
     default_gift_card_discount_percent: float | None = Field(default=None, ge=0, le=100)
+    default_sales_tax_percent: float | None = Field(default=None, ge=0, le=100)
     default_risk_buffer: float | None = Field(default=None, ge=0)
     default_margin_percent: float | None = Field(default=None, ge=0, lt=10)
     source_refresh_interval_days: float | None = Field(default=None, ge=1, le=90)
@@ -1509,7 +1513,9 @@ class PricingSettingsUpdate(BaseModel):
     ebay_revision_auto_approve_enabled: bool | None = None
     ebay_revision_max_change_percent: float | None = Field(default=None, ge=0.1, le=100)
     ebay_revision_execution_mode: str | None = Field(default=None, pattern="^(bulk_upload|browser_fallback)$")
-    default_pricing_strategy: str | None = Field(default=None, pattern="^(margin|competitor|safe_competitor)$")
+    default_pricing_strategy: str | None = Field(
+        default=None, pattern="^(margin|competitor|safe_competitor|breakeven)$"
+    )
     default_round_to_99: bool | None = None
     default_rounding_cents: float | None = Field(default=None, ge=0, lt=1)
     default_offers_enabled: bool | None = None

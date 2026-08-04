@@ -2583,3 +2583,18 @@ def test_data_url_images_are_downloaded_and_zipped(client) -> None:
     zip_response = client.get(f"/products/{product['id']}/export-ebay.zip")
     assert zip_response.status_code == 200
     assert zip_response.headers["content-type"] == "application/zip"
+
+
+def test_pricing_settings_accept_breakeven_strategy_and_sales_tax(client) -> None:
+    """The API schema must allow the mode, or the setting can never be saved."""
+    response = client.patch(
+        "/settings/pricing",
+        json={"default_pricing_strategy": "breakeven", "default_sales_tax_percent": 8.25},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["default_pricing_strategy"] == "breakeven"
+    assert body["default_sales_tax_percent"] == 8.25
+
+    assert client.patch("/settings/pricing", json={"default_pricing_strategy": "nonsense"}).status_code == 422
+    assert client.patch("/settings/pricing", json={"default_sales_tax_percent": 150}).status_code == 422

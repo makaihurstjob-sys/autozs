@@ -33,6 +33,7 @@ def decide_reprice(
     product: Product,
     supplier_product: SupplierProduct | None,
     gift_card_discount_percent: float = 0.0,
+    sales_tax_percent: float = 0.0,
 ) -> RepricingDecision:
     if supplier_product is None:
         return RepricingDecision(None, None, "No supplier product attached")
@@ -42,9 +43,12 @@ def decide_reprice(
         return RepricingDecision(None, None, "Supplier price has not been captured yet")
 
     discount = max(0.0, min(gift_card_discount_percent, 100.0))
+    tax_rate = max(0.0, min(sales_tax_percent, 100.0)) / 100
     minimum_order_quantity = max(1, int(supplier_product.minimum_order_quantity or 1))
+    # Supplier sales tax is real cash out, so it is part of the cost the floor has
+    # to clear. Taxed before the gift-card discount: the card pays the taxed total.
     effective_supplier_cost = round(
-        supplier_product.last_price * minimum_order_quantity * (1 - discount / 100),
+        supplier_product.last_price * minimum_order_quantity * (1 + tax_rate) * (1 - discount / 100),
         2,
     )
     floor_price = calculate_floor_price(
