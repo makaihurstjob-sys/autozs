@@ -146,14 +146,27 @@ def enqueue_ebay_price_revisions(
                 active_job.completed_at = _now()
                 active_job.message = "Cancelled because the eBay price already matches the current draft price."
             continue
+        evidence = _revision_evidence(db, listing.product_id, target_price, listing.price)
+        # Never propose selling below cost. A target whose projected profit is
+        # negative is always a data fault (a stale or corrupted draft price), not a
+        # pricing decision, so it must not be created or kept alive -- otherwise the
+        # same loss-making proposal regenerates on every repricing pass.
+        if evidence["projected_profit"] is not None and evidence["projected_profit"] < 0:
+            if active_job is not None and active_job.status != EbayRevisionJobStatus.running.value:
+                active_job.status = EbayRevisionJobStatus.cancelled.value
+                active_job.completed_at = _now()
+                active_job.message = (
+                    f"Cancelled: target ${target_price:.2f} would sell below cost "
+                    f"(projected profit ${evidence['projected_profit']:.2f})."
+                )
+            continue
         if active_job is not None:
             active_job.target_price = target_price
             active_job.old_price = listing.price
-            _apply_evidence(active_job, _revision_evidence(db, listing.product_id, target_price, listing.price))
+            _apply_evidence(active_job, evidence)
             active_job.message = f"Target updated to ${target_price:.2f}; safety review reset."
             updated += 1
             continue
-        evidence = _revision_evidence(db, listing.product_id, target_price, listing.price)
         db.add(
             EbayRevisionJob(
                 product_id=listing.product_id,

@@ -22,9 +22,11 @@ from app.services.ebay_revision_batches import (
     prepare_next_ebay_revision_batch,
 )
 from app.services.ebay_revision_csv import build_ebay_price_revision_csv, save_ebay_revision_template
+from app.services.ebay_sync import _sync_local_draft_status
 from app.services.ebay_revisions import (
     MAX_REVISION_ATTEMPTS,
     cancel_revision_jobs_for_ebay_listing,
+    enqueue_ebay_price_revisions,
     list_ebay_revision_jobs,
     release_expired_ebay_revision_jobs,
     start_next_ebay_revision_job,
@@ -496,3 +498,93 @@ def test_revision_batches_list_is_newest_first_and_filterable() -> None:
     assert [batch.filename for batch in list_ebay_revision_batches(db)] == ["newest.csv", "secondary.csv"]
     assert [batch.filename for batch in list_ebay_revision_batches(db, account_key="a.m.anim-59")] == ["newest.csv"]
     assert [batch.filename for batch in list_ebay_revision_batches(db, status="completed")] == ["secondary.csv"]
+
+
+def _priced_product(db, *, cost: float, draft_price: float, live_price: float, shipping: float = 0.0):
+    product = Product(sku=f"SKU-{cost}-{draft_price}", title="Test planter", status="monitoring")
+    db.add(product)
+    db.flush()
+    db.add(SupplierProduct(product_id=product.id, supplier="home_depot", source_url="https://example.com/p/1",
+                           last_price=cost, last_shipping=shipping))
+    db.add(ListingDraft(product_id=product.id, marketplace="ebay", title="Test planter", description="d", calculated_price=draft_price))
+    listing = EbayListing(
+        product_id=product.id,
+        listing_id=f"8004{int(live_price * 100)}",
+        account_id="a.m.anim-59",
+        status="active",
+        price=live_price,
+    )
+    db.add(listing)
+    db.commit()
+    return product, listing
+
+
+def test_below_cost_revision_target_is_never_proposed() -> None:
+    """A draft price under supplier cost is a data fault, not a pricing decision.
+
+    Regression: this proposal regenerated on every repricing pass and, once
+    approved, would have sold the item at a loss.
+    """
+    db = make_session()
+    _priced_product(db, cost=44.97, draft_price=12.53, live_price=56.53)
+
+    queued, updated = enqueue_ebay_price_revisions(db)
+
+    assert (queued, updated) == (0, 0)
+    assert db.query(EbayRevisionJob).count() == 0
+
+
+def test_profitable_revision_target_is_still_proposed() -> None:
+    db = make_session()
+    _priced_product(db, cost=44.97, draft_price=59.53, live_price=56.53)
+
+    queued, _ = enqueue_ebay_price_revisions(db)
+
+    assert queued == 1
+    job = db.query(EbayRevisionJob).one()
+    assert job.target_price == 59.53
+    assert job.projected_profit > 0
+
+
+def test_below_cost_target_cancels_an_existing_open_revision() -> None:
+    db = make_session()
+    product, listing = _priced_product(db, cost=44.97, draft_price=12.53, live_price=56.53)
+    stale = EbayRevisionJob(
+        product_id=product.id,
+        ebay_listing_id=listing.id,
+        target_price=12.53,
+        status=EbayRevisionJobStatus.needs_review.value,
+        guard_passed=False,
+    )
+    db.add(stale)
+    db.commit()
+
+    enqueue_ebay_price_revisions(db)
+
+    db.refresh(stale)
+    assert stale.status == EbayRevisionJobStatus.cancelled.value
+    assert "below cost" in (stale.message or "")
+
+
+def test_ebay_sync_does_not_overwrite_the_engine_draft_price() -> None:
+    """The live eBay price must not become the pricing engine's target.
+
+    Regression: syncing the observed price into calculated_price closed a loop in
+    which a mispriced live listing overwrote the engine's intended price, so the
+    revision generator proposed the wrong price straight back to eBay and the
+    mispricing could never self-correct.
+    """
+    db = make_session()
+    product = Product(sku="SYNC-1", title="Test planter", status="monitoring")
+    db.add(product)
+    db.flush()
+    draft = ListingDraft(product_id=product.id, marketplace="ebay", title="Test planter", description="d", calculated_price=56.53)
+    db.add(draft)
+    db.commit()
+
+    _sync_local_draft_status(db, product.id, {"status": "active", "price": 12.53, "draft_id": None})
+    db.commit()
+
+    db.refresh(draft)
+    assert draft.calculated_price == 56.53, "sync overwrote the engine price with the live eBay price"
+    assert draft.status == "active", "sync should still track listing status"

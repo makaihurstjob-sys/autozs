@@ -659,8 +659,14 @@ def _sync_local_draft_status(db: Session, product_id: int, row: dict[str, Any]) 
     draft = db.scalar(select(ListingDraft).where(ListingDraft.product_id == product_id, ListingDraft.marketplace == "ebay"))
     if draft is not None:
         draft.status = row["status"]
-        if row["price"] is not None:
-            draft.calculated_price = row["price"]
+        # Deliberately does NOT copy row["price"] into draft.calculated_price.
+        # calculated_price is the price the pricing engine *wants*; the live eBay
+        # price is already recorded on EbayListing.price by the caller. Writing the
+        # observed price back here closed a feedback loop: a mispriced live listing
+        # overwrote the engine's target, the revision generator then read that same
+        # value back as its target, and the mispricing could never self-correct.
+        # It also let one listing's price leak onto a sibling listing of the same
+        # product, proposing a revision down to a below-cost price.
     draft_id = row["draft_id"]
     if draft_id:
         job = db.scalar(

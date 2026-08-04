@@ -303,7 +303,13 @@ def _ebay_revision_alert_specs(db: Session, now: datetime) -> list[dict[str, Any
         product = db.get(Product, job.product_id)
         specs.append(
             _spec(
-                key=f"ebay-revision-job:{job.id}:{job.status}",
+                # Keyed on the listing, NOT on job.id/job.status. Each repricing pass
+                # can retire a proposal and create a fresh job row for the same
+                # listing; keying on the job id minted a brand-new alert every time,
+                # and push dedupe is per alert row, so the phone was notified again
+                # for an issue the user had already seen. One listing keeps one alert
+                # row, refreshed in place by _apply_alert_spec.
+                key=f"ebay-revision-listing:{job.ebay_listing_id or f'job-{job.id}'}",
                 severity=OperationalAlertSeverity.warning.value,
                 source="ebay-revision",
                 title=f"eBay price revision needs attention for {_title(product, job.product_id)}",

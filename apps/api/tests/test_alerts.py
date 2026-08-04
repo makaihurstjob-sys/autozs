@@ -158,3 +158,53 @@ def test_alert_routes_return_operational_feed(client) -> None:
     summary = client.get("/alerts/summary")
     assert summary.status_code == 200
     assert "active" in summary.json()
+
+
+def test_replacing_a_revision_job_reuses_one_alert_per_listing() -> None:
+    """Re-proposing a price for the same listing must not mint a new alert.
+
+    Push dedupe is keyed on the alert row id, so a new alert row means another
+    notification. Regression: every repricing pass retired a proposal and created a
+    fresh job row, re-notifying the user about an item they had already seen -- 287
+    alerts across only 61 products.
+    """
+    from app.models.domain import EbayListing, EbayRevisionJob, EbayRevisionJobStatus
+
+    db = make_session()
+    product = add_product(db, sku="REV-ALERT", title="Revision Product")
+    listing = EbayListing(
+        product_id=product.id, listing_id="800111222333", account_id="a.m.anim-59", status="active", price=20.53
+    )
+    db.add(listing)
+    db.flush()
+
+    first = EbayRevisionJob(
+        product_id=product.id,
+        ebay_listing_id=listing.id,
+        target_price=24.53,
+        status=EbayRevisionJobStatus.needs_review.value,
+        guard_passed=True,
+    )
+    db.add(first)
+    db.commit()
+    refresh_operational_alerts(db)
+    keys_after_first = {a.key for a in list_operational_alerts(db) if a.source == "ebay-revision"}
+    assert len(keys_after_first) == 1
+
+    # The next repricing pass retires that proposal and files a replacement.
+    first.status = EbayRevisionJobStatus.cancelled.value
+    replacement = EbayRevisionJob(
+        product_id=product.id,
+        ebay_listing_id=listing.id,
+        target_price=26.53,
+        status=EbayRevisionJobStatus.needs_review.value,
+        guard_passed=True,
+    )
+    db.add(replacement)
+    db.commit()
+    refresh_operational_alerts(db)
+
+    revision_alerts = [a for a in list_operational_alerts(db) if a.source == "ebay-revision"]
+    assert {a.key for a in revision_alerts} == keys_after_first, "replacement job created a second alert row"
+    assert len(revision_alerts) == 1
+    assert revision_alerts[0].job_id == replacement.id, "alert should track the current proposal"
