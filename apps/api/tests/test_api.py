@@ -1352,11 +1352,21 @@ def test_ebay_revision_blocks_unknown_supplier_shipping(client) -> None:
     )
     client.patch("/settings/pricing", json={"default_margin_percent": 0.50})
     client.post("/products/recalculate-drafts")
-    job = client.get("/ebay/revision-jobs").json()[0]
-    assert job["status"] == "needs_review"
-    assert job["guard_passed"] is False
-    assert "shipping is unknown" in job["guard_reason"]
-    assert client.post(f"/ebay/revision-jobs/{job['id']}/approve").status_code == 409
+
+    # A source that offers no shipping cannot be fulfilled, so the listing is taken out of
+    # stock automatically rather than repriced. This used to leave an unapprovable price
+    # proposal parked in review forever while the listing stayed buyable.
+    jobs = client.get("/ebay/revision-jobs").json()
+    stock_jobs = [job for job in jobs if job["action"] == "mark_out_of_stock"]
+    assert len(stock_jobs) == 1, jobs
+    assert stock_jobs[0]["status"] == "queued"
+    assert stock_jobs[0]["approval_required"] is False
+    assert "shipping" in (stock_jobs[0]["guard_reason"] or "")
+
+    # The safety guarantee still holds: nothing offers an approvable price change for a
+    # product that cannot be bought.
+    price_jobs = [job for job in jobs if job["action"] != "mark_out_of_stock"]
+    assert all(job["status"] == "cancelled" for job in price_jobs), price_jobs
 
 
 def test_competitor_pricing_strategy_and_rounding(client) -> None:

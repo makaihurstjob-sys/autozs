@@ -25,11 +25,15 @@ from app.services.ebay_revision_csv import build_ebay_price_revision_csv, save_e
 from app.services.ebay_sync import _sync_local_draft_status
 from app.services.ebay_revisions import (
     MAX_REVISION_ATTEMPTS,
+    OUT_OF_STOCK_ACTION,
+    RESTOCK_ACTION,
     cancel_revision_jobs_for_ebay_listing,
     enqueue_ebay_price_revisions,
+    enqueue_ebay_stock_revisions,
     list_ebay_revision_jobs,
     release_expired_ebay_revision_jobs,
     start_next_ebay_revision_job,
+    supplier_availability_block,
     update_ebay_revision_job,
 )
 
@@ -620,3 +624,264 @@ def test_breakeven_revisions_survive_the_guard_and_the_below_cost_skip() -> None
     assert job.target_price == breakeven_price
     assert job.minimum_profit == 0.0, "breakeven must not be held to the normal profit floor"
     assert job.guard_passed is True, f"guard blocked breakeven: {job.guard_reason}"
+
+
+def _sourced_product(
+    db,
+    *,
+    shipping: float,
+    in_stock: bool = True,
+    price_unavailable: bool = False,
+    cost: float = 9.47,
+    draft_price: float = 14.53,
+    live_price: float = 14.53,
+):
+    product = Product(
+        sku=f"SKU-STOCK-{shipping}-{in_stock}-{price_unavailable}",
+        title="Plant food",
+        status="monitoring",
+    )
+    db.add(product)
+    db.flush()
+    db.add(
+        SupplierProduct(
+            product_id=product.id,
+            supplier="home_depot",
+            source_url="https://www.homedepot.com/p/example/100013303",
+            last_price=None if price_unavailable else cost,
+            last_shipping=shipping,
+            in_stock=in_stock,
+            price_unavailable=price_unavailable,
+        )
+    )
+    db.add(
+        ListingDraft(
+            product_id=product.id,
+            marketplace="ebay",
+            title="Plant food",
+            description="d",
+            calculated_price=draft_price,
+        )
+    )
+    listing = EbayListing(
+        product_id=product.id,
+        listing_id="800456297709",
+        account_id="a.m.anim-59",
+        status="active",
+        price=live_price,
+        quantity=1,
+    )
+    db.add(listing)
+    db.commit()
+    return product, listing
+
+
+def test_supplier_without_shipping_is_treated_as_unfulfillable() -> None:
+    """Home Depot stops rendering a delivery option once an item is unavailable, and the
+    capture stores that as shipping = -1.0. No shipping offered means we cannot fulfil it."""
+    db = make_session()
+    _sourced_product(db, shipping=-1.0)
+    supplier = db.query(SupplierProduct).one()
+
+    assert supplier_availability_block(supplier) == "the supplier is not offering a shipping option"
+
+
+def test_unfulfillable_listing_is_marked_out_of_stock_without_approval() -> None:
+    db = make_session()
+    _sourced_product(db, shipping=-1.0)
+
+    blocked, released = enqueue_ebay_stock_revisions(db)
+
+    assert (blocked, released) == (1, 0)
+    job = db.query(EbayRevisionJob).one()
+    assert job.action == OUT_OF_STOCK_ACTION
+    # Zeroing quantity cannot lose money, so it must not wait behind a human.
+    assert job.status == EbayRevisionJobStatus.queued.value
+    assert job.approval_required is False
+    assert job.approved_at is not None
+    assert "out of stock" in (job.message or "")
+
+
+def test_out_of_stock_covers_missing_price_and_explicit_out_of_stock() -> None:
+    for kwargs in ({"shipping": 0.0, "in_stock": False}, {"shipping": 0.0, "price_unavailable": True}):
+        db = make_session()
+        _sourced_product(db, **kwargs)
+
+        blocked, _ = enqueue_ebay_stock_revisions(db)
+
+        assert blocked == 1, f"expected an out-of-stock revision for {kwargs}"
+        assert db.query(EbayRevisionJob).one().action == OUT_OF_STOCK_ACTION
+
+
+def test_unfulfillable_product_is_not_repriced_and_cancels_a_stuck_proposal() -> None:
+    """Regression: proposals for products with unknown shipping failed their guard and sat
+    in review forever, because a price change was being proposed for something that could
+    not be bought at all."""
+    db = make_session()
+    product, listing = _sourced_product(db, shipping=-1.0, draft_price=17.53, live_price=21.53)
+    stuck = EbayRevisionJob(
+        product_id=product.id,
+        ebay_listing_id=listing.id,
+        ebay_account_key="a.m.anim-59",
+        target_price=17.53,
+        status=EbayRevisionJobStatus.needs_review.value,
+        guard_passed=False,
+        guard_reason="Supplier shipping is unknown",
+    )
+    db.add(stuck)
+    db.commit()
+
+    queued, updated = enqueue_ebay_price_revisions(db)
+
+    assert (queued, updated) == (0, 0), "an unfulfillable product must not be repriced"
+    db.refresh(stuck)
+    assert stuck.status == EbayRevisionJobStatus.cancelled.value
+    assert "out of stock" in (stuck.message or "")
+    stock_jobs = db.query(EbayRevisionJob).filter(EbayRevisionJob.action == OUT_OF_STOCK_ACTION).all()
+    assert len(stock_jobs) == 1
+
+
+def test_restock_only_releases_listings_autozs_actually_took_down() -> None:
+    """EbayListing.quantity defaults to 0 and is not reliably synced, so restock keys off an
+    applied out-of-stock revision instead of the stored quantity."""
+    db = make_session()
+    _, listing = _sourced_product(db, shipping=0.0)
+
+    # A healthy listing that was never zeroed must be left alone.
+    assert enqueue_ebay_stock_revisions(db) == (0, 0)
+    assert db.query(EbayRevisionJob).count() == 0
+
+    db.add(
+        EbayRevisionJob(
+            product_id=listing.product_id,
+            ebay_listing_id=listing.id,
+            ebay_account_key="a.m.anim-59",
+            action=OUT_OF_STOCK_ACTION,
+            target_price=14.53,
+            status=EbayRevisionJobStatus.completed.value,
+            completed_at=datetime.utcnow(),
+            guard_passed=True,
+            approval_required=False,
+        )
+    )
+    db.commit()
+
+    blocked, released = enqueue_ebay_stock_revisions(db)
+
+    assert (blocked, released) == (0, 1)
+    restock = db.query(EbayRevisionJob).filter(EbayRevisionJob.action == RESTOCK_ACTION).one()
+    assert restock.status == EbayRevisionJobStatus.queued.value
+
+
+def test_already_out_of_stock_listing_is_not_zeroed_twice() -> None:
+    db = make_session()
+    _, listing = _sourced_product(db, shipping=-1.0)
+    db.add(
+        EbayRevisionJob(
+            product_id=listing.product_id,
+            ebay_listing_id=listing.id,
+            ebay_account_key="a.m.anim-59",
+            action=OUT_OF_STOCK_ACTION,
+            target_price=14.53,
+            status=EbayRevisionJobStatus.completed.value,
+            completed_at=datetime.utcnow(),
+            guard_passed=True,
+            approval_required=False,
+        )
+    )
+    db.commit()
+
+    assert enqueue_ebay_stock_revisions(db) == (0, 0)
+    assert db.query(EbayRevisionJob).count() == 1
+
+
+def _stock_sheet_job(db):
+    listing = EbayListing(
+        product_id=1, listing_id="800123456789", account_id="a.m.anim-59", status="live", price=24.53
+    )
+    db.add(listing)
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=listing.id,
+        ebay_account_key="a.m.anim-59",
+        action=OUT_OF_STOCK_ACTION,
+        target_price=24.53,
+        status=EbayRevisionJobStatus.queued.value,
+        guard_passed=True,
+        approval_required=False,
+        approved_at=datetime.utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    return job
+
+
+def test_out_of_stock_sheet_writes_quantity_zero_and_leaves_price_untouched() -> None:
+    db = make_session()
+    job = _stock_sheet_job(db)
+
+    template = "#INFO,Version=0.0.2,Template=Edit price and quantity\nAction,Item number,Start price,Quantity\n"
+    content, prepared_ids = build_ebay_price_revision_csv(
+        db,
+        account_key="a.m.anim-59",
+        job_ids=[job.id],
+        template_csv=template,
+    )
+
+    assert prepared_ids == [job.id]
+    # Start price stays blank on purpose: eBay changes only the fields a row populates, so
+    # re-asserting a price could push a stale value at a listing we only meant to take down.
+    assert "Revise,800123456789,,0\r\n" in content
+
+
+def test_out_of_stock_sheet_adds_a_quantity_column_when_the_template_lacks_one() -> None:
+    db = make_session()
+    job = _stock_sheet_job(db)
+
+    content, _ = build_ebay_price_revision_csv(
+        db,
+        account_key="a.m.anim-59",
+        job_ids=[job.id],
+        template_csv="Action,Item number,Start price\n",
+    )
+
+    # Appended with eBay's own column name so the sheet stays importable.
+    assert "Action,Item number,Start price,Available quantity\r\n" in content
+    assert "Revise,800123456789,,0\r\n" in content
+
+
+
+# Transcribed from the account's saved eBay download
+# (eBay-active-revise-price-quantity-download_US). The quantity column is named
+# "Available quantity"; matching only "Quantity" appended a second, dead column and left
+# the real one blank, so the listing would never actually have gone out of stock.
+REAL_EBAY_TEMPLATE = (
+    "#INFO,Version=1.0.0,Template= eBay-active-revise-price-quantity-download_US,,,,,,,,,\n"
+    "Action,Category name,Item number,Title,Listing site,Currency,Start price,"
+    "Buy It Now price,Available quantity,Relationship,Relationship details,Custom label (SKU)\n"
+)
+
+
+def test_out_of_stock_uses_the_real_ebay_available_quantity_column() -> None:
+    db = make_session()
+    job = _stock_sheet_job(db)
+
+    content, prepared_ids = build_ebay_price_revision_csv(
+        db,
+        account_key="a.m.anim-59",
+        job_ids=[job.id],
+        template_csv=REAL_EBAY_TEMPLATE,
+    )
+
+    assert prepared_ids == [job.id]
+    header = next(line for line in content.splitlines() if line.startswith("Action,"))
+    assert header.count("Available quantity") == 1, f"column was duplicated: {header}"
+    assert "Quantity," not in header.replace("Available quantity", ""), header
+
+    row = next(line for line in content.splitlines() if line.startswith("Revise,"))
+    cells = row.split(",")
+    assert cells[2] == "800123456789", cells
+    assert cells[6] == "", f"start price must stay blank on a stock revision: {cells}"
+    assert cells[8] == "0", f"available quantity must be 0: {cells}"
+

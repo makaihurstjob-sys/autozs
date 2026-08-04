@@ -1026,8 +1026,8 @@ function captureSourceProductFromPage() {
         );
       })
     : -1;
+  const primaryLines = [];
   if (titleLineIndex >= 0) {
-    const primaryLines = [];
     const recommendationHeading = /customers?\s+also\s+(?:viewed|bought)|frequently\s+bought\s+together|related\s+products|you\s+may\s+also\s+like|recommended\s+for\s+you|loading\s+recommendations/i;
     for (const line of eligibleVisibleLines.slice(titleLineIndex, titleLineIndex + 40)) {
       if (primaryLines.length && recommendationHeading.test(line)) break;
@@ -1035,6 +1035,34 @@ function captureSourceProductFromPage() {
     }
     collectVisiblePrices(primaryLines, primaryVisiblePrices);
   }
+
+  // Home Depot renders sub-dollar prices in cent notation ("86 ¢", split across two
+  // elements) and prints no dollar amount for the product itself. Verified live on SKU
+  // 100144695: the dollar amounts that follow are delivery charges ($9.99 3-hour, $2.99
+  // standard) and the free-shipping threshold ("$25+ of eligible items"). Because those
+  // appear on every Home Depot page, the price fallback chain systematically adopted a
+  // shipping fee as cost of goods -- product 151 recorded $9.99, $25.00, $0.68 and $0.11
+  // on successive refreshes, and Home Depot's own ld+json reports an incorrect 0.11.
+  //
+  // The displayed price always sits between the title and the fulfillment block, so scope
+  // the search there and only trust cents when that region carries no dollar price of its
+  // own. That is what separates a genuinely sub-dollar item from a "99¢" promo beside a
+  // normally priced product.
+  const fulfillmentBoundary = /\b(?:in stock|aisle\s+\d|pickup|delivery|delivering to|add to cart|check nearby stores|ship to)\b/i;
+  const detectHomeDepotCentPrice = () => {
+    if (!location.hostname.includes("homedepot.com")) return null;
+    if (!primaryLines.length) return null;
+    const priceRegion = [];
+    for (const line of primaryLines) {
+      if (priceRegion.length && fulfillmentBoundary.test(line)) break;
+      priceRegion.push(line);
+    }
+    if (priceRegion.some((line) => /\$\s*[0-9]/.test(line))) return null;
+    const match = priceRegion.join(" ").match(/(?:^|[^0-9.,$])([0-9]{1,2})\s*(?:¢|cents\b)/i);
+    if (!match) return null;
+    const parsed = Number(match[1]) / 100;
+    return parsed > 0 && parsed < 1 ? parsed : null;
+  };
 
   const detectDeliveryAvailability = () => {
     const lines = visibleText.split("\n").map(clean).filter(Boolean);
@@ -1315,8 +1343,12 @@ function captureSourceProductFromPage() {
       ? `Excluded bulk coverage product (${homeDepotPurchasePrice.coverage} sq. ft. purchase quantity).`
       : `Excluded Home Depot ${homeDepotPurchasePrice.unit} product.`
     : null;
+  // A confidently detected cent price wins outright: it only fires when the product
+  // region carries no dollar price at all, and in that case no later branch in the chain
+  // can be reading anything but an unrelated product.
+  const homeDepotCentPrice = detectHomeDepotCentPrice();
   const sourcePrice = location.hostname.includes("homedepot.com")
-    ? homeDepotPurchasePrice?.price || withCentsForSameWhole(trustedHomeDepotSalePrice) || standardPrice || primaryVisiblePrices[0] || structuredOfferPrice || null
+    ? homeDepotCentPrice || homeDepotPurchasePrice?.price || withCentsForSameWhole(trustedHomeDepotSalePrice) || standardPrice || primaryVisiblePrices[0] || structuredOfferPrice || null
     : trustedHomeDepotSalePrice || structuredPrices[0] || visiblePrices[0] || domPrices[0] || null;
   const minimumOrderQuantity = detectMinimumOrderQuantity();
 
@@ -1341,6 +1373,7 @@ function captureSourceProductFromPage() {
       dom_prices: domPrices.slice(0, 6),
       structured_prices: structuredPrices.slice(0, 6),
       detected_sale_price: homeDepotSalePrice,
+      detected_cent_price: homeDepotCentPrice,
       sale_price_corroborated: salePriceCorroborated,
       selected_price: sourcePrice,
       purchase_price_basis: homeDepotPurchasePrice?.basis || "displayed-product-price",

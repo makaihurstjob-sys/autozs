@@ -12,6 +12,7 @@ from app.models.domain import (
     ListingDraft,
     SupplierProduct,
 )
+from app.services.ebay_revisions import STOCK_ACTION_QUANTITY
 
 
 HEADER_ALIASES = {
@@ -19,6 +20,10 @@ HEADER_ALIASES = {
     "item_number": {"item number", "item id", "itemid"},
     "start_price": {"start price", "price"},
 }
+# eBay's own "revise price and quantity" download names this column "Available quantity",
+# not "Quantity". Matching only the short name appended a second, dead column and left the
+# real one blank, so the listing would never actually go out of stock.
+QUANTITY_HEADERS = {"available quantity", "quantity", "quantity available"}
 
 
 def build_ebay_price_revision_csv(
@@ -44,6 +49,20 @@ def build_ebay_price_revision_csv(
     if pack_job_ids and title_column is None:
         title_column = len(header)
         header.append("Title")
+    # Quantity is optional in the saved template, so add it only when a stock revision
+    # actually needs it rather than forcing every seller's sheet to carry the column.
+    stock_job_ids = {
+        job_id
+        for job_id in dict.fromkeys(job_ids)
+        if getattr(db.get(EbayRevisionJob, job_id), "action", None) in STOCK_ACTION_QUANTITY
+    }
+    quantity_column = next(
+        (index for index, value in enumerate(header) if value.strip().lower() in QUANTITY_HEADERS),
+        None,
+    )
+    if stock_job_ids and quantity_column is None:
+        quantity_column = len(header)
+        header.append("Available quantity")
     output_rows = [*prefix, header]
     prepared_ids: list[int] = []
 
@@ -60,7 +79,13 @@ def build_ebay_price_revision_csv(
         row = [""] * len(header)
         row[columns["action"]] = "Revise"
         row[columns["item_number"]] = listing_id
-        row[columns["start_price"]] = f"{job.target_price:.2f}"
+        if job.action in STOCK_ACTION_QUANTITY:
+            # Quantity-only revision. Start price is left blank on purpose: eBay changes
+            # only the fields a row populates, so re-asserting a price here could push a
+            # stale value at a listing we only meant to take out of stock.
+            row[quantity_column] = str(STOCK_ACTION_QUANTITY[job.action])
+        else:
+            row[columns["start_price"]] = f"{job.target_price:.2f}"
         if title_column is not None and job.id in pack_job_ids:
             draft = db.scalar(
                 select(ListingDraft)

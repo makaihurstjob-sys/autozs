@@ -34,6 +34,12 @@ MAX_REVISION_ATTEMPTS = 3
 # fee to cents can leave the computed profit a cent under. Treat that as breakeven,
 # not as selling below cost -- a genuine below-cost target misses by far more.
 BELOW_COST_TOLERANCE = 0.01
+# Quantity-only revisions. The action encodes the quantity, so this needs no new column:
+# mark_out_of_stock always means quantity 0, restore_stock means quantity 1.
+OUT_OF_STOCK_ACTION = "mark_out_of_stock"
+RESTOCK_ACTION = "restore_stock"
+STOCK_ACTIONS = {OUT_OF_STOCK_ACTION, RESTOCK_ACTION}
+STOCK_ACTION_QUANTITY = {OUT_OF_STOCK_ACTION: 0, RESTOCK_ACTION: 1}
 
 
 def _revision_evidence(db: Session, product_id: int, target_price: float, old_price: float | None) -> dict:
@@ -115,11 +121,146 @@ def _apply_evidence(job: EbayRevisionJob, evidence: dict) -> None:
         setattr(job, key, value)
 
 
+def supplier_availability_block(supplier: SupplierProduct | None) -> str | None:
+    """Why this product cannot currently be fulfilled, or None if it can be.
+
+    Home Depot stops rendering a delivery option once an item is unavailable, and the
+    capture records that as ``last_shipping = -1.0``. ``update_product_from_capture`` also
+    forces -1.0 whenever a capture reports out of stock, so "the source offers no shipping"
+    and "we cannot fulfil this" are the same condition rather than two separate faults.
+    """
+    if supplier is None:
+        return None
+    if supplier.in_stock is False:
+        return "the supplier reports it out of stock"
+    if supplier.price_unavailable:
+        return "the supplier is not showing a price"
+    if supplier.last_shipping is None or supplier.last_shipping < 0:
+        return "the supplier is not offering a shipping option"
+    return None
+
+
+def _stock_job_fields(listing: EbayListing, supplier: SupplierProduct | None) -> dict:
+    """Evidence for a quantity-only revision.
+
+    These carry no pricing risk -- zeroing quantity cannot lose money and restoring it
+    only returns the listing to a price that was already approved -- so they skip the
+    profit guard and apply without manual approval. That is what makes the response
+    automatic, which is the point of the workflow.
+    """
+    return {
+        "source_price": supplier.last_price if supplier is not None else None,
+        "source_shipping": supplier.last_shipping if supplier is not None else 0.0,
+        "projected_profit": None,
+        "minimum_profit": None,
+        "guard_passed": True,
+        "approval_required": False,
+        "approved_at": _now(),
+        "status": EbayRevisionJobStatus.queued.value,
+    }
+
+
+def enqueue_ebay_stock_revisions(
+    db: Session,
+    product_ids: list[int] | None = None,
+) -> tuple[int, int]:
+    """Zero the eBay quantity for anything the supplier can no longer fulfil, and release
+    it again once the supplier recovers.
+
+    Quantity 0 rather than ending the listing: an ended listing loses its item id, history
+    and search standing, and a restock would have to be listed from scratch. Out of stock
+    keeps all of it, so recovery is a single revision.
+    """
+    blocked = 0
+    released = 0
+    seen_listing_ids: set[int] = set()
+    stmt = (
+        select(EbayListing, SupplierProduct)
+        .join(Product, Product.id == EbayListing.product_id)
+        .join(SupplierProduct, SupplierProduct.product_id == Product.id)
+        .where(Product.status != ProductStatus.deleted.value)
+        .where(EbayListing.status.in_(REVISION_LISTING_STATUSES))
+        .order_by(EbayListing.created_at.desc(), EbayListing.id.desc())
+    )
+    if product_ids is not None:
+        stmt = stmt.where(EbayListing.product_id.in_(set(product_ids)))
+
+    for listing, supplier in db.execute(stmt).all():
+        if listing.id in seen_listing_ids:
+            continue
+        seen_listing_ids.add(listing.id)
+
+        reason = supplier_availability_block(supplier)
+        # Decide from what AutoZS has actually applied, not from EbayListing.quantity:
+        # that column defaults to 0 and is not reliably synced, so trusting it would
+        # "restock" listings that were never taken down.
+        last_applied = db.scalar(
+            select(EbayRevisionJob)
+            .where(EbayRevisionJob.ebay_listing_id == listing.id)
+            .where(EbayRevisionJob.action.in_(STOCK_ACTIONS))
+            .where(EbayRevisionJob.status == EbayRevisionJobStatus.completed.value)
+            .order_by(EbayRevisionJob.completed_at.desc(), EbayRevisionJob.id.desc())
+        )
+        already_out_of_stock = last_applied is not None and last_applied.action == OUT_OF_STOCK_ACTION
+        if reason is not None:
+            wanted_action = None if already_out_of_stock else OUT_OF_STOCK_ACTION
+        else:
+            wanted_action = RESTOCK_ACTION if already_out_of_stock else None
+
+        open_job = db.scalar(
+            select(EbayRevisionJob)
+            .where(EbayRevisionJob.ebay_listing_id == listing.id)
+            .where(EbayRevisionJob.action.in_(STOCK_ACTIONS))
+            .where(EbayRevisionJob.status.in_(ACTIVE_STATUSES))
+            .order_by(EbayRevisionJob.created_at.desc(), EbayRevisionJob.id.desc())
+        )
+        if open_job is not None:
+            if open_job.action == wanted_action or open_job.status == EbayRevisionJobStatus.running.value:
+                continue
+            open_job.status = EbayRevisionJobStatus.cancelled.value
+            open_job.completed_at = _now()
+            open_job.message = "Cancelled because supplier availability changed before this could be applied."
+        if wanted_action is None:
+            continue
+
+        message = (
+            f"Marking the eBay listing out of stock because {reason}."
+            if wanted_action == OUT_OF_STOCK_ACTION
+            else "Restoring the eBay quantity because the supplier can fulfil this again."
+        )
+        db.add(
+            EbayRevisionJob(
+                product_id=listing.product_id,
+                ebay_listing_id=listing.id,
+                ebay_account_key=listing.account_id or "manual",
+                action=wanted_action,
+                old_price=listing.price,
+                # Quantity-only revision: the price is left untouched on the sheet, but the
+                # column is NOT NULL so it records the price the listing already carries.
+                target_price=float(listing.price) if listing.price is not None else 0.0,
+                guard_reason=reason or "Supplier availability restored",
+                message=message,
+                **_stock_job_fields(listing, supplier),
+            )
+        )
+        if wanted_action == OUT_OF_STOCK_ACTION:
+            blocked += 1
+        else:
+            released += 1
+
+    db.commit()
+    return blocked, released
+
+
 def enqueue_ebay_price_revisions(
     db: Session,
     product_ids: list[int] | None = None,
 ) -> tuple[int, int]:
     cancel_orphaned_ebay_revision_jobs(db, commit=False)
+    # Availability is decided first. A product the supplier cannot fulfil needs its
+    # quantity zeroed, not a new price, so the stock pass takes precedence and the price
+    # pass below skips anything it has claimed.
+    enqueue_ebay_stock_revisions(db, product_ids=product_ids)
     stmt = (
         select(EbayListing, ListingDraft)
         .join(Product, Product.id == EbayListing.product_id)
@@ -139,6 +280,30 @@ def enqueue_ebay_price_revisions(
         if listing.id in seen_listing_ids or draft.calculated_price is None:
             continue
         seen_listing_ids.add(listing.id)
+        supplier = db.scalar(
+            select(SupplierProduct)
+            .where(SupplierProduct.product_id == listing.product_id)
+            .order_by(SupplierProduct.created_at.asc(), SupplierProduct.id.asc())
+        )
+        unavailable = supplier_availability_block(supplier)
+        if unavailable is not None:
+            # Repricing something that cannot be bought just parks a proposal in review
+            # forever -- that is what left the "Supplier shipping is unknown" jobs stuck.
+            active_price_job = db.scalar(
+                select(EbayRevisionJob)
+                .where(EbayRevisionJob.ebay_listing_id == listing.id)
+                .where(EbayRevisionJob.action.not_in(STOCK_ACTIONS))
+                .where(EbayRevisionJob.status.in_(ACTIVE_STATUSES - {EbayRevisionJobStatus.running.value}))
+                .order_by(EbayRevisionJob.created_at.desc(), EbayRevisionJob.id.desc())
+            )
+            if active_price_job is not None:
+                active_price_job.status = EbayRevisionJobStatus.cancelled.value
+                active_price_job.completed_at = _now()
+                active_price_job.message = (
+                    f"Cancelled: {unavailable}, so the listing is being marked out of stock "
+                    "instead of repriced."
+                )
+            continue
         target_price = round(float(draft.calculated_price), 2)
         current_price = round(float(listing.price), 2) if listing.price is not None else None
         active_job = db.scalar(

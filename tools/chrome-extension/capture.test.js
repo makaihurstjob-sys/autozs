@@ -1099,6 +1099,75 @@ if (amazonVariants.image_urls.split("\n").filter(Boolean).length > 1) {
 }
 
 
+// Home Depot renders sub-dollar prices as "86 ¢" (split across two elements) and prints no
+// dollar amount for the product itself. Transcribed from the live page for SKU 100144695:
+// the dollar amounts are delivery charges and the free-shipping threshold, and Home Depot's
+// own ld+json reports an incorrect 0.11. Product 151 recorded $0.86, $0.11, $9.99, $0.68 and
+// $25.00 across refreshes because of this, and each one landed in cost of goods.
+const centPricedProduct = runCapture(
+  `
+Orbit 1/2 in. x 2-1/2 in. Cut-Off Riser Extension
+(482)
+Questions & Answers (5)
+86
+¢
+Useful for positioning sprinkler heads at required height
+Suitable for outdoor use for irrigation purposes
+View More Details
+Coral Springs Store
+615 in stock
+Aisle 30, Bay 008
+Pickup at Coral Springs
+Delivering to 33071
+Get It Faster *
+3-Hour Delivery
+$9.99
+FREE Delivery Today with $25+ of eligible items
+$2.99
+Add to Cart
+`,
+  {
+    offerPrice: "0.11",
+    productName: "Orbit 1/2 in. x 2-1/2 in. Cut-Off Riser Extension",
+    href: "https://www.homedepot.com/p/Orbit-1-2-in-x-2-1-2-in-Cut-Off-Riser-Extension-37017H/100144695",
+    pathname: "/p/Orbit-1-2-in-x-2-1-2-in-Cut-Off-Riser-Extension-37017H/100144695",
+  }
+);
+
+if (centPricedProduct.source_price !== 0.86) {
+  throw new Error(`Expected cent-notation price 0.86, got ${centPricedProduct.source_price}`);
+}
+if (centPricedProduct.capture_debug.detected_cent_price !== 0.86) {
+  throw new Error(
+    `Expected detected_cent_price 0.86, got ${centPricedProduct.capture_debug.detected_cent_price}`
+  );
+}
+
+// The guard: a stray cent amount beside a normally priced product must not win. Only a
+// product region with no dollar price of its own is treated as genuinely sub-dollar.
+const centPromoBesideDollarPrice = runCapture(
+  `
+HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags
+$17.97
+Save 99 ¢ per bag
+Free Delivery
+`,
+  { offerPrice: "17.97" }
+);
+
+if (centPromoBesideDollarPrice.source_price !== 17.97) {
+  throw new Error(
+    `Expected dollar price 17.97 to beat a stray cent promo, got ${centPromoBesideDollarPrice.source_price}`
+  );
+}
+if (centPromoBesideDollarPrice.capture_debug.detected_cent_price !== null) {
+  throw new Error(
+    `Expected no cent price beside a dollar-priced product, got ${centPromoBesideDollarPrice.capture_debug.detected_cent_price}`
+  );
+}
+
+console.log("home depot cent-notation price tests ok");
+
 runEbayAccountFallbackTest()
   .then(runEbayMissingDraftVerificationTest)
   .then(runEbayDraftListBulkVerificationTest)
