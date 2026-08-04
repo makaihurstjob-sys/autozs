@@ -1,6 +1,9 @@
 var API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
 var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-56u49jf.tailb2892a.ts.net:8443";
-var CAPTURE_BUILD = "2026-07-28-ebay-account-detection-guard";
+// Bump this on every capture.js change. The popup renders it as "Extension build: ...",
+// which is the only way to tell whether a running Chrome has picked up new code -- nothing
+// restarts Chrome automatically, so an unbumped stamp makes a stale extension invisible.
+var CAPTURE_BUILD = "2026-08-04-home-depot-cent-price";
 var AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
 
 function defaultAutozsWorkerMode() {
