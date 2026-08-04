@@ -68,6 +68,7 @@ from app.schemas.depop import (
 )
 from app.schemas.z_finance import ZFinanceSyncRequest
 from app.schemas.domain import (
+    EbayListingTombstoneRequest,
     CatalogAutomationRunRead,
     CatalogSettingsUpdate,
     AutomationRunRead,
@@ -224,6 +225,7 @@ from app.services.importer import (
     update_product_from_capture,
 )
 from app.services.listing_jobs import (
+    relist_blocked_product_ids,
     enqueue_listing_jobs,
     list_listing_jobs as list_listing_jobs_service,
     read_automation_pause,
@@ -273,6 +275,7 @@ from app.services.ebay_revision_batches import (
     update_ebay_revision_batch,
 )
 from app.services.ebay_sync import (
+    tombstone_ebay_listing,
     claim_next_ebay_order_sync,
     claim_next_ebay_traffic_sync,
     capture_listing_views,
@@ -1935,6 +1938,45 @@ def list_ebay_listings(db: Session = Depends(get_db)) -> list[EbayListingRead]:
     return [EbayListingRead(**_serialize_ebay_listing(listing, settings)) for listing in listings]
 
 
+@router.post("/ebay/listings/{listing_id}/tombstone", response_model=EbayListingRead)
+def tombstone_ebay_listing_route(
+    listing_id: int,
+    payload: EbayListingTombstoneRequest,
+    db: Session = Depends(get_db),
+) -> EbayListingRead:
+    """Retire a listing row and record WHY, so takedowns are auditable.
+
+    ``listing_id`` is the ebay_listings row id, not the eBay item number -- the
+    same item number can legitimately appear on more than one row while a
+    duplicate is being cleaned up.
+    """
+    listing = db.get(EbayListing, listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="eBay listing not found")
+    listing = tombstone_ebay_listing(
+        db,
+        listing,
+        reason=payload.reason,
+        detail=payload.detail,
+        block_relist=payload.block_relist,
+    )
+    settings = read_pricing_settings(db)
+    return EbayListingRead(**_serialize_ebay_listing(listing, settings))
+
+
+@router.post("/ebay/listings/{listing_id}/allow-relist", response_model=EbayListingRead)
+def allow_ebay_listing_relist_route(listing_id: int, db: Session = Depends(get_db)) -> EbayListingRead:
+    """Explicitly clear a relist block. Deliberately a separate, manual step."""
+    listing = db.get(EbayListing, listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="eBay listing not found")
+    listing.relist_blocked = False
+    db.commit()
+    db.refresh(listing)
+    settings = read_pricing_settings(db)
+    return EbayListingRead(**_serialize_ebay_listing(listing, settings))
+
+
 @router.get("/ebay/listings/{listing_id}/view-history", response_model=list[EbayListingViewSnapshotRead])
 def read_ebay_listing_view_history(
     listing_id: int,
@@ -2035,6 +2077,10 @@ def _serialize_ebay_listing(listing: EbayListing, settings: dict) -> dict:
         "views_measured_at": listing.views_measured_at,
         "days_until_relist": _days_until(listing.renews_at),
         "auto_delist_candidate": _auto_delist_candidate(listing, settings),
+        "removal_reason": listing.removal_reason,
+        "removal_detail": listing.removal_detail,
+        "removed_at": listing.removed_at,
+        "relist_blocked": bool(listing.relist_blocked),
         "created_at": listing.created_at,
         "updated_at": listing.updated_at,
     }
@@ -2228,10 +2274,23 @@ def list_listing_queue(db: Session = Depends(get_db)) -> list[ListingQueueItem]:
 def list_listing_job_queue(
     status: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
+    scheduled_from: datetime | None = None,
+    scheduled_to: datetime | None = None,
     lite: bool = False,
     db: Session = Depends(get_db),
 ) -> list[ListingJobRead]:
-    jobs = list_listing_jobs_service(db, status=status, limit=limit)
+    """``scheduled_from``/``scheduled_to`` window jobs by ``listing_schedule_at``.
+
+    Send them as naive local timestamps (``2026-08-01T00:00:00``); the column is
+    naive Eastern wall time and is compared as-is.
+    """
+    jobs = list_listing_jobs_service(
+        db,
+        status=status,
+        limit=limit,
+        scheduled_from=scheduled_from,
+        scheduled_to=scheduled_to,
+    )
     serialize = serialize_listing_job_lite if lite else serialize_listing_job
     return [ListingJobRead(**serialize(db, job)) for job in jobs]
 
@@ -2270,6 +2329,18 @@ def create_listing_jobs(payload: ListingJobCreate, db: Session = Depends(get_db)
         listing_schedule_at=payload.listing_schedule_at,
     )
     if not jobs:
+        # Say WHY when the reason is a relist block -- "no matching products"
+        # reads like a lookup miss and hides that eBay pulled the listing.
+        blocked = relist_blocked_product_ids(db, payload.product_ids)
+        if blocked:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"eBay removed a listing for product(s) {', '.join(str(p) for p in blocked)}. "
+                    "Relisting is blocked until the takedown is reviewed - clear it with "
+                    "POST /ebay/listings/{id}/allow-relist."
+                ),
+            )
         raise HTTPException(status_code=404, detail="No matching products found")
     return [ListingJobRead(**serialize_listing_job(db, job)) for job in jobs]
 

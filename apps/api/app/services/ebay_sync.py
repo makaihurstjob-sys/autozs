@@ -677,6 +677,49 @@ def _sync_local_draft_status(db: Session, product_id: int, row: dict[str, Any]) 
             job.message = f"Verified {label} by eBay sync report row {row['listing_id']}."
 
 
+TAKEDOWN_REASON = "takedown"
+
+
+def tombstone_ebay_listing(
+    db: Session,
+    listing: EbayListing,
+    *,
+    reason: str = "ended",
+    detail: str = "",
+    block_relist: bool = False,
+    commit: bool = True,
+) -> EbayListing:
+    """Mark one listing row retired and record why.
+
+    Used for eBay takedowns (``reason="takedown"``, which should also block
+    relisting) and for housekeeping like removing a duplicate row that pointed at
+    someone else's item.
+    """
+    listing.status = "tombstoned"
+    listing.removal_reason = reason or "ended"
+    listing.removal_detail = detail or ""
+    listing.removed_at = _now()
+    if block_relist:
+        listing.relist_blocked = True
+    cancel_revision_jobs_for_ebay_listing(
+        db,
+        listing,
+        reason=f"Cancelled because the listing was tombstoned ({reason}).",
+        commit=False,
+    )
+    # Only clear the product's schedule when eBay actually pulled the item.
+    # Removing a duplicate row must not disturb the real listing's product.
+    if block_relist:
+        product = db.get(Product, listing.product_id)
+        if product is not None:
+            product.listing_schedule_at = None
+        _tombstone_stale_scheduled_jobs(db, listing)
+    if commit:
+        db.commit()
+        db.refresh(listing)
+    return listing
+
+
 def _tombstone_missing_listings(db: Session, account_key: str, seen_listing_ids: set[str]) -> int:
     if not seen_listing_ids:
         return 0

@@ -7,6 +7,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.domain import (
+    EbayListing,
     EbayRevisionBatch,
     EbayRevisionBatchStatus,
     EbayRevisionJob,
@@ -143,7 +144,41 @@ def _build_alert_specs(db: Session, now: datetime) -> list[dict[str, Any]]:
     specs.extend(_source_refresh_alert_specs(db, now))
     specs.extend(_ebay_revision_alert_specs(db, now))
     specs.extend(_listing_job_alert_specs(db, now))
+    specs.extend(_ebay_takedown_alert_specs(db))
     specs.extend(_supplier_alert_specs(db))
+    return specs
+
+
+def _ebay_takedown_alert_specs(db: Session) -> list[dict[str, Any]]:
+    """Surface listings eBay removed.
+
+    These are critical: the listing is gone, we are not selling it, and relisting
+    is blocked until someone reads the violation notice. Without this the only
+    signal was the active count quietly dropping by one.
+    """
+    listings = db.scalars(
+        select(EbayListing)
+        .where(EbayListing.relist_blocked == True)  # noqa: E712
+        .order_by(EbayListing.removed_at.desc().nullslast(), EbayListing.id.desc())
+        .limit(50)
+    ).all()
+    specs: list[dict[str, Any]] = []
+    for listing in listings:
+        product = db.get(Product, listing.product_id)
+        specs.append(
+            _spec(
+                key=f"ebay-takedown:{listing.id}",
+                severity=OperationalAlertSeverity.critical.value,
+                source="ebay-takedown",
+                title=f"eBay removed the listing for {_title(product, listing.product_id)}",
+                message=(
+                    listing.removal_detail
+                    or "eBay took this listing down. Relisting is blocked until it is reviewed."
+                ),
+                product_id=listing.product_id,
+                listing_id=listing.listing_id,
+            )
+        )
     return specs
 
 

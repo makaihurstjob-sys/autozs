@@ -362,10 +362,27 @@ class EbayListingRead(BaseModel):
     views_measured_at: datetime | None = None
     days_until_relist: int | None = None
     auto_delist_candidate: bool = False
+    removal_reason: str | None = None
+    removal_detail: str | None = None
+    removed_at: datetime | None = None
+    relist_blocked: bool = False
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class EbayListingTombstoneRequest(BaseModel):
+    """Record why a listing stopped being active.
+
+    ``reason`` is a short machine-ish tag (``takedown``, ``duplicate``, ``ended``).
+    ``block_relist`` should be true for eBay takedowns so nothing re-publishes the
+    item until a human clears it.
+    """
+
+    reason: str = "ended"
+    detail: str = ""
+    block_relist: bool = False
 
 
 class EbayListingViewSnapshotRead(BaseModel):

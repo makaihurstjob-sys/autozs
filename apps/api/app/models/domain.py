@@ -296,6 +296,14 @@ class EbayListing(Base, TimestampMixin):
     views: Mapped[int] = mapped_column(Integer, default=0)
     view_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
     views_measured_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Why a listing stopped being active, so an eBay takedown is distinguishable
+    # from an ordinary end-of-life or a duplicate row we cleaned up ourselves.
+    removal_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    removal_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when eBay pulled the listing. Blocks automatic AND manual relisting
+    # until a human clears it, so we cannot re-publish something eBay rejected.
+    relist_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class EbayListingViewSnapshot(Base):

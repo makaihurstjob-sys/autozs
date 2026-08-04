@@ -2949,6 +2949,13 @@
       let selectedCustomerTemplateLibraryKey = "";
       let calendarMonth = null;
       let calendarSelectedDate = null;
+      // The calendar loads its own scheduled jobs for exactly the 42-day grid it
+      // draws, instead of leaning on the shared /listing-jobs fetch. That fetch is
+      // capped and ordered by created_at, so once the table passed the cap it
+      // silently dropped the oldest-created scheduled jobs and days under-counted.
+      let calendarJobs = null;
+      let calendarJobsRangeKey = null;
+      let calendarJobsLoading = false;
       let refreshPriorityFilter = "needs";
       let statsRange = "30";
       let statsGrain = "day";
@@ -3134,7 +3141,11 @@
             request("/products"),
             request("/products/capture-queue"),
             request("/listings/queue"),
-            request("/listing-jobs"),
+            // GET /listing-jobs defaults to limit=100 ordered by created_at DESC,
+            // so once the table passed 100 rows the calendar silently lost the
+            // OLDEST-created jobs -- which are exactly the scheduled ones being
+            // worked now. Ask for the full set (API caps at 1000).
+            request("/listing-jobs?limit=1000"),
             request("/ebay/listings"),
             request("/ebay/sync-runs"),
             request("/ebay/revision-jobs"),
@@ -3671,11 +3682,18 @@
         if (!container) return;
         const worker = primaryWorker();
         const workerLabel = workerStatusLabel(worker);
+        // Count Depop stats by the same stage rule the tabs use, so "Drafts" here
+        // matches what the Drafts tab lists. It used to count eBay product drafts,
+        // which read as "Drafts 0" next to six draft variations.
+        const depopStages = (state.depopVariants || []).map((variant) => depopVariantStage(
+          variant,
+          (state.depopJobs || []).find((item) => item.variant_id === variant.id && !["completed", "cancelled"].includes(item.status))
+        ));
         const stats = (marketplaceMode === "depop" ? [
-          ["Drafts", draftProducts().length],
-          ["Variants", (state.depopVariants || []).length],
-          ["Queued", (state.depopJobs || []).filter((job) => ["queued", "running"].includes(job.status)).length],
-          ["Published", (state.depopVariants || []).filter((variant) => variant.status === "published").length],
+          ["Drafts", depopStages.filter((stage) => stage === "draft").length],
+          ["Queued", depopStages.filter((stage) => stage === "queued").length],
+          ["Live", depopStages.filter((stage) => stage === "live").length],
+          ["Variants", depopStages.length],
         ] : [
           ["Drafts", draftProducts().length],
           ["Scheduled", ebayListingItems().filter(listingIsScheduled).length],
@@ -3744,12 +3762,16 @@
         renderJobActivityButton();
         const panel = document.getElementById("panel");
         const panelSection = panel?.closest("section");
-        const usesFilterPopover = active === "Products" || active === "eBay Listings";
+        // The Depop drafts view has no filter menu, so it must not reserve the
+        // popover layout the eBay product list needs.
+        const usesFilterPopover = (active === "Products" && marketplaceMode !== "depop") || active === "eBay Listings";
         panel?.classList.toggle("filter-popover-panel", usesFilterPopover);
         panelSection?.classList.toggle("filter-popover-panel", usesFilterPopover);
         try {
           if (active === "Research") panel.innerHTML = researchHtml();
-          if (active === "Products") panel.innerHTML = productsHtml();
+          // In Depop mode the "Drafts" nav button maps to the Products tab, and
+          // what belongs there is the draft variations, not the eBay product list.
+          if (active === "Products") panel.innerHTML = marketplaceMode === "depop" ? depopDraftsHtml() : productsHtml();
           if (active === "eBay Listings") panel.innerHTML = listingsHtml();
           if (active === "Depop Listings") panel.innerHTML = depopListingsHtml();
           if (active === "Calendar") panel.innerHTML = calendarHtml();
@@ -6368,9 +6390,10 @@
         </article>`;
       }
 
-      function depopListingsHtml() {
+      // Groups every variant by stage once so the Drafts and Listings tabs read
+      // from the same source and cannot disagree about where a variant belongs.
+      function depopVariantGroups() {
         const variants = state.depopVariants || [];
-        if (!variants.length) return `<div class="needs-data">No Depop variants yet. Import an Amazon listing to create one variant per colour.</div>`;
         const openJobFor = (variant) =>
           (state.depopJobs || []).find((item) => item.variant_id === variant.id && !["completed", "cancelled"].includes(item.status));
         const groups = { draft: [], queued: [], live: [] };
@@ -6380,14 +6403,26 @@
             ? `<div class="section-heading"><div><h2>${esc(heading)} (${groups[key].length})</h2><div class="muted">${esc(blurb)}</div></div></div>
                <div class="product-list depop-variant-list">${groups[key].map((variant) => depopVariantCardHtml(variant, openJobFor(variant))).join("")}</div>`
             : "";
-        return [
+        return { variants, groups, section };
+      }
+
+      // Listings = what Depop actually has. Draft variations belong on the Drafts
+      // tab; showing them here made an untouched import look like live inventory.
+      function depopListingsHtml() {
+        const { variants, groups, section } = depopVariantGroups();
+        if (!variants.length) return `<div class="needs-data">No Depop variants yet. Import an Amazon listing to create one variant per colour.</div>`;
+        const html = [
           section("live", "Live on Depop", "Published and selling."),
           section("queued", "Queued", "Handed to the Depop worker, not published yet."),
-          // Not just "Drafts": the nav already uses that for product drafts, and
-          // the header stat counts those, so an unqualified "Drafts (6)" next to
-          // "Drafts 0" reads like a bug.
-          section("draft", "Draft variations", "Not on Depop yet - waiting on photos, a price, and review."),
         ].filter(Boolean).join("");
+        return html || `<div class="needs-data">Nothing on Depop yet. ${groups.draft.length} draft variation${groups.draft.length === 1 ? "" : "s"} ${groups.draft.length === 1 ? "is" : "are"} waiting on the Drafts tab.</div>`;
+      }
+
+      function depopDraftsHtml() {
+        const { variants, section } = depopVariantGroups();
+        if (!variants.length) return `<div class="needs-data">No Depop variants yet. Import an Amazon listing to create one variant per colour.</div>`;
+        return section("draft", "Draft variations", "Not on Depop yet - waiting on photos, a price, and review.")
+          || `<div class="needs-data">No draft variations left - everything is queued or live.</div>`;
       }
 
       function listingsHtml() {
@@ -9171,6 +9206,9 @@
 
       function calendarHtml() {
         ensureCalendarDate();
+        // Fire-and-forget: re-renders once the window's jobs arrive. Guarded on
+        // the range key, so it fetches once per month rather than every render.
+        loadCalendarJobs();
         const monthDate = parseMonthKey(calendarMonth);
         const events = calendarEvents();
         const eventsByDate = groupCalendarEventsByDate(events);
@@ -9206,6 +9244,47 @@
         const today = localDateKey(new Date());
         if (!calendarSelectedDate) calendarSelectedDate = today;
         if (!calendarMonth) calendarMonth = calendarSelectedDate.slice(0, 7);
+      }
+
+      // The exact 42-day window calendarGridHtml draws, so the query matches what
+      // is on screen -- including the leading/trailing days from adjacent months.
+      function calendarGridRange() {
+        const monthDate = parseMonthKey(calendarMonth);
+        const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+        const gridStart = new Date(first);
+        gridStart.setDate(first.getDate() - first.getDay());
+        const gridEnd = new Date(gridStart);
+        gridEnd.setDate(gridStart.getDate() + 42);
+        const fromKey = localDateKey(gridStart);
+        const toKey = localDateKey(gridEnd);
+        return { fromKey, toKey, key: `${fromKey}:${toKey}` };
+      }
+
+      async function loadCalendarJobs() {
+        const range = calendarGridRange();
+        if (calendarJobsLoading || calendarJobsRangeKey === range.key) return;
+        calendarJobsLoading = true;
+        try {
+          // listing_schedule_at is naive Eastern wall time. Send naive local
+          // timestamps so the API compares them as-is -- normalising to UTC would
+          // shift every job four hours and move listings between days.
+          const jobs = await request(`/listing-jobs?limit=1000&scheduled_from=${range.fromKey}T00:00:00&scheduled_to=${range.toKey}T00:00:00`);
+          calendarJobs = Array.isArray(jobs) ? jobs : [];
+          calendarJobsRangeKey = range.key;
+          render();
+        } catch (error) {
+          // Fall back to the shared list rather than showing an empty month.
+          calendarJobs = null;
+          calendarJobsRangeKey = null;
+        } finally {
+          calendarJobsLoading = false;
+        }
+      }
+
+      function calendarScheduledJobs() {
+        return calendarJobsRangeKey === calendarGridRange().key && Array.isArray(calendarJobs)
+          ? calendarJobs
+          : (state.listingJobs || []);
       }
 
       function calendarArrowSvg(direction) {
@@ -9380,7 +9459,7 @@
         const listingItemsByProduct = new Map(listingItems.map((item) => [Number(item.product_id), item]));
         const liveProductIds = new Set(listingItems.filter(listingIsLive).map((item) => Number(item.product_id)));
         const tombstonedProductIds = new Set(listingItems.filter(listingIsTombstoned).map((item) => Number(item.product_id)));
-        (state.listingJobs || []).forEach((job) => {
+        calendarScheduledJobs().forEach((job) => {
           if (!job.listing_schedule_at || ["cancelled", "tombstoned"].includes(job.status)) return;
           if (liveProductIds.has(Number(job.product_id))) return;
           if (tombstonedProductIds.has(Number(job.product_id))) return;
@@ -9403,7 +9482,7 @@
           if (!product.listing_schedule_at) return;
           if (liveProductIds.has(Number(product.id))) return;
           if (tombstonedProductIds.has(Number(product.id))) return;
-          const hasListingJobSchedule = (state.listingJobs || []).some((job) =>
+          const hasListingJobSchedule = calendarScheduledJobs().some((job) =>
             Number(job.product_id) === Number(product.id) && job.listing_schedule_at && !["cancelled", "tombstoned"].includes(job.status)
           );
           if (hasListingJobSchedule) return;

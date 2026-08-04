@@ -96,6 +96,12 @@ def enqueue_listing_jobs(
             continue
         if _supplier_delivery_unavailable(product):
             continue
+        # eBay pulled a listing for this product, so re-publishing it would just
+        # re-offend. This sits in enqueue_listing_jobs because every path -- the
+        # automation loop and the dashboard's manual "list it" -- comes through
+        # here, so a block here really is a block.
+        if _relist_is_blocked(db, product_id):
+            continue
         product_listing_schedule_at = (
             requested_listing_schedule_at
             or _naive_utc(product.listing_schedule_at)
@@ -132,11 +138,58 @@ def enqueue_listing_jobs(
     return jobs
 
 
-def list_listing_jobs(db: Session, status: str | None = None, limit: int = 100) -> list[ListingJob]:
-    stmt = select(ListingJob).order_by(ListingJob.created_at.desc(), ListingJob.id.desc()).limit(limit)
+def relist_blocked_product_ids(db: Session, product_ids: list[int]) -> list[int]:
+    """Of the given products, which ones eBay removed a listing for."""
+    return [product_id for product_id in dict.fromkeys(product_ids) if _relist_is_blocked(db, product_id)]
+
+
+def _relist_is_blocked(db: Session, product_id: int) -> bool:
+    """True when eBay removed a listing for this product and nobody has cleared it.
+
+    Cleared explicitly via POST /ebay/listings/{id}/allow-relist -- deliberately a
+    separate manual action rather than something a retry can undo by accident.
+    """
+    return db.scalar(
+        select(EbayListing.id)
+        .where(EbayListing.product_id == product_id)
+        .where(EbayListing.relist_blocked == True)  # noqa: E712
+        .limit(1)
+    ) is not None
+
+
+def list_listing_jobs(
+    db: Session,
+    status: str | None = None,
+    limit: int = 100,
+    scheduled_from: datetime | None = None,
+    scheduled_to: datetime | None = None,
+) -> list[ListingJob]:
+    """List jobs, newest-created first, or windowed by their scheduled start.
+
+    ``scheduled_from``/``scheduled_to`` are compared against
+    ``listing_schedule_at``, which is stored as NAIVE EASTERN wall time. Pass
+    naive datetimes in the same convention -- converting to UTC here would shift
+    every job by four hours and silently move listings between days.
+
+    The window is half-open (``from`` inclusive, ``to`` exclusive) so callers can
+    pass consecutive ranges without double-counting the boundary day.
+    """
+    stmt = select(ListingJob)
     if status:
         stmt = stmt.where(ListingJob.status == status)
-    return list(db.scalars(stmt).all())
+    if scheduled_from is not None or scheduled_to is not None:
+        stmt = stmt.where(ListingJob.listing_schedule_at.is_not(None))
+        if scheduled_from is not None:
+            stmt = stmt.where(ListingJob.listing_schedule_at >= scheduled_from)
+        if scheduled_to is not None:
+            stmt = stmt.where(ListingJob.listing_schedule_at < scheduled_to)
+        # A date window is already bounded, so order by what the caller asked
+        # about rather than creation order -- ordering by created_at here is what
+        # let a default limit silently drop the oldest-created scheduled jobs.
+        stmt = stmt.order_by(ListingJob.listing_schedule_at.asc(), ListingJob.id.asc())
+    else:
+        stmt = stmt.order_by(ListingJob.created_at.desc(), ListingJob.id.desc())
+    return list(db.scalars(stmt.limit(limit)).all())
 
 
 def read_listing_job(db: Session, job_id: int) -> ListingJob | None:
