@@ -1,7 +1,7 @@
 ﻿{
   "manifest_version": 3,
   "name": "AutoZS Source Capture",
-  "version": "0.2.54",
+  "version": "0.3.12",
   "description": "Capture product data from supplier pages into AutoZS.",
   "action": {
     "default_popup": "popup.html",
@@ -115,9 +115,11 @@
         "ebay-fill.js",
         "ebay-reports.js",
         "ebay-revision-upload.js",
-        "ebay-customer-message.js"
+        "ebay-customer-message.js",
+        "ebay-tracking-upload.js"
       ],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "all_frames": true
     },
     {
       "matches": [

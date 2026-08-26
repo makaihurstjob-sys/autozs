@@ -36,6 +36,24 @@ def test_research_approval_supplier_and_repricing_flow(client) -> None:
     assert repricing["snapshots"][0]["suggested_price"] >= repricing["snapshots"][0]["floor_price"]
 
 
+def test_product_item_specific_overrides_are_durable_in_ebay_package(client) -> None:
+    product = client.post(
+        "/products/import",
+        json={"urls": "https://www.homedepot.com/p/Harris-example/312071502", "source_price_override": 19.97},
+    ).json()["products"][0]
+
+    updated = client.patch(
+        f"/products/{product['id']}/item-specifics",
+        json={"item_specifics": {"EPA Registration Number": "3-18", "Blank": " "}},
+    )
+
+    assert updated.status_code == 200
+    specifics = updated.json()["item_specifics"]
+    assert specifics["EPA Registration Number"] == "3-18"
+    assert "Blank" not in specifics
+    assert client.get(f"/products/{product['id']}/ebay-package").json()["item_specifics"]["EPA Registration Number"] == "3-18"
+
+
 def test_saved_research_sellers_can_be_upserted_listed_and_deleted(client) -> None:
     created = client.post(
         "/research/sellers",
@@ -618,6 +636,37 @@ def test_import_normalizes_internal_auto_import_query_params(client) -> None:
     assert second["supplier_products"][0]["last_price"] == 13.5
 
 
+def test_browser_capture_matches_home_depot_short_url_by_internet_id(client) -> None:
+    seeded = client.post(
+        "/products/import",
+        json={"urls": "https://www.homedepot.com/p/325874061"},
+    ).json()["products"][0]
+
+    captured_response = client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Husky-PRO-Thumb-Control-Multi-Pattern-Nozzle-622043/325874061",
+            "title": "Husky PRO Thumb Control Multi-Pattern Nozzle",
+            "source_price": 14.98,
+            "source_shipping": 0.0,
+            "image_urls": "https://images.thdstatic.com/productImages/husky-nozzle.jpg",
+        },
+    )
+
+    assert captured_response.status_code == 200
+    captured = captured_response.json()
+    assert captured["id"] == seeded["id"]
+    assert captured["title"] == "Husky PRO Thumb Control Multi-Pattern Nozzle"
+    assert captured["supplier_products"][0]["last_price"] == 14.98
+    assert captured["supplier_products"][0]["source_url"].endswith("/325874061")
+    all_products = client.get("/products?include_deleted=true").json()
+    same_internet_id = [
+        product for product in all_products
+        if any("325874061" in supplier["source_url"] for supplier in product["supplier_products"])
+    ]
+    assert len(same_internet_id) == 1
+
+
 def test_supplier_catalog_and_lowes_placeholder_import(client) -> None:
     suppliers = {item["key"]: item for item in client.get("/suppliers").json()}
     assert suppliers["home_depot"]["enabled"] is True
@@ -783,6 +832,23 @@ def test_source_capture_queue_lists_imports_that_need_browser_capture(client) ->
     assert "source shipping" in queue["items"][0]["missing"]
     assert any(label in queue["items"][0]["missing"] for label in ["images", "downloaded images"])
     assert all(item["product_id"] != ready["id"] for item in queue["items"])
+
+
+def test_source_capture_queue_excludes_products_with_a_live_listing(client) -> None:
+    product = client.post(
+        "/products/import",
+        json={"urls": "https://www.homedepot.com/p/Already-Live-Capture/444"},
+    ).json()["products"][0]
+    marked = client.post(
+        f"/products/{product['id']}/mark-listed",
+        json={"listing_id": "800123456789", "account_id": "test-store", "quantity": 1, "status": "active"},
+    )
+    assert marked.status_code == 200
+
+    queued_ids = {
+        item["product_id"] for item in client.get("/products/capture-queue").json()["items"]
+    }
+    assert product["id"] not in queued_ids
 
 
 def test_hidden_source_price_is_terminal_until_a_cart_price_is_captured(client) -> None:
@@ -1500,7 +1566,12 @@ def test_hdx_trash_bag_source_to_ebay_listing_package_acceptance(client) -> None
             "source_price": 17.97,
             "source_shipping": 0.0,
             "competitor_price": 21.49,
-            "description": "Fresh scented kitchen trash bags\nReinforced drawstring top\n200 count box",
+            "description": (
+                "Fresh scented kitchen trash bags\nReinforced drawstring top\n200 count box\n"
+                "Return Policy\nProduct Recalls\nMy Preference Center\nSpecials & Offers\n"
+                "Military Discount Benefit\nDIY Projects & Ideas\nTruck & Tool Rental\n"
+                "Installation & Services"
+            ),
             "image_urls": tiny_png,
         },
     ).json()
@@ -1633,6 +1704,11 @@ def test_capture_update_and_ebay_package(client) -> None:
     assert "<h3>Highlights</h3>" in draft_description
     assert "<h3>Details</h3>" in draft_description
     assert "<li>Reinforced drawstring top</li>" in draft_description
+    assert "Product Recalls" not in draft_description
+    assert "My Preference Center" not in draft_description
+    assert "Specials &amp; Offers" not in draft_description
+    assert "Military Discount Benefit" not in draft_description
+    assert "Truck &amp; Tool Rental" not in draft_description
 
     assert "Please review all item specifics" in draft_description
     assert "Review source details" not in draft_description

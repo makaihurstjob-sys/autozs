@@ -2,6 +2,21 @@ const fs = require("fs");
 const vm = require("vm");
 
 const source = fs.readFileSync(`${__dirname}/background.js`, "utf8");
+if (!source.includes('["continue", "delivery", "delivery_continue", "edit_address", "add_new_card", "use_new_card", "add_to_cart", "checkout"].includes')) {
+  throw new Error("Expected exact Add to Cart and Checkout activation to avoid reflow-prone mouse coordinates.");
+}
+if (!source.includes("Page.createIsolatedWorld") || !source.includes("commercehub-secure-data-capture")) {
+  throw new Error("Expected approved card fields to support Home Depot's isolated Fiserv payment frames.");
+}
+if (!source.includes("chrome.debugger.getTargets") || !source.includes("secureTarget")) {
+  throw new Error("Expected out-of-process Fiserv payment frames to use a scoped direct target debugger.");
+}
+if (!source.includes('use_new_card: "^add new card$"') || !source.includes('button[data-testid="use-this-card-button"]')) {
+  throw new Error("Expected the approved new card to use Home Depot's exact non-purchase submit control.");
+}
+if (!source.includes("Secure-frame debugger attach") || !source.includes("Secure-frame debugger ${method}") || !source.includes("Secure-frame debugger detach") || !source.includes("Chrome debugger detach")) {
+  throw new Error("Expected secured-frame debugger operations to time out and detach after failures.");
+}
 
 async function runNativePcInputTest() {
   let listener = null;
@@ -12,6 +27,7 @@ async function runNativePcInputTest() {
   const browsingDataRemovals = [];
   let tabQueryResults = [];
   let runningListingJobs = [];
+  let sourceRefreshJobs = [];
   const reloadedTabs = [];
   const storage = { autozsWorkerMode: "operations" };
   const fetched = [];
@@ -58,6 +74,9 @@ async function runNativePcInputTest() {
           }),
         };
       }
+      if (url.endsWith("/source-refresh/jobs")) {
+        return { ok: true, status: 200, json: async () => sourceRefreshJobs };
+      }
       if (url.endsWith("/supplier-orders/next")) {
         return {
           ok: true,
@@ -95,6 +114,7 @@ async function runNativePcInputTest() {
           json: async () => ([{
             id: 1,
             ebay_thread_id: "order:13-14947-26719",
+            order_sales_record_number: "122",
             buyer_username: "buyer-user",
           }]),
         };
@@ -225,6 +245,19 @@ async function runNativePcInputTest() {
   if (!captureTab || captureTab.active !== false || !/ea_auto_import=1/.test(captureTab.url)) {
     throw new Error(`Expected a background Home Depot capture runner, got ${JSON.stringify(createdTabs)}`);
   }
+  const capturesBeforeQueuedRefresh = createdTabs.length;
+  sourceRefreshJobs = [{ id: 756, status: "queued" }];
+  await context.openNextProductCapture();
+  if (createdTabs.length !== capturesBeforeQueuedRefresh) {
+    throw new Error("Expected queued stock refresh work to take priority over product capture.");
+  }
+  storage.autozsSourceRefreshLastOpened = Date.now();
+  storage.autozsProductCaptureLastOpened = 0;
+  await context.openNextProductCapture();
+  if (createdTabs.length !== capturesBeforeQueuedRefresh + 1) {
+    throw new Error("Expected one product capture to use the source refresh cooldown window.");
+  }
+  sourceRefreshJobs = [];
 
   await context.uploadRevisionResultDownload(
     { batchId: 3, accountKey: "a.m.anim-59", filename: "result.csv" },
@@ -299,6 +332,33 @@ async function runNativePcInputTest() {
   const insert = commands.find((command) => command.method === "Input.insertText");
   if (insert?.params?.text !== "PC text") {
     throw new Error(`Expected inserted text after Ctrl+A, got ${JSON.stringify(insert)}`);
+  }
+
+  commands.length = 0;
+  response = null;
+  listener(
+    { type: "autozs-native-ebay-input", action: "type-text", text: "Hi" },
+    { tab: { id: 7, url: "https://www.ebay.com/lstng?draftId=123" } },
+    (payload) => { response = payload; }
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  if (!response?.ok) throw new Error(`Expected successful native typing response, got ${JSON.stringify(response)}`);
+  const typedKeys = commands.filter((command) => command.method === "Input.dispatchKeyEvent").map((command) => command.params);
+  if (typedKeys.length !== 4 || typedKeys[0]?.key !== "H" || typedKeys[2]?.key !== "i") {
+    throw new Error(`Expected per-character native key events, got ${JSON.stringify(typedKeys)}`);
+  }
+
+  commands.length = 0;
+  response = null;
+  listener(
+    { type: "autozs-native-ebay-input", action: "commit-text" },
+    { tab: { id: 7, url: "https://www.ebay.com/lstng?draftId=123" } },
+    (payload) => { response = payload; }
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const commitKeys = commands.filter((command) => command.method === "Input.dispatchKeyEvent").map((command) => command.params);
+  if (!response?.ok || commitKeys.length !== 2 || commitKeys.some((event) => event.key !== "Tab")) {
+    throw new Error(`Expected native Tab commit, got response=${JSON.stringify(response)} events=${JSON.stringify(commitKeys)}`);
   }
 
   commands.length = 0;
@@ -384,7 +444,7 @@ async function runNativePcInputTest() {
   };
   createdTabs.length = 0;
   storage.autozsListingJobLastOpened = 0;
-  storage.autozsListingJobReopens = {};
+  storage.autozsListingJobReopens = { "77": 3 };
   storage.autozsListingJobRunnerTabs = {};
   tabQueryResults = [];
   runningListingJobs = [{
@@ -396,6 +456,25 @@ async function runNativePcInputTest() {
     throw new Error(
       `Expected no reopen for a runner that reported progress 30s ago, got ${JSON.stringify(createdTabs)}`
     );
+  }
+
+  // A fresh API reservation has started_at and updated_at written together but
+  // no browser tab yet. It must open even though its timestamp is recent.
+  createdTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  storage.autozsListingJobReopens = { "77": 3 };
+  storage.autozsListingJobRunnerTabs = {};
+  tabQueryResults = [];
+  const reservedAt = new Date(Date.now() - 10 * 1000).toISOString().replace("Z", "");
+  runningListingJobs = [{
+    ...quietJob,
+    started_at: reservedAt,
+    updated_at: reservedAt,
+    message: "Reserved for scheduled eBay publishing",
+  }];
+  await context.openNextListingJob();
+  if (createdTabs.length !== 1) {
+    throw new Error(`Expected a freshly reserved job with no runner tab to open, got ${JSON.stringify(createdTabs)}`);
   }
 
   // ...but a runner that has genuinely gone quiet must still be recovered.
@@ -475,6 +554,9 @@ async function runNativePcInputTest() {
   tabQueryResults = [{
     id: 44,
     url: "https://www.ebay.com/lstng?draftId=old&autozs_job_id=91",
+  }, {
+    id: 45,
+    url: "https://www.ebay.com/lstng?draftId=restored-without-job-param",
   }];
   await context.openListingJobRunner({
     job: {
@@ -483,8 +565,9 @@ async function runNativePcInputTest() {
     },
     package: { title: "Fresh listing" },
   });
-  if (closedTabs[closedBeforeFreshListingRunner] !== 44 || createdTabs.length !== 1) {
-    throw new Error(`Expected a stale listing runner to close before opening a fresh tab, got ${JSON.stringify({ closedTabs, createdTabs })}`);
+  const closedForFreshListingRunner = closedTabs.slice(closedBeforeFreshListingRunner);
+  if (!closedForFreshListingRunner.includes(44) || !closedForFreshListingRunner.includes(45) || createdTabs.length !== 1) {
+    throw new Error(`Expected all stale listing workflow tabs to close before opening a fresh tab, got ${JSON.stringify({ closedTabs, createdTabs })}`);
   }
   tabQueryResults = [];
 
@@ -504,8 +587,10 @@ async function runNativePcInputTest() {
     throw new Error(`Expected one active eBay customer-message tab, got ${JSON.stringify(createdTabs)}`);
   }
   const messageUrl = new URL(createdTabs[0].url);
-  if (messageUrl.searchParams.get("srn") !== "13-14947-26719") {
-    throw new Error(`Expected the eBay order number in the message runner URL, got ${createdTabs[0].url}`);
+  // The Orders list filtered to this order's ID is the target that actually
+  // resolves -- ebay.com/sh/ord/details regularly fails to load at all.
+  if (messageUrl.pathname !== "/sh/ord" || messageUrl.searchParams.get("q") !== "13-14947-26719") {
+    throw new Error(`Expected the Orders list filtered to this order ID in the message runner URL, got ${createdTabs[0].url}`);
   }
   if (storage.autozsCustomerMessagePayloads?.["5"]?.message?.body !== "English and Spanish refund message") {
     throw new Error(`Expected queued message payload in extension storage, got ${JSON.stringify(storage.autozsCustomerMessagePayloads)}`);
@@ -514,8 +599,18 @@ async function runNativePcInputTest() {
 
   createdTabs.length = 0;
   fetched.length = 0;
-  storage.autozsWorkerMode = "operations";
+  storage.autozsWorkerMode = "checkout";
   storage.autozsSupplierOrderLastOpened = 0;
+  tabQueryResults = [{ id: 77, url: "https://www.homedepot.com/cart", title: "Error Page" }];
+  await context.openNextSupplierOrder();
+  if (fetched.some((request) => request.url.endsWith("/supplier-orders/next"))) {
+    throw new Error("Expected Home Depot's Error Page to prevent a supplier-order claim during cooldown.");
+  }
+  if (!(Number(storage.autozsSupplierCheckoutBlockedUntil || 0) > Date.now())) {
+    throw new Error("Expected Home Depot checkout cooldown to persist in extension storage.");
+  }
+  tabQueryResults = [];
+  storage.autozsSupplierCheckoutBlockedUntil = 0;
   await context.openNextSupplierOrder();
   if (!fetched.some((request) => request.url.endsWith("/supplier-orders/next") && request.options.method === "POST")) {
     throw new Error(`Expected supplier-order queue claim, got ${JSON.stringify(fetched)}`);
@@ -558,10 +653,125 @@ async function runNativePcInputTest() {
   if (createdTabs.length !== 0) {
     throw new Error(`Expected viewer mode to avoid opening worker tabs, got ${JSON.stringify(createdTabs)}`);
   }
+
+  storage.autozsWorkerMode = "viewer";
+  storage.autozsHomeDepotSourceWorkerPaused = true;
+  storage.autozsHomeDepotPostCleanupErrors = 3;
+  tabQueryResults = [{ url: "https://desktop-56u49jf.tailb2892a.ts.net/?autozs_worker_mode=operations" }];
+  const recoveredMode = await context.syncRequestedWorkerModeFromDashboardTabs();
+  if (
+    recoveredMode !== "operations" ||
+    storage.autozsWorkerMode !== "operations" ||
+    storage.autozsHomeDepotSourceWorkerPaused !== false ||
+    storage.autozsHomeDepotPostCleanupErrors !== 0
+  ) {
+    throw new Error(`Expected an explicit operations dashboard URL to clear stale source failover state, got ${JSON.stringify(storage)}`);
+  }
+  return context;
+}
+
+if (!source.includes('["operations", "capture", "checkout", "viewer"].includes(mode)')) {
+  throw new Error("Expected the dashboard bridge to allow the dedicated checkout worker mode.");
+}
+if (!source.includes("syncRequestedWorkerModeFromDashboardTabs")) {
+  throw new Error("Expected worker mode to be recoverable directly from a dashboard tab at Chrome startup.");
+}
+if (!source.includes('message?.type === "autozs-supplier-checkout-api"')) {
+  throw new Error("Expected Home Depot checkout reads and updates to use the trusted background broker.");
+}
+if (!source.includes('message?.type === "autozs-supplier-tracking-observation"')) {
+  throw new Error("Expected Home Depot shipment observations to use the trusted background broker.");
+}
+if (!source.includes('message?.type === "autozs-supplier-tracking-blocked"')) {
+  throw new Error("Expected rendered Home Depot error pages to trigger tracking cooldown through the trusted broker.");
+}
+if (!source.includes('parsed.searchParams.get("orderId") === String(externalOrderId || "")')) {
+  throw new Error("Expected shipment reconciliation to require an exact Home Depot order ID in the page URL.");
+}
+if (!source.includes('matches.length !== 1')) {
+  throw new Error("Expected shipment reconciliation to require exactly one matching AUTOZS supplier order.");
+}
+if (!source.includes('[SUPPLIER_TRACKING_ALARM, 5, 360]')) {
+  throw new Error("Expected Home Depot tracking checks to run no more than once every six hours.");
+}
+if (!source.includes('SUPPLIER_TRACKING_ERROR_COOLDOWN_MS = 24 * 60 * 60 * 1000')) {
+  throw new Error("Expected Home Depot anti-automation responses to pause tracking checks for 24 hours.");
+}
+if (!source.includes('await chrome.tabs.create({ url: supplierTrackingRunnerUrl(eligible[0]), active: false })')) {
+  throw new Error("Expected tracking polling to open only one inactive Home Depot order tab.");
+}
+if (!source.includes('localApiJson("/supplier-orders/ebay-tracking-next")')) {
+  throw new Error("Expected the eBay tracking opener to consume only the guarded API handoff.");
+}
+if (!source.includes('message?.type === "autozs-ebay-tracking-candidate"')) {
+  throw new Error("Expected tracking form preparation to revalidate its handoff through the trusted broker.");
+}
+if (!source.includes('message?.type === "autozs-ebay-tracking-prepared"')) {
+  throw new Error("Expected a verified tracking form to record a local prepared-state fingerprint.");
+}
+if (!source.includes('message?.type === "autozs-ebay-tracking-submitted"')) {
+  throw new Error("Expected confirmed eBay tracking to queue authoritative order reconciliation.");
+}
+if (!source.includes('/orders/sync?account_key=${encodeURIComponent(accountKey)}')) {
+  throw new Error("Expected tracking confirmation to force an eBay order re-sync for the exact account.");
+}
+if (!source.includes('prepared[String(candidate.supplier_order_id)] === fingerprint')) {
+  throw new Error("Expected an unchanged prepared tracking form not to reopen repeatedly.");
+}
+if (!source.includes('candidate.ebay_order_id !== page.searchParams.get("q")')) {
+  throw new Error("Expected the tracking broker to require the exact eBay order ID shown in the marked tab.");
+}
+if (!source.includes('await chrome.tabs.create({ url: ebayTrackingUploadRunnerUrl(candidate), active: false })')) {
+  throw new Error("Expected the eBay tracking candidate to open in one inactive tab.");
+}
+if (!source.includes('parsed.searchParams.get("autozs_workflow") === "tracking_upload"')) {
+  throw new Error("Expected eBay tracking tabs to carry an exact workflow identity.");
+}
+if (!source.includes('(!isSupplierOrderRunnerUrl(url) && !isSupplierTrackingRunnerUrl(url))')) {
+  throw new Error("Expected explicit content-script injection to be narrowly allowed on marked tracking tabs.");
+}
+if (!source.includes('message?.type === "autozs-supplier-native-click"')) {
+  throw new Error("Expected guarded supplier actions to use trusted native clicks.");
+}
+if (!source.includes('continue: "^continue$"')) {
+  throw new Error("Expected the guarded checkout allow-list to support Continue without supporting Place Order.");
+}
+if (!source.includes('remove_from_cart: "^remove$"')) {
+  throw new Error("Expected cart recovery to allow only an exact Home Depot Remove button.");
+}
+if (!source.includes('message?.type === "autozs-supplier-native-fill"')) {
+  throw new Error("Expected guarded checkout fields to use trusted native input.");
+}
+if (!source.includes('if (typeof field.select === "function") field.select()')) {
+  throw new Error("Expected native checkout entry to replace the complete existing field value.");
+}
+
+function runCustomerMessageRunnerUrlTest(context) {
+  // The Orders LIST page filtered to this order's ID is the one target that
+  // resolves reliably (order-details deep links regularly fail to load at
+  // all, independent of which ID gets passed). This needs only the order ID
+  // string that's always present -- no Sales Record Number required.
+  const withOrder = context.customerMessageRunnerUrl(
+    { id: 5 },
+    { ebay_thread_id: "order:22-15024-78151" }
+  );
+  const withOrderUrl = new URL(withOrder);
+  if (withOrderUrl.pathname !== "/sh/ord" || withOrderUrl.searchParams.get("q") !== "22-15024-78151") {
+    throw new Error(`Expected the Orders list filtered to this order ID, got ${withOrder}`);
+  }
+
+  // Without a resolvable order ID at all, fall back to the general inbox.
+  const withoutOrder = context.customerMessageRunnerUrl({ id: 5 }, { ebay_thread_id: "" });
+  if (!withoutOrder.startsWith("https://www.ebay.com/mys/messages")) {
+    throw new Error(`Expected a fallback to the eBay inbox, got ${withoutOrder}`);
+  }
 }
 
 runNativePcInputTest()
-  .then(() => console.log("background native PC input tests ok"))
+  .then((context) => {
+    runCustomerMessageRunnerUrlTest(context);
+    console.log("background native PC input tests ok");
+  })
   .catch((error) => {
     console.error(error);
     process.exit(1);

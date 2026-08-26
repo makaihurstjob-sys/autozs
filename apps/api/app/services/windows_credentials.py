@@ -1,6 +1,7 @@
 import ctypes
 from ctypes import wintypes
 import sys
+import json
 
 
 CRED_TYPE_GENERIC = 1
@@ -27,6 +28,44 @@ class _Credential(ctypes.Structure):
 
 def gift_card_credential_target(card_id: int) -> str:
     return f"AutoZS/HomeDepot/GiftCard/{int(card_id)}"
+
+
+def supplier_payment_credential_target(supplier: str) -> str:
+    normalized = str(supplier or "").strip().lower().replace("_", "-")
+    if normalized != "home-depot":
+        raise ValueError("Only the Home Depot payment credential is supported.")
+    return "AutoZS/HomeDepot/PaymentCard"
+
+
+def store_supplier_payment_credential(
+    supplier: str,
+    *,
+    card_number: str,
+    expiration_month: int,
+    expiration_year: int,
+    security_code: str,
+    cardholder_name: str,
+    billing_postal_code: str,
+) -> str:
+    digits = "".join(character for character in str(card_number) if character.isdigit())
+    code = "".join(character for character in str(security_code) if character.isdigit())
+    if not 12 <= len(digits) <= 19 or len(code) not in {3, 4}:
+        raise ValueError("Send a valid payment card number and security code.")
+    secret = json.dumps({
+        "expiration_month": int(expiration_month),
+        "expiration_year": int(expiration_year),
+        "security_code": code,
+        "cardholder_name": str(cardholder_name or "").strip(),
+        "billing_postal_code": str(billing_postal_code or "").strip(),
+    }, separators=(",", ":"))
+    store_generic_credential(supplier_payment_credential_target(supplier), digits, secret)
+    return digits[-4:]
+
+
+def read_supplier_payment_credential(supplier: str) -> dict:
+    card_number, secret = read_generic_credential(supplier_payment_credential_target(supplier))
+    payload = json.loads(secret)
+    return {"card_number": card_number, **payload}
 
 
 def store_generic_credential(target: str, username: str, secret: str) -> None:

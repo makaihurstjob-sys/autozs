@@ -18,6 +18,7 @@ from app.services.ebay_traffic import sync_ebay_traffic
 from app.services.ebay_accounts import list_ebay_accounts
 from app.services.ebay_sync import queue_ebay_traffic_sync
 from app.services.listing_jobs import flag_stale_listing_jobs
+from app.services.orders import reconcile_sold_listing_replacements
 from app.services.push_notifications import dispatch_push_cycle
 from app.services.settings import read_pricing_settings
 from app.services.source_refresh_jobs import create_automatic_source_refresh_batch
@@ -39,10 +40,18 @@ def _ensure_lightweight_columns() -> None:
         "orders": {
             "account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL",
             "recipient_name": "VARCHAR(256) DEFAULT '' NOT NULL",
+            "shipping_address_line1": "VARCHAR(256) DEFAULT '' NOT NULL",
+            "shipping_address_line2": "VARCHAR(256) DEFAULT '' NOT NULL",
+            "shipping_city": "VARCHAR(128) DEFAULT '' NOT NULL",
+            "shipping_state": "VARCHAR(64) DEFAULT '' NOT NULL",
+            "shipping_postal_code": "VARCHAR(32) DEFAULT '' NOT NULL",
+            "shipping_country": "VARCHAR(64) DEFAULT 'United States' NOT NULL",
+            "sales_record_number": "VARCHAR(64)",
         },
         "ebay_listings": {
             "account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL",
             "started_at": "DATETIME",
+            "first_listed_at": "DATETIME",
             "renews_at": "DATETIME",
             "views": "INTEGER DEFAULT 0 NOT NULL",
             "view_delta": "INTEGER",
@@ -76,6 +85,7 @@ def _ensure_lightweight_columns() -> None:
         },
         "products": {
             "listing_schedule_at": "DATETIME",
+            "ebay_item_specifics_json": "TEXT DEFAULT '{}' NOT NULL",
             "capture_lease_owner": "VARCHAR(256)",
             "capture_lease_expires_at": "DATETIME",
         },
@@ -121,6 +131,17 @@ def _ensure_lightweight_columns() -> None:
                     "WHERE status IN ('queued', 'running', 'paused') AND approved_at IS NULL"
                 )
             )
+        if "ebay_listings" in existing_tables:
+            # One-time backfill for rows that predate first_listed_at. created_at is the
+            # oldest immutable timestamp we have on the row, so it's the best available
+            # floor for "how long has this actually been listed" until relists stop
+            # clobbering started_at going forward.
+            connection.execute(
+                text(
+                    "UPDATE ebay_listings SET first_listed_at = COALESCE(started_at, created_at) "
+                    "WHERE first_listed_at IS NULL"
+                )
+            )
         legacy_store_columns = {
             "orders": ("account_id",),
             "ebay_listings": ("account_id",),
@@ -162,6 +183,7 @@ def _ensure_lightweight_columns() -> None:
 def _write_worker_heartbeat(message: str = "AutoZS API heartbeat.") -> None:
     with SessionLocal() as db:
         flag_stale_listing_jobs(db)
+        reconcile_sold_listing_replacements(db)
         heartbeat_current_worker(db, message=message)
 
 

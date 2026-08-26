@@ -155,7 +155,11 @@ def _should_preserve_matched_username(
     if not detected or _usernames_match(expected, detected):
         return False
     path = urlparse(str(url or "")).path
-    return path.startswith("/lstng") or path.startswith("/sl/prelist")
+    # Seller Hub is the authoritative identity surface. Order, tracking,
+    # messaging, listing-editor, and ordinary marketplace pages can contain a
+    # buyer username or product text near account-like markup; do not let that
+    # overwrite a seller identity that was already confirmed in Seller Hub.
+    return not path.startswith("/sh/")
 
 
 def _marketplace_from_url(url: str | None) -> str:

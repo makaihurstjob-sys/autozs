@@ -4492,6 +4492,7 @@
             <label class="settings-toggle wide"><input id="notification-orders" type="checkbox" ${state.settings.notifications_order_updates ? "checked" : ""} /> Order and fulfillment updates</label>
             <label class="settings-toggle wide"><input id="notification-listing-errors" type="checkbox" ${state.settings.notifications_listing_errors ? "checked" : ""} /> Listing failures and account mismatches</label>
             <label class="settings-field wide"><span>Optional notification email</span><input id="notification-email" type="email" value="${esc(state.settings.notifications_email || "")}" placeholder="you@example.com" /><small class="muted">Stored for the future notification service; AutoZS does not send email yet.</small></label>
+            <label class="settings-field wide"><span>Supplier delivery phone</span><input id="fulfillment-notification-phone" type="tel" value="${esc(state.settings.fulfillment_notification_phone || "")}" placeholder="Your phone number" /><small class="muted">Used for Home Depot delivery updates. AUTOZS never sends the buyer's phone number to a supplier.</small></label>
           </div></div>`;
       }
 
@@ -8397,10 +8398,26 @@
         const periods = finance.periods || [];
         const accounts = finance.accounts || [];
         const subscriptions = finance.subscriptions || [];
+        const profitIssues = finance.profit_data_issues || [];
+        const verifiedProfit = finance.profit_verified && finance.verified_profit !== null && finance.verified_profit !== undefined;
         return `<div class="report-grid">
           <div class="report-card wide">
+            <h3>Verified growth profit</h3>
+            ${reportRowsHtml([
+              ["Verification", verifiedProfit ? badge("verified") : badge("blocked")],
+              ["Gross merchandise sales", money(finance.gross_merchandise_revenue || 0)],
+              ["Realized fulfilled revenue", money(finance.realized_revenue || 0)],
+              ["Estimated marketplace-fee check", money(finance.estimated_marketplace_fees || 0)],
+              ["Return-risk reserve", money(finance.return_risk_reserve || 0)],
+              ["Verified profit", verifiedProfit ? money(finance.verified_profit) : "Not verified"],
+              ["Available business profit", money(finance.available_business_profit || 0)],
+              ["$8 Store/advertising gate", Number(finance.available_business_profit || 0) >= 8 && verifiedProfit ? "Ready for owner approval" : "Not reached"],
+            ])}
+            ${profitIssues.length ? `<p class="muted"><strong>Required evidence:</strong> ${profitIssues.map((issue) => esc(issue)).join(" ")}</p>` : ""}
+          </div>
+          <div class="report-card wide">
             <div class="settings-view-head">
-              <div><h3>Profit / loss</h3><p class="muted">Cash-basis supplier costs use the actual acquisition cost of gift-card value consumed, plus any backup-card amount.</p></div>
+              <div><h3>Imported profit / loss</h3><p class="muted">This ledger is informational until the verified growth-profit card confirms supplier costs, actual eBay fees, risk reserve, and fresh available balances.</p></div>
               <div class="actions">
                 <button class="secondary" onclick="addFinancialAccountSnapshot()">Add balance snapshot</button>
                 <button class="secondary" onclick="addSubscriptionExpense()">Add subscription</button>
@@ -10314,8 +10331,17 @@
       function openEbayOrderRefund(orderId) {
         const order = (state.orders || []).find((entry) => Number(entry.id) === Number(orderId));
         if (!order?.ebay_order_id) return message("This order does not have an eBay order ID.");
-        const orderNumber = encodeURIComponent(order.ebay_order_id);
-        window.open(`https://www.ebay.com/sh/ord/details?srn=${orderNumber}`, "_blank", "noopener,noreferrer");
+        // srn wants eBay's short Sales Record Number (e.g. "122"), not
+        // ebay_order_id (e.g. "22-15024-78151") -- the latter always resolves
+        // to eBay's "error retrieving your order" page. Orders synced before
+        // this field was captured fall back to the general inbox.
+        if (!order.sales_record_number) {
+          window.open("https://www.ebay.com/mys/messages", "_blank", "noopener,noreferrer");
+          message("This order has no Sales Record Number on file yet (re-sync orders to pick it up); opened the eBay inbox instead.");
+          return;
+        }
+        const srn = encodeURIComponent(order.sales_record_number);
+        window.open(`https://www.ebay.com/sh/ord/details?srn=${srn}`, "_blank", "noopener,noreferrer");
         message("Opened the signed-in eBay order details. Choose the cancellation or refund action there.");
       }
 
@@ -10858,6 +10884,7 @@
           notifications_order_updates: document.getElementById("notification-orders").checked,
           notifications_listing_errors: document.getElementById("notification-listing-errors").checked,
           notifications_email: document.getElementById("notification-email").value.trim(),
+          fulfillment_notification_phone: document.getElementById("fulfillment-notification-phone").value.trim(),
         }, "Notification preferences saved.");
       }
 

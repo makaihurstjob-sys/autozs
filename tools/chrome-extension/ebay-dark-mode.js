@@ -2,7 +2,7 @@
   const STYLE_ID = "autozs-ebay-dark-mode-style";
   const ROOT_CLASS = "autozs-ebay-dark-mode";
   const LOCAL_API = "https://desktop-56u49jf.tailb2892a.ts.net:8443";
-  const DARK_MODE_BUILD = "2026-07-19-myebay-flyout-contrast";
+  const DARK_MODE_BUILD = "2026-08-17-fulfillment-section-contrast";
   const existingStyle = document.getElementById(STYLE_ID);
   const existingBuild = existingStyle?.getAttribute?.("data-autozs-build") || "";
   if (window.__autozsEbayDarkModeStarted && existingBuild === DARK_MODE_BUILD) return;
@@ -99,7 +99,9 @@
     html.${ROOT_CLASS} [class*="drawer" i],
     html.${ROOT_CLASS} [class*="dialog" i],
     html.${ROOT_CLASS} [class*="modal" i],
-    html.${ROOT_CLASS} [class*="menu" i] {
+    html.${ROOT_CLASS} [class*="menu" i],
+    html.${ROOT_CLASS} [class*="widget" i],
+    html.${ROOT_CLASS} [class*="fulfillment-section" i] {
       border-color: #2b352f !important;
     }
     html.${ROOT_CLASS} [class*="card" i],
@@ -113,10 +115,24 @@
     html.${ROOT_CLASS} [class*="flyout" i],
     html.${ROOT_CLASS} [class*="tooltip" i],
     html.${ROOT_CLASS} [class*="infotip" i],
-    html.${ROOT_CLASS} [class*="x-overlay" i] {
+    html.${ROOT_CLASS} [class*="x-overlay" i],
+    html.${ROOT_CLASS} [class*="widget" i],
+    html.${ROOT_CLASS} [class*="fulfillment-section" i] {
       background-color: #171d1a !important;
       color: #edf4ef !important;
       box-shadow: 0 16px 42px rgba(0, 0, 0, .35) !important;
+    }
+    html.${ROOT_CLASS} [class*="sui-bg-primary" i],
+    html.${ROOT_CLASS} [class*="sui-bg-secondary" i],
+    html.${ROOT_CLASS} [class*="sui-bg-subtle" i] {
+      background-color: #171d1a !important;
+    }
+    html.${ROOT_CLASS} [class*="sui-text-primary" i],
+    html.${ROOT_CLASS} [class*="sui-text-secondary" i] {
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS} [class*="sui-border-primary" i] {
+      border-color: #2b352f !important;
     }
     html.${ROOT_CLASS} .lightbox-dialog--hide,
     html.${ROOT_CLASS} .lightbox-dialog[aria-hidden="true"],
@@ -706,6 +722,47 @@
       fill: currentColor !important;
       stroke: currentColor !important;
     }
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub button,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub .btn,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub [role="button"] {
+      background-color: #17201b !important;
+      border-color: #2b352f !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub button[disabled],
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub button[aria-disabled="true"],
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub .btn[disabled],
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub .btn[aria-disabled="true"],
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub [role="button"][aria-disabled="true"] {
+      background: #1d2521 !important;
+      background-color: #1d2521 !important;
+      border-color: #33413a !important;
+      color: #8b9891 !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub button[disabled] *,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub button[aria-disabled="true"] *,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub .btn[disabled] *,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub .btn[aria-disabled="true"] *,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub [role="button"][aria-disabled="true"] * {
+      color: #8b9891 !important;
+      opacity: 1 !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub table,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub thead,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub tbody,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub tr,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub th,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub td {
+      background-color: #101412 !important;
+      border-color: #2b352f !important;
+      color: #edf4ef !important;
+    }
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub th,
+    html.${ROOT_CLASS}.autozs-ebay-seller-hub th * {
+      background-color: #171d1a !important;
+      color: #edf4ef !important;
+    }
     html.${ROOT_CLASS}.autozs-ebay-seller-hub button[aria-label^="Save "][aria-label$=" to AutoZS"],
     html.${ROOT_CLASS}.autozs-ebay-seller-hub button[title^="Save "][title$=" to AutoZS"] {
       background: #17201b !important;
@@ -998,7 +1055,7 @@
       /^\/(?:lstng|sl\/(?:list|prelist))(?:\/|$)/i.test(location.pathname || ""),
     );
     document.documentElement.classList.toggle("autozs-ebay-prelist", /^\/sl\/prelist(?:\/|$)/i.test(location.pathname || ""));
-    document.documentElement.classList.toggle("autozs-ebay-seller-hub", /^\/sh\//i.test(location.pathname || ""));
+    document.documentElement.classList.toggle("autozs-ebay-seller-hub", /^\/(?:sh|mesh)\//i.test(location.pathname || ""));
     document.documentElement.classList.toggle(
       "autozs-ebay-reports-uploads",
       /^\/sh\/reports\/uploads\/?$/i.test(location.pathname || ""),

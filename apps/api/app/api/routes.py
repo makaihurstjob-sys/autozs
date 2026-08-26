@@ -171,6 +171,7 @@ from app.schemas.domain import (
     ProductImageOrderUpdate,
     ProductImagePrepResult,
     ProductImportRequest,
+    ProductItemSpecificsUpdate,
     ProductListingScheduleUpdate,
     ProductImportResult,
     ProductRead,
@@ -199,9 +200,13 @@ from app.schemas.domain import (
     SupplierOptionRead,
     SupplierOrderPrepare,
     SupplierCheckoutCredentialRead,
+    SupplierPaymentCredentialStatus,
+    SupplierPaymentCredentialWrite,
     SupplierOrderClaimRead,
     SupplierOrderRead,
     SupplierOrderUpdate,
+    SupplierTrackingCapture,
+    SupplierTrackingCaptureResult,
     SubscriptionExpenseCreate,
     SubscriptionExpenseRead,
     UiThemeUpdate,
@@ -228,6 +233,8 @@ from app.services.listing_jobs import (
     relist_blocked_product_ids,
     enqueue_listing_jobs,
     list_listing_jobs as list_listing_jobs_service,
+    queue_zero_view_listing_rotations,
+    queue_listing_expansion,
     read_automation_pause,
     read_listing_job,
     serialize_listing_job,
@@ -294,6 +301,8 @@ from app.services.orders import import_ebay_order_report_rows, parse_ebay_order_
 from app.services.order_updates import generate_order_update_drafts, list_customer_updates, update_customer_update_status
 from app.services.customer_service import (
     claim_next_outbound_message,
+    delete_conversation,
+    delete_message,
     import_conversation,
     list_conversations,
     queue_message,
@@ -308,14 +317,18 @@ from app.services.fulfillment import (
     create_gift_card,
     list_gift_cards,
     list_supplier_orders,
+    next_ebay_tracking_upload,
     prepare_supplier_order,
     update_gift_card,
     update_supplier_order,
+    capture_supplier_tracking,
 )
 from app.services.windows_credentials import (
     gift_card_credential_target,
     read_generic_credential,
     store_generic_credential,
+    read_supplier_payment_credential,
+    store_supplier_payment_credential,
 )
 from app.services.finance import (
     create_subscription,
@@ -388,7 +401,7 @@ def launch_home_depot_backup_profile() -> dict[str, str]:
     extension.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(extension_source, extension, dirs_exist_ok=True)
     manifest_path = extension / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     manifest["name"] = "AutoZS Home Depot Backup Capture"
     manifest["description"] = "Capture-only Home Depot failover worker. This extension cannot run eBay jobs."
     manifest["host_permissions"] = [
@@ -1565,6 +1578,15 @@ def mark_source_refresh_job_failed(
 
 @router.get("/products/capture-queue", response_model=SourceCaptureQueueRead)
 def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRead:
+    listed_product_ids = set(
+        db.scalars(
+            select(EbayListing.product_id).where(
+                EbayListing.status.in_(("active", "live", "listed", "scheduled")),
+                EbayListing.quantity > 0,
+                EbayListing.relist_blocked.is_(False),
+            )
+        ).all()
+    )
     products = db.scalars(
         select(Product)
         .options(selectinload(Product.supplier_products), selectinload(Product.images), selectinload(Product.listing_drafts))
@@ -1573,6 +1595,12 @@ def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRea
     ).all()
     items: list[SourceCaptureQueueItem] = []
     for product in products:
+        # Capture capacity is for products that can become new listings. A live
+        # or scheduled item may still lack locally downloaded images (for
+        # example, after an eBay-first import), but recapturing it cannot grow
+        # the catalog and can accidentally recreate a duplicate listing.
+        if product.id in listed_product_ids:
+            continue
         supplier = product.supplier_products[0] if product.supplier_products else None
         if supplier is None or not supplier.source_url:
             continue
@@ -1737,6 +1765,26 @@ def update_product_listing_schedule(
     db.commit()
     db.refresh(product)
     return product
+
+
+@router.patch("/products/{product_id}/item-specifics", response_model=EbayListingPackage)
+def update_product_item_specifics(
+    product_id: int, payload: ProductItemSpecificsUpdate, db: Session = Depends(get_db)
+) -> EbayListingPackage:
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    cleaned = {
+        str(key).strip(): str(value).strip()
+        for key, value in payload.item_specifics.items()
+        if str(key).strip() and str(value).strip()
+    }
+    product.ebay_item_specifics_json = json.dumps(cleaned, sort_keys=True)
+    db.commit()
+    package = build_ebay_listing_package(db, product_id)
+    if package is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return EbayListingPackage(**package)
 
 
 @router.post("/products/recalculate-drafts", response_model=DraftRecalculationResult)
@@ -2071,6 +2119,7 @@ def _serialize_ebay_listing(listing: EbayListing, settings: dict) -> dict:
         "quantity": listing.quantity,
         "status": listing.status,
         "started_at": listing.started_at,
+        "first_listed_at": listing.first_listed_at,
         "renews_at": listing.renews_at,
         "views": listing.views or 0,
         "view_delta": listing.view_delta,
@@ -2108,7 +2157,7 @@ def _auto_delist_candidate(listing: EbayListing, settings: dict) -> bool:
         return False
     if (listing.views or 0) > 0 or listing.status not in {"active", "live", "listed"}:
         return False
-    started = listing.started_at or listing.created_at
+    started = listing.first_listed_at or listing.started_at or listing.created_at
     age_days = (datetime.utcnow() - started).total_seconds() / 86400
     return age_days >= float(settings.get("auto_delist_zero_view_days") or 25)
 
@@ -2305,6 +2354,40 @@ def update_listing_automation_pause(
     payload: ListingAutomationPauseUpdate, db: Session = Depends(get_db)
 ) -> ListingAutomationPauseStatus:
     return ListingAutomationPauseStatus(**set_automation_pause(db, payload.paused, payload.reason))
+
+
+@router.post("/listing-rotations/auto-queue")
+def auto_queue_zero_view_listing_rotations(
+    ebay_account_key: str | None = None,
+    limit: int = Query(15, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> dict:
+    account_key = str(ebay_account_key or "").strip()
+    if not account_key:
+        account_key = str(db.scalar(
+            select(EbayListing.account_id)
+            .where(EbayListing.account_id.is_not(None), EbayListing.account_id != "")
+            .order_by(EbayListing.id.desc())
+            .limit(1)
+        ) or "manual")
+    return queue_zero_view_listing_rotations(db, ebay_account_key=account_key, limit=limit)
+
+
+@router.post("/listing-expansion/auto-queue")
+def auto_queue_listing_expansion(
+    ebay_account_key: str | None = None,
+    limit: int = Query(15, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> dict:
+    account_key = str(ebay_account_key or "").strip()
+    if not account_key:
+        account_key = str(db.scalar(
+            select(EbayListing.account_id)
+            .where(EbayListing.account_id.is_not(None), EbayListing.account_id != "")
+            .order_by(EbayListing.id.desc())
+            .limit(1)
+        ) or "manual")
+    return queue_listing_expansion(db, ebay_account_key=account_key, limit=limit)
 
 
 @router.get("/listing-jobs/{job_id}", response_model=ListingJobRead)
@@ -3064,6 +3147,57 @@ def read_supplier_orders(order_id: int | None = None, db: Session = Depends(get_
     return list_supplier_orders(db, order_id=order_id)
 
 
+@router.get("/supplier-orders/ebay-tracking-next")
+def read_next_ebay_tracking_upload(db: Session = Depends(get_db)) -> dict[str, object] | None:
+    return next_ebay_tracking_upload(db)
+
+
+@router.post("/supplier-orders/tracking-capture", response_model=SupplierTrackingCaptureResult)
+def capture_supplier_tracking_route(
+    payload: SupplierTrackingCapture,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    _require_local_checkout_request(request)
+    try:
+        return capture_supplier_tracking(db, **payload.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/supplier-payment-credentials/{supplier}",
+    response_model=SupplierPaymentCredentialStatus,
+)
+def supplier_payment_credential_status(supplier: str, request: Request) -> SupplierPaymentCredentialStatus:
+    _require_local_checkout_request(request)
+    try:
+        credential = read_supplier_payment_credential(supplier)
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        return SupplierPaymentCredentialStatus(supplier=supplier, stored=False)
+    digits = "".join(character for character in str(credential.get("card_number", "")) if character.isdigit())
+    return SupplierPaymentCredentialStatus(supplier=supplier, stored=bool(digits), last_four=digits[-4:])
+
+
+@router.post(
+    "/supplier-payment-credentials/{supplier}",
+    response_model=SupplierPaymentCredentialStatus,
+)
+def store_supplier_payment_card(
+    supplier: str,
+    payload: SupplierPaymentCredentialWrite,
+    request: Request,
+) -> SupplierPaymentCredentialStatus:
+    _require_local_checkout_request(request)
+    try:
+        last_four = store_supplier_payment_credential(supplier, **payload.model_dump())
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SupplierPaymentCredentialStatus(supplier=supplier, stored=True, last_four=last_four)
+
+
 @router.get("/supplier-orders/{supplier_order_id}", response_model=SupplierOrderRead)
 def read_supplier_order(supplier_order_id: int, db: Session = Depends(get_db)) -> SupplierOrder:
     orders = list_supplier_orders(db)
@@ -3124,21 +3258,31 @@ def read_supplier_checkout_credential(
     ):
         raise HTTPException(status_code=403, detail="The checkout credential lease is not valid.")
     card = db.get(GiftCard, supplier_order.gift_card_id) if supplier_order.gift_card_id else None
-    if card is None or card.status != "active" or not card.secret_ref:
-        raise HTTPException(status_code=422, detail="An active secured gift card is required.")
-    if float(card.current_balance or 0) + 0.001 < float(supplier_order.approved_total or 0):
-        raise HTTPException(status_code=422, detail="Gift-card balance is below the approved supplier-order total.")
-    try:
-        card_number, pin = read_generic_credential(card.secret_ref)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     response.headers["Cache-Control"] = "no-store"
+    if card is not None:
+        if card.status != "active" or not card.secret_ref:
+            raise HTTPException(status_code=422, detail="An active secured gift card is required.")
+        if float(card.current_balance or 0) + 0.001 < float(supplier_order.approved_total or 0):
+            raise HTTPException(status_code=422, detail="Gift-card balance is below the approved supplier-order total.")
+        try:
+            card_number, pin = read_generic_credential(card.secret_ref)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return SupplierCheckoutCredentialRead(
+            supplier_order_id=supplier_order.id,
+            card_number=card_number,
+            pin=pin,
+            approved_total=float(supplier_order.approved_total or 0),
+            current_balance=float(card.current_balance or 0),
+        )
+    try:
+        payment = read_supplier_payment_credential(supplier_order.supplier)
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail="A secured Home Depot payment card is required.") from exc
     return SupplierCheckoutCredentialRead(
         supplier_order_id=supplier_order.id,
-        card_number=card_number,
-        pin=pin,
         approved_total=float(supplier_order.approved_total or 0),
-        current_balance=float(card.current_balance or 0),
+        **payment,
     )
 
 
@@ -3263,6 +3407,22 @@ def patch_customer_message(
     if message is None:
         raise HTTPException(status_code=404, detail="Customer message not found")
     return update_message(db, message, payload.model_dump(exclude_unset=True))
+
+
+@router.delete("/customer-service/messages/{message_id}", status_code=204)
+def delete_customer_message_route(message_id: int, db: Session = Depends(get_db)) -> None:
+    message = db.get(CustomerMessage, message_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="Customer message not found")
+    delete_message(db, message)
+
+
+@router.delete("/customer-service/conversations/{conversation_id}", status_code=204)
+def delete_customer_conversation_route(conversation_id: int, db: Session = Depends(get_db)) -> None:
+    conversation = db.get(CustomerConversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Customer conversation not found")
+    delete_conversation(db, conversation)
 
 
 @router.patch("/customer-updates/{update_id}", response_model=CustomerUpdateRead)

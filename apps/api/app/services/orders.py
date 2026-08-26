@@ -138,6 +138,12 @@ def import_ebay_order_report_rows(
             db.add(order)
             db.flush()
         order.account_id = account_key
+        reported_sales_record_number = next(
+            (row["sales_record_number"] for row in order_rows if row["sales_record_number"]),
+            "",
+        )
+        if reported_sales_record_number:
+            order.sales_record_number = reported_sales_record_number
         order.buyer_username = next((row["buyer_username"] for row in order_rows if row["buyer_username"]), None)
         reported_recipient_name = next(
             (row["recipient_name"] for row in order_rows if row["recipient_name"]),
@@ -145,6 +151,17 @@ def import_ebay_order_report_rows(
         )
         if reported_recipient_name:
             order.recipient_name = reported_recipient_name
+        for field in (
+            "shipping_address_line1",
+            "shipping_address_line2",
+            "shipping_city",
+            "shipping_state",
+            "shipping_postal_code",
+            "shipping_country",
+        ):
+            reported = next((row[field] for row in order_rows if row[field]), "")
+            if reported:
+                setattr(order, field, reported)
         order.ship_by = _minimum_date(row["ship_by"] for row in order_rows)
         order.status = _order_status(order_rows)
         reported_totals = [row["total"] for row in order_rows if row["total"] is not None]
@@ -256,29 +273,87 @@ def _queue_automatic_restock(
         return
     listing.status = "ended"
 
-    supplier = product.supplier_products[0] if product.supplier_products else None
-    if (
-        supplier is None
-        or supplier.in_stock is False
-        or supplier.last_price is None
-        or supplier.last_shipping is None
-        or float(supplier.last_shipping) < 0
-    ):
-        return
-    another_sellable_listing = db.scalar(
-        select(EbayListing).where(
-            EbayListing.id != listing.id,
-            EbayListing.account_id == account_key,
-            EbayListing.product_id == product.id,
-            EbayListing.status.in_(("scheduled", "listed", "live", "active")),
-            EbayListing.quantity > 0,
-        )
+    _queue_replacement_publish(db, product=product, account_key=account_key, excluded_listing_id=listing.id)
+
+
+def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None) -> dict[str, int]:
+    """Repair the sale-to-relist handoff until a replacement is confirmed active.
+
+    Order import starts this workflow, but imports are intentionally idempotent and
+    therefore cannot repair a job that later fails. This reconciler uses the durable
+    sale, ended listing, and current active-listing evidence on every worker pass.
+    """
+    checked_at = now or datetime.utcnow()
+    sold_product_ids = set(
+        db.scalars(
+            select(OrderItem.product_id)
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(OrderItem.product_id.is_not(None), Order.status != "cancelled")
+        ).all()
     )
-    if another_sellable_listing is not None:
-        return
-    existing_job = db.scalar(
-        select(ListingJob).where(
-            ListingJob.product_id == product.id,
+    result = {"candidates": 0, "queued": 0, "awaiting_confirmation": 0, "confirmed_active": 0}
+    for product_id in sold_product_ids:
+        product = db.get(Product, product_id)
+        if product is None or product.status == ProductStatus.deleted.value:
+            continue
+        sold_out_listing = db.scalar(
+            select(EbayListing)
+            .where(
+                EbayListing.product_id == product_id,
+                # Seller Hub continues to call out-of-stock fixed-price items
+                # active. The durable sale plus quantity zero is the signal;
+                # requiring status=ended strands them after the next report sync.
+                EbayListing.status.in_(("ended", "active", "live", "listed")),
+                EbayListing.quantity <= 0,
+                EbayListing.relist_blocked.is_(False),
+            )
+            .order_by(EbayListing.updated_at.desc(), EbayListing.id.desc())
+        )
+        if sold_out_listing is None:
+            continue
+        result["candidates"] += 1
+        account_key = sold_out_listing.account_id
+        live_replacement = db.scalar(
+            select(EbayListing.id).where(
+                EbayListing.product_id == product_id,
+                EbayListing.account_id == account_key,
+                EbayListing.status.in_(("active", "live", "listed")),
+                EbayListing.quantity > 0,
+            )
+        )
+        if live_replacement is not None:
+            result["confirmed_active"] += 1
+            continue
+        pending_listing = db.scalar(
+            select(EbayListing.id).where(
+                EbayListing.product_id == product_id,
+                EbayListing.account_id == account_key,
+                EbayListing.status == "scheduled",
+                EbayListing.quantity > 0,
+            )
+        )
+        open_job = _open_replacement_job(db, product_id=product_id, account_key=account_key)
+        if pending_listing is not None or open_job is not None:
+            result["awaiting_confirmation"] += 1
+            continue
+        if _queue_replacement_publish(
+            db,
+            product=product,
+            account_key=account_key,
+            now=checked_at,
+            require_confirmed_stock=True,
+            excluded_listing_id=sold_out_listing.id,
+        ):
+            result["queued"] += 1
+    db.commit()
+    return result
+
+
+def _open_replacement_job(db: Session, *, product_id: int, account_key: str) -> ListingJob | None:
+    return db.scalar(
+        select(ListingJob)
+        .where(
+            ListingJob.product_id == product_id,
             ListingJob.ebay_account_key == account_key,
             ListingJob.action == "publish",
             ListingJob.status.in_(
@@ -291,11 +366,47 @@ def _queue_automatic_restock(
                 )
             ),
         )
+        .order_by(ListingJob.created_at.desc(), ListingJob.id.desc())
     )
-    if existing_job is not None:
-        return
 
-    listing_schedule_at = datetime.utcnow() + timedelta(minutes=30)
+
+def _queue_replacement_publish(
+    db: Session,
+    *,
+    product: Product,
+    account_key: str,
+    now: datetime | None = None,
+    require_confirmed_stock: bool = False,
+    excluded_listing_id: int | None = None,
+) -> bool:
+    checked_at = now or datetime.utcnow()
+    supplier = product.supplier_products[0] if product.supplier_products else None
+    if (
+        supplier is None
+        or supplier.in_stock is False
+        or (require_confirmed_stock and supplier.in_stock is not True)
+        or (require_confirmed_stock and supplier.price_unavailable is True)
+        or supplier.last_price is None
+        or supplier.last_shipping is None
+        or float(supplier.last_shipping) < 0
+        or (require_confirmed_stock and supplier.updated_at < checked_at - timedelta(hours=24))
+    ):
+        return False
+    another_sellable_listing = db.scalar(
+        select(EbayListing).where(
+            EbayListing.id != excluded_listing_id if excluded_listing_id is not None else EbayListing.id.is_not(None),
+            EbayListing.account_id == account_key,
+            EbayListing.product_id == product.id,
+            EbayListing.status.in_(("scheduled", "listed", "live", "active")),
+            EbayListing.quantity > 0,
+        )
+    )
+    if another_sellable_listing is not None:
+        return False
+    if _open_replacement_job(db, product_id=product.id, account_key=account_key) is not None:
+        return False
+
+    listing_schedule_at = (now or datetime.utcnow()) + timedelta(minutes=30)
     product.listing_schedule_at = listing_schedule_at
     db.add(
         ListingJob(
@@ -308,6 +419,7 @@ def _queue_automatic_restock(
             message="Queued automatic restock after a new eBay sale.",
         )
     )
+    return True
 
 
 def _normalize_order_row(raw: dict[str, str]) -> dict:
@@ -318,6 +430,7 @@ def _normalize_order_row(raw: dict[str, str]) -> dict:
 
     return {
         "order_id": pick("Order Number", "Order ID", "Sales Record Number"),
+        "sales_record_number": pick("Sales Record Number", "Sales Record #"),
         "buyer_username": pick("Buyer Username", "User Id"),
         "recipient_name": pick(
             "Ship To Name",
@@ -326,6 +439,18 @@ def _normalize_order_row(raw: dict[str, str]) -> dict:
             "Buyer Name",
             "Full Name",
         ),
+        "shipping_address_line1": pick(
+            "Ship To Address 1", "Shipping Address 1", "Ship To Street 1", "Address Line 1"
+        ),
+        "shipping_address_line2": pick(
+            "Ship To Address 2", "Shipping Address 2", "Ship To Street 2", "Address Line 2"
+        ),
+        "shipping_city": pick("Ship To City", "Shipping City", "City"),
+        "shipping_state": pick("Ship To State", "Shipping State", "State"),
+        "shipping_postal_code": pick(
+            "Ship To Zip", "Ship To Postal Code", "Shipping Postal Code", "Zip Code", "Postal Code"
+        ),
+        "shipping_country": pick("Ship To Country", "Shipping Country", "Country") or "United States",
         "item_number": re.sub(r"\D", "", pick("Item Number", "Item ID", "eBay Item Number")),
         "custom_label": pick("Custom Label", "SKU"),
         "title": pick("Item Title", "Title"),

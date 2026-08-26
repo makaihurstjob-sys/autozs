@@ -38,11 +38,24 @@ BELOW_COST_TOLERANCE = 0.01
 # mark_out_of_stock always means quantity 0, restore_stock means quantity 1.
 OUT_OF_STOCK_ACTION = "mark_out_of_stock"
 RESTOCK_ACTION = "restore_stock"
-STOCK_ACTIONS = {OUT_OF_STOCK_ACTION, RESTOCK_ACTION}
-STOCK_ACTION_QUANTITY = {OUT_OF_STOCK_ACTION: 0, RESTOCK_ACTION: 1}
+RETIRE_ZERO_VIEW_ACTION = "retire_zero_view"
+RETIRE_DUPLICATE_ACTION = "retire_duplicate"
+STOCK_ACTIONS = {OUT_OF_STOCK_ACTION, RESTOCK_ACTION, RETIRE_ZERO_VIEW_ACTION, RETIRE_DUPLICATE_ACTION}
+STOCK_ACTION_QUANTITY = {
+    OUT_OF_STOCK_ACTION: 0,
+    RESTOCK_ACTION: 1,
+    RETIRE_ZERO_VIEW_ACTION: 0,
+    RETIRE_DUPLICATE_ACTION: 0,
+}
 
 
-def _revision_evidence(db: Session, product_id: int, target_price: float, old_price: float | None) -> dict:
+def _revision_evidence(
+    db: Session,
+    product_id: int,
+    target_price: float,
+    old_price: float | None,
+    listing: EbayListing | None = None,
+) -> dict:
     supplier = db.scalar(
         select(SupplierProduct)
         .where(SupplierProduct.product_id == product_id)
@@ -96,7 +109,37 @@ def _revision_evidence(db: Session, product_id: int, target_price: float, old_pr
     exceeds_auto_limit = change_percent is not None and change_percent > max_change
     if exceeds_auto_limit:
         reasons.append(f"Price change {change_percent:.1f}% exceeds the {max_change:.1f}% automatic limit")
-    auto_approve = bool(settings.get("ebay_revision_auto_approve_enabled", False)) and guard_passed and not exceeds_auto_limit
+    auto_approval_blocks: list[str] = []
+    if not bool(settings.get("ebay_revision_auto_approve_enabled", False)):
+        auto_approval_blocks.append("automatic approval is disabled")
+    if not guard_passed:
+        auto_approval_blocks.append("the pricing guard did not pass")
+    if exceeds_auto_limit:
+        auto_approval_blocks.append("the price change exceeds the automatic limit")
+    unavailable = supplier_availability_block(supplier)
+    if supplier is None:
+        auto_approval_blocks.append("supplier evidence is missing")
+    elif unavailable is not None:
+        auto_approval_blocks.append(unavailable)
+    else:
+        freshness_hours = max(1.0, min(24.0, float(settings.get("source_refresh_interval_hours", 6.0) or 6.0)))
+        supplier_checked_at = supplier.updated_at or supplier.created_at
+        if supplier_checked_at is None or supplier_checked_at < _now() - timedelta(hours=freshness_hours):
+            auto_approval_blocks.append(f"supplier evidence is older than {freshness_hours:g} hours")
+        if minimum_order_quantity != 1:
+            auto_approval_blocks.append("multi-unit supplier orders require manual review")
+    if listing is None:
+        auto_approval_blocks.append("the live listing was not revalidated")
+    else:
+        if str(listing.status or "").lower() not in REVISION_LISTING_STATUSES:
+            auto_approval_blocks.append("the eBay listing is not active")
+        if int(listing.quantity or 0) <= 0:
+            auto_approval_blocks.append("the eBay listing has no sellable quantity")
+        if listing.price is None or old_price is None or abs(float(listing.price) - float(old_price)) > 0.001:
+            auto_approval_blocks.append("the stored live price changed during validation")
+    auto_approve = not auto_approval_blocks
+    if bool(settings.get("ebay_revision_auto_approve_enabled", False)) and auto_approval_blocks:
+        reasons.append(f"Automatic approval withheld: {'; '.join(auto_approval_blocks)}")
     if not reasons:
         reasons.append(
             f"Projected profit ${projected_profit:.2f}; awaiting approval"
@@ -113,11 +156,14 @@ def _revision_evidence(db: Session, product_id: int, target_price: float, old_pr
         "approval_required": not auto_approve,
         "approved_at": _now() if auto_approve else None,
         "status": EbayRevisionJobStatus.queued.value if auto_approve else EbayRevisionJobStatus.needs_review.value,
+        "auto_approval_blocks": auto_approval_blocks,
     }
 
 
 def _apply_evidence(job: EbayRevisionJob, evidence: dict) -> None:
     for key, value in evidence.items():
+        if key == "auto_approval_blocks":
+            continue
         setattr(job, key, value)
 
 
@@ -180,6 +226,7 @@ def enqueue_ebay_stock_revisions(
         .join(SupplierProduct, SupplierProduct.product_id == Product.id)
         .where(Product.status != ProductStatus.deleted.value)
         .where(EbayListing.status.in_(REVISION_LISTING_STATUSES))
+        .where(EbayListing.relist_blocked.is_(False))
         .order_by(EbayListing.created_at.desc(), EbayListing.id.desc())
     )
     if product_ids is not None:
@@ -252,6 +299,93 @@ def enqueue_ebay_stock_revisions(
     return blocked, released
 
 
+def enqueue_zero_view_retirement(db: Session, listing_id: int, replacement_product_id: int) -> EbayRevisionJob:
+    """Queue a quantity-zero retirement only after its replacement is confirmed live."""
+    listing = db.get(EbayListing, listing_id)
+    if listing is None or listing.status not in REVISION_LISTING_STATUSES or int(listing.quantity or 0) <= 0:
+        raise ValueError("The zero-view listing is no longer live and sellable")
+    if listing.relist_blocked:
+        raise ValueError("The zero-view listing is already retired")
+    existing = db.scalar(
+        select(EbayRevisionJob)
+        .where(EbayRevisionJob.ebay_listing_id == listing.id)
+        .where(EbayRevisionJob.action == RETIRE_ZERO_VIEW_ACTION)
+        .where(EbayRevisionJob.status.in_(ACTIVE_STATUSES | {EbayRevisionJobStatus.completed.value}))
+        .order_by(EbayRevisionJob.id.desc())
+    )
+    if existing is not None:
+        return existing
+    job = EbayRevisionJob(
+        product_id=listing.product_id,
+        ebay_listing_id=listing.id,
+        ebay_account_key=listing.account_id or "manual",
+        action=RETIRE_ZERO_VIEW_ACTION,
+        old_price=listing.price,
+        target_price=float(listing.price or 0),
+        guard_reason=f"Zero views after the configured age; replacement product {replacement_product_id} is live.",
+        message=f"Retiring zero-view listing after replacement product {replacement_product_id} was confirmed live.",
+        **_stock_job_fields(listing, None),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def enqueue_duplicate_listing_retirement(
+    db: Session,
+    duplicate_listing_id: int,
+    canonical_listing_id: int,
+) -> EbayRevisionJob:
+    """Queue quantity zero only when two live listings share one stable supplier SKU."""
+    duplicate = db.get(EbayListing, duplicate_listing_id)
+    canonical = db.get(EbayListing, canonical_listing_id)
+    if duplicate is None or canonical is None or duplicate.id == canonical.id:
+        raise ValueError("Duplicate and canonical listings must be distinct existing records")
+    for listing in (duplicate, canonical):
+        if listing.status not in REVISION_LISTING_STATUSES or int(listing.quantity or 0) <= 0:
+            raise ValueError("Both duplicate candidates must be live and sellable")
+    duplicate_supplier = db.scalar(select(SupplierProduct).where(SupplierProduct.product_id == duplicate.product_id))
+    canonical_supplier = db.scalar(select(SupplierProduct).where(SupplierProduct.product_id == canonical.product_id))
+    duplicate_sku = str(duplicate_supplier.supplier_sku or "").strip() if duplicate_supplier else ""
+    canonical_sku = str(canonical_supplier.supplier_sku or "").strip() if canonical_supplier else ""
+    if (
+        not duplicate_sku
+        or duplicate_sku != canonical_sku
+        or duplicate_supplier.supplier != canonical_supplier.supplier
+        or duplicate.listing_id == canonical.listing_id
+    ):
+        raise ValueError("Listings do not share one stable supplier identity")
+    existing = db.scalar(
+        select(EbayRevisionJob)
+        .where(EbayRevisionJob.ebay_listing_id == duplicate.id)
+        .where(EbayRevisionJob.action == RETIRE_DUPLICATE_ACTION)
+        .where(EbayRevisionJob.status.in_(ACTIVE_STATUSES | {EbayRevisionJobStatus.completed.value}))
+        .order_by(EbayRevisionJob.id.desc())
+    )
+    if existing is not None:
+        return existing
+    reason = (
+        f"Duplicate supplier {duplicate_supplier.supplier} SKU {duplicate_sku}; preserving eBay item "
+        f"{canonical.listing_id} and retiring newer item {duplicate.listing_id}."
+    )
+    job = EbayRevisionJob(
+        product_id=duplicate.product_id,
+        ebay_listing_id=duplicate.id,
+        ebay_account_key=duplicate.account_id or "manual",
+        action=RETIRE_DUPLICATE_ACTION,
+        old_price=duplicate.price,
+        target_price=float(duplicate.price or 0),
+        guard_reason=reason,
+        message=reason,
+        **_stock_job_fields(duplicate, duplicate_supplier),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 def enqueue_ebay_price_revisions(
     db: Session,
     product_ids: list[int] | None = None,
@@ -267,6 +401,7 @@ def enqueue_ebay_price_revisions(
         .join(ListingDraft, ListingDraft.product_id == Product.id)
         .where(Product.status != ProductStatus.deleted.value)
         .where(EbayListing.status.in_(REVISION_LISTING_STATUSES))
+        .where(EbayListing.relist_blocked.is_(False))
         .where(ListingDraft.marketplace == "ebay")
         .order_by(EbayListing.created_at.desc(), EbayListing.id.desc())
     )
@@ -318,7 +453,7 @@ def enqueue_ebay_price_revisions(
                 active_job.completed_at = _now()
                 active_job.message = "Cancelled because the eBay price already matches the current draft price."
             continue
-        evidence = _revision_evidence(db, listing.product_id, target_price, listing.price)
+        evidence = _revision_evidence(db, listing.product_id, target_price, listing.price, listing)
         # Never propose selling below cost. A target whose projected profit is
         # negative is always a data fault (a stale or corrupted draft price), not a
         # pricing decision, so it must not be created or kept alive -- otherwise the
@@ -336,7 +471,11 @@ def enqueue_ebay_price_revisions(
             active_job.target_price = target_price
             active_job.old_price = listing.price
             _apply_evidence(active_job, evidence)
-            active_job.message = f"Target updated to ${target_price:.2f}; safety review reset."
+            active_job.message = (
+                f"Target revalidated at ${target_price:.2f}; approved by guarded automation."
+                if active_job.status == EbayRevisionJobStatus.queued.value
+                else f"Target updated to ${target_price:.2f}; safety review reset."
+            )
             updated += 1
             continue
         db.add(
@@ -350,7 +489,7 @@ def enqueue_ebay_price_revisions(
                     f"Proposed eBay price update from {_price(listing.price)} to ${target_price:.2f}. "
                     f"{evidence['guard_reason']}."
                 ),
-                **evidence,
+                **{key: value for key, value in evidence.items() if key != "auto_approval_blocks"},
             )
         )
         queued += 1
@@ -444,7 +583,7 @@ def create_ebay_revision_canary(
     current = round(float(listing.price), 2) if listing.price is not None else None
     if current == target:
         raise ValueError("The canary target already matches the stored eBay price")
-    evidence = _revision_evidence(db, product_id, target, listing.price)
+    evidence = _revision_evidence(db, product_id, target, listing.price, listing)
     if not evidence["guard_passed"]:
         raise ValueError(evidence["guard_reason"])
     for existing in db.scalars(
@@ -557,7 +696,35 @@ def update_ebay_revision_job(
         if status == EbayRevisionJobStatus.completed.value:
             listing = db.get(EbayListing, job.ebay_listing_id)
             if listing is not None:
-                listing.price = job.target_price
+                if job.action in STOCK_ACTION_QUANTITY:
+                    listing.quantity = STOCK_ACTION_QUANTITY[job.action]
+                    if job.action in {RETIRE_ZERO_VIEW_ACTION, RETIRE_DUPLICATE_ACTION}:
+                        listing.relist_blocked = True
+                        listing.removal_reason = (
+                            "duplicate_supplier_listing"
+                            if job.action == RETIRE_DUPLICATE_ACTION
+                            else "zero_views_29_days"
+                        )
+                        listing.removal_detail = job.guard_reason
+                        listing.removed_at = _now()
+                        if job.action == RETIRE_DUPLICATE_ACTION:
+                            sibling_rows = (
+                                db.query(EbayListing)
+                                .filter(
+                                    EbayListing.listing_id == listing.listing_id,
+                                    EbayListing.id != listing.id,
+                                )
+                                .all()
+                            )
+                            for sibling in sibling_rows:
+                                sibling.quantity = 0
+                                sibling.status = "tombstoned"
+                                sibling.relist_blocked = True
+                                sibling.removal_reason = "duplicate_supplier_listing"
+                                sibling.removal_detail = job.guard_reason
+                                sibling.removed_at = listing.removed_at
+                else:
+                    listing.price = job.target_price
     if message is not None:
         job.message = message
     db.commit()

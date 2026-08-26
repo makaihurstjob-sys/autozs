@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+import json
 from urllib.parse import urlencode
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.domain import AppSetting, EbayListing, ListingJob, ListingJobStatus, Product, ProductStatus
+from app.models.domain import AppSetting, EbayListing, ListingJob, ListingJobStatus, Product, ProductStatus, SupplierProduct
 from app.services.ebay_browser_account import assert_ebay_browser_account_can_list
 from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing
 from app.services.importer import build_ebay_listing_package, build_listing_readiness
@@ -23,6 +25,11 @@ TERMINAL_STATUSES = {
     ListingJobStatus.cancelled.value,
 }
 STALE_RUNNING_MINUTES = 30
+ROTATION_PENDING_KEY = "zero_view_rotation_pending_json"
+ROTATION_REPLACEMENT_FRESH_HOURS = 24
+ROTATION_VIEW_FRESH_HOURS = 48
+ROTATION_HIGH_RISK_TITLE_TOKENS = ("pallet", "cu. ft.", "mulch", "soil", "fertilizer", "vacuum", "underlayment", "door mat")
+EBAY_SCHEDULE_MINIMUM_LEAD = timedelta(minutes=45)
 
 
 def read_automation_pause(db: Session) -> dict:
@@ -136,6 +143,266 @@ def enqueue_listing_jobs(
     for job in jobs:
         db.refresh(job)
     return jobs
+
+
+def queue_zero_view_listing_rotations(
+    db: Session,
+    ebay_account_key: str = "manual",
+    limit: int = 15,
+    now: datetime | None = None,
+) -> dict:
+    """Queue fresh, profitable replacements first; retirement is deferred until each replacement is live."""
+    checked_at = _naive_utc(now) or _now_utc_naive()
+    settings = read_pricing_settings(db)
+    if not settings.get("auto_delist_zero_view_enabled"):
+        return {"eligible": 0, "replacements_ready": 0, "queued": 0, "pairs": []}
+    age_cutoff = checked_at - timedelta(days=float(settings.get("auto_delist_zero_view_days") or 29))
+    view_cutoff = checked_at - timedelta(hours=ROTATION_VIEW_FRESH_HOURS)
+    supplier_cutoff = checked_at - timedelta(hours=ROTATION_REPLACEMENT_FRESH_HOURS)
+    pending_setting = db.scalar(select(AppSetting).where(AppSetting.key == ROTATION_PENDING_KEY))
+    try:
+        pending = json.loads(pending_setting.value or "{}") if pending_setting else {}
+    except (TypeError, ValueError):
+        pending = {}
+    # A cancelled/failed replacement must not reserve an old listing forever.
+    # Completed jobs are removed by _complete_zero_view_rotation after the
+    # replacement listing is recorded; only failed terminal jobs are pruned here.
+    pending_changed = False
+    for job_id in list(pending):
+        try:
+            pending_job = db.get(ListingJob, int(job_id))
+        except (TypeError, ValueError):
+            pending_job = None
+        if pending_job is None or pending_job.status in {
+            ListingJobStatus.failed.value,
+            ListingJobStatus.cancelled.value,
+            ListingJobStatus.tombstoned.value,
+        }:
+            pending.pop(job_id, None)
+            pending_changed = True
+        elif pending_job.status == ListingJobStatus.completed.value:
+            pair = pending.get(job_id)
+            if isinstance(pair, dict) and pair.get("listing_id") and _replacement_is_live(db, pending_job):
+                from app.services.ebay_revisions import enqueue_zero_view_retirement
+                enqueue_zero_view_retirement(db, int(pair["listing_id"]), pending_job.product_id)
+                pending.pop(job_id, None)
+                pending_changed = True
+    pending_listing_ids = {int(value["listing_id"]) for value in pending.values() if isinstance(value, dict) and value.get("listing_id")}
+    candidates = list(db.scalars(
+        select(EbayListing)
+        .where(
+            EbayListing.account_id == ebay_account_key,
+            EbayListing.status.in_({"active", "live", "listed"}),
+            EbayListing.quantity > 0,
+            EbayListing.views == 0,
+            EbayListing.relist_blocked.is_(False),
+            EbayListing.views_measured_at.is_not(None),
+            EbayListing.views_measured_at >= view_cutoff,
+            # first_listed_at is set once and survives relists; started_at/created_at are
+            # only a fallback for rows the backfill couldn't populate (should not happen,
+            # but keeps this query correct even if that invariant is ever violated).
+            (EbayListing.first_listed_at.is_not(None) & (EbayListing.first_listed_at <= age_cutoff))
+            | (
+                EbayListing.first_listed_at.is_(None)
+                & (
+                    (EbayListing.started_at.is_not(None) & (EbayListing.started_at <= age_cutoff))
+                    | (EbayListing.started_at.is_(None) & (EbayListing.created_at <= age_cutoff))
+                )
+            ),
+        )
+        .order_by(EbayListing.first_listed_at.asc().nullsfirst(), EbayListing.id.asc())
+    ).all())
+    candidates = [listing for listing in candidates if listing.id not in pending_listing_ids]
+    # Any existing eBay item disqualifies a product as a "new" replacement,
+    # including quantity-zero items. Those must be restored through the stock
+    # revision workflow so we preserve their item ID instead of publishing a duplicate.
+    active_product_ids = set(db.scalars(select(EbayListing.product_id).where(
+        EbayListing.status.in_({"active", "live", "listed", "scheduled"}),
+    )).all())
+    replacement_ids: list[int] = []
+    products = db.scalars(
+        select(Product)
+        .join(SupplierProduct, SupplierProduct.product_id == Product.id)
+        .where(
+            Product.status == ProductStatus.monitoring.value,
+            SupplierProduct.in_stock.is_(True),
+            SupplierProduct.price_unavailable.is_(False),
+            SupplierProduct.last_price.is_not(None),
+            SupplierProduct.last_price > 0,
+            SupplierProduct.last_shipping >= 0,
+            SupplierProduct.updated_at >= supplier_cutoff,
+        )
+        .order_by(SupplierProduct.updated_at.desc(), Product.id.asc())
+    ).all()
+    for product in products:
+        if product.id in active_product_ids or any(token in product.title.lower() for token in ROTATION_HIGH_RISK_TITLE_TOKENS):
+            continue
+        if db.scalar(select(ListingJob.id).where(
+            ListingJob.product_id == product.id,
+            ListingJob.status.not_in(TERMINAL_STATUSES),
+        )) is not None:
+            continue
+        readiness = build_listing_readiness(db, product.id)
+        package = build_ebay_listing_package(db, product.id)
+        if not readiness or not readiness.get("manual_ready") or not package or not package.get("meets_minimum_profit"):
+            continue
+        replacement_ids.append(product.id)
+        if len(replacement_ids) >= min(limit, len(candidates)):
+            break
+    jobs: list[ListingJob] = []
+    # Automatic eBay submission is guarded behind a verified schedule. Give the
+    # browser enough lead time to build each listing, and stagger them so a single
+    # UI slowdown cannot cause the whole rotation batch to miss its target minute.
+    for index, replacement_id in enumerate(replacement_ids):
+        schedule_at = checked_at + timedelta(hours=2, minutes=index * 5)
+        jobs.extend(enqueue_listing_jobs(
+            db,
+            [replacement_id],
+            ebay_account_key=ebay_account_key,
+            action="publish",
+            listing_schedule_at=schedule_at,
+        ))
+    pairs = []
+    for job, listing in zip(jobs, candidates):
+        pair = {"listing_id": listing.id, "listing_item_id": listing.listing_id, "replacement_product_id": job.product_id}
+        pending[str(job.id)] = pair
+        pairs.append({"job_id": job.id, **pair})
+    if pairs or pending_changed:
+        if pending_setting is None:
+            pending_setting = AppSetting(key=ROTATION_PENDING_KEY, value="{}")
+            db.add(pending_setting)
+        pending_setting.value = json.dumps(pending, separators=(",", ":"))
+        db.commit()
+    return {"eligible": len(candidates), "replacements_ready": len(replacement_ids), "queued": len(jobs), "pairs": pairs}
+
+
+def queue_listing_expansion(
+    db: Session,
+    ebay_account_key: str = "manual",
+    limit: int = 15,
+    now: datetime | None = None,
+) -> dict:
+    """Fill headroom under active_listing_cap with the most profitable in-stock products."""
+    checked_at = _naive_utc(now) or _now_utc_naive()
+    settings = read_pricing_settings(db)
+    if not settings.get("active_listing_target_enabled"):
+        return {"cap": 0, "active_count": 0, "headroom": 0, "eligible": 0, "queued": 0, "product_ids": []}
+    cap = max(0, int(float(settings.get("active_listing_cap") or 0)))
+    # A quantity-zero listing (correctly marked out of stock by the revision
+    # pipeline) still carries status "active" until it's tombstoned or restocked,
+    # but it isn't sellable and shouldn't count against the "quality, in-stock"
+    # cap -- otherwise dead inventory silently blocks new listings from filling
+    # real headroom.
+    active_count = int(db.scalar(
+        select(func.count(EbayListing.id)).where(
+            EbayListing.account_id == ebay_account_key,
+            EbayListing.status.in_({"active", "live", "listed", "scheduled"}),
+            EbayListing.quantity > 0,
+        )
+    ) or 0)
+    headroom = max(0, cap - active_count)
+    if headroom <= 0:
+        return {"cap": cap, "active_count": active_count, "headroom": 0, "eligible": 0, "queued": 0, "product_ids": []}
+
+    # Anything already listed (in any non-terminal state) or already mid-flight
+    # in a listing job is not a fresh candidate, regardless of account -- an
+    # eBay item ID should never be duplicated across accounts either.
+    unavailable_product_ids = set(db.scalars(
+        select(EbayListing.product_id).where(
+            EbayListing.status.in_({"active", "live", "listed", "scheduled", "draft"})
+        )
+    ).all())
+    unavailable_product_ids |= set(db.scalars(
+        select(ListingJob.product_id).where(ListingJob.status.not_in(TERMINAL_STATUSES))
+    ).all())
+
+    products = db.scalars(
+        select(Product)
+        .join(SupplierProduct, SupplierProduct.product_id == Product.id)
+        .where(
+            Product.status == ProductStatus.monitoring.value,
+            SupplierProduct.in_stock.is_(True),
+            SupplierProduct.price_unavailable.is_(False),
+            SupplierProduct.last_price.is_not(None),
+            SupplierProduct.last_price > 0,
+            SupplierProduct.last_shipping >= 0,
+        )
+        .order_by(Product.id.asc())
+    ).all()
+
+    scored: list[tuple[float, int]] = []
+    for product in products:
+        if product.id in unavailable_product_ids or _relist_is_blocked(db, product.id):
+            continue
+        readiness = build_listing_readiness(db, product.id)
+        package = build_ebay_listing_package(db, product.id)
+        if not readiness or not readiness.get("manual_ready") or not package or not package.get("meets_minimum_profit"):
+            continue
+        profit = package.get("estimated_profit")
+        if profit is None:
+            continue
+        scored.append((float(profit), product.id))
+
+    # Highest profit margin first; product id as a stable tiebreaker.
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+    selected_ids = [product_id for _, product_id in scored[: min(headroom, limit, len(scored))]]
+
+    jobs: list[ListingJob] = []
+    for index, product_id in enumerate(selected_ids):
+        schedule_at = checked_at + timedelta(hours=2, minutes=index * 5)
+        jobs.extend(enqueue_listing_jobs(
+            db,
+            [product_id],
+            ebay_account_key=ebay_account_key,
+            action="publish",
+            listing_schedule_at=schedule_at,
+        ))
+    return {
+        "cap": cap,
+        "active_count": active_count,
+        "headroom": headroom,
+        "eligible": len(scored),
+        "queued": len(jobs),
+        "product_ids": [job.product_id for job in jobs],
+    }
+
+
+def _complete_zero_view_rotation(db: Session, job: ListingJob, listing_id: str | None) -> None:
+    if job.status != ListingJobStatus.completed.value or not listing_id:
+        return
+    setting = db.scalar(select(AppSetting).where(AppSetting.key == ROTATION_PENDING_KEY))
+    if setting is None:
+        return
+    try:
+        pending = json.loads(setting.value or "{}")
+    except (TypeError, ValueError):
+        return
+    pair = pending.get(str(job.id))
+    if not isinstance(pair, dict) or not pair.get("listing_id"):
+        return
+    if not _replacement_is_live(db, job):
+        # A scheduled eBay item is not buyer-visible yet. Keep the pair until the
+        # active-listings sync promotes it to active and the periodic reconciler
+        # above can safely retire the old item.
+        return
+    from app.services.ebay_revisions import enqueue_zero_view_retirement
+    enqueue_zero_view_retirement(db, int(pair["listing_id"]), job.product_id)
+    pending.pop(str(job.id), None)
+    setting.value = json.dumps(pending, separators=(",", ":"))
+    db.commit()
+
+
+def _replacement_is_live(db: Session, job: ListingJob) -> bool:
+    return db.scalar(
+        select(EbayListing.id)
+        .where(
+            EbayListing.product_id == job.product_id,
+            EbayListing.account_id == job.ebay_account_key,
+            EbayListing.status.in_({"active", "live", "listed"}),
+            EbayListing.quantity > 0,
+        )
+        .limit(1)
+    ) is not None
 
 
 def relist_blocked_product_ids(db: Session, product_ids: list[int]) -> list[int]:
@@ -271,6 +538,22 @@ def start_next_listing_job(
     job = db.scalar(stmt)
     if job is None:
         return None
+    if job.action == "publish" and job.listing_schedule_at is not None:
+        # listing_schedule_at is stored as naive Eastern wall time because that
+        # is how the eBay listing UI is driven. A paused/cooling-down queue can
+        # easily outlive that time; sending the stale value makes eBay reject an
+        # otherwise valid draft at the final click. Roll it forward before the
+        # browser claims the job, leaving enough lead for the UI workflow.
+        eastern_now = now.replace(tzinfo=timezone.utc).astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+        minimum_start = eastern_now + EBAY_SCHEDULE_MINIMUM_LEAD
+        if job.listing_schedule_at < minimum_start:
+            rolled_start = minimum_start.replace(second=0, microsecond=0)
+            job.listing_schedule_at = rolled_start
+            product = db.get(Product, job.product_id)
+            if product is not None:
+                product.listing_schedule_at = rolled_start
+            db.commit()
+            db.refresh(job)
     return start_listing_job(db, job)
 
 
@@ -329,6 +612,7 @@ def update_listing_job(
         _upsert_listing_from_completed_job(db, job, listing_id)
     db.commit()
     db.refresh(job)
+    _complete_zero_view_rotation(db, job, listing_id)
     return job
 
 
@@ -523,11 +807,13 @@ def _now_utc_naive() -> datetime:
 def _supplier_delivery_unavailable(product: Product) -> bool:
     supplier = product.supplier_products[0] if product.supplier_products else None
     if supplier is None:
-        return False
-    return supplier.in_stock is False or (
-        supplier.last_price is not None
-        and supplier.last_shipping is not None
-        and float(supplier.last_shipping) < 0
+        return True
+    return (
+        supplier.in_stock is not True
+        or supplier.price_unavailable is True
+        or supplier.last_price is None
+        or supplier.last_shipping is None
+        or float(supplier.last_shipping) < 0
     )
 
 
@@ -549,27 +835,54 @@ def _upsert_listing_from_completed_job(db: Session, job: ListingJob, listing_id:
         return
     package = build_ebay_listing_package(db, job.product_id)
     now = _now_utc_naive()
-    start = _naive_utc(job.listing_schedule_at) or now
-    listing = db.scalar(
-        select(EbayListing).where(
-            EbayListing.product_id == job.product_id,
-            EbayListing.listing_id == clean_listing_id,
-        )
+    eastern_now = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    start = _naive_utc(job.listing_schedule_at) or eastern_now
+    matching_listings = db.scalars(
+        select(EbayListing)
+        .where(EbayListing.listing_id == clean_listing_id)
+        .order_by(EbayListing.id)
+    ).all()
+    # The browser reports the eBay confirmation before it completes the job. If two
+    # confirmation observers overlap on an older database without the current unique
+    # index, both can create a row. Always converge on the production confirmation and
+    # quarantine any duplicate rather than allowing two sellable local records.
+    listing = next(
+        (
+            candidate
+            for candidate in matching_listings
+            if candidate.account_id == job.ebay_account_key and candidate.environment == "production"
+        ),
+        None,
     )
+    if listing is None:
+        listing = next(
+            (candidate for candidate in matching_listings if candidate.product_id == job.product_id),
+            None,
+        )
     confirmed_live = listing is not None and listing.status == "active"
-    is_live = confirmed_live or start <= now
-    actual_start = now if confirmed_live and start > now else start
+    is_live = confirmed_live or start <= eastern_now
+    actual_start = now if confirmed_live and start > eastern_now else start
     if listing is None:
         listing = EbayListing(product_id=job.product_id, listing_id=clean_listing_id, account_id=job.ebay_account_key)
+        listing.environment = "manual"
         db.add(listing)
+    for duplicate in matching_listings:
+        if duplicate is listing:
+            continue
+        duplicate.status = "tombstoned"
+        duplicate.quantity = 0
+        duplicate.removal_reason = "duplicate_local_record"
+        duplicate.removal_detail = f"Superseded by local listing record {listing.id or 'pending'} for eBay item {clean_listing_id}."
+        duplicate.removed_at = now
     listing.product_id = job.product_id
     listing.account_id = job.ebay_account_key
-    listing.environment = "manual"
     listing.price = package["price"] if package else listing.price
     listing.quantity = max(1, int(listing.quantity or 1))
     listing.status = "active" if is_live else "scheduled"
     listing.started_at = actual_start if is_live else None
-    if is_live and (listing.renews_at is None or (confirmed_live and start > now)):
+    if is_live and listing.first_listed_at is None:
+        listing.first_listed_at = actual_start
+    if is_live and (listing.renews_at is None or (confirmed_live and start > eastern_now)):
         listing.renews_at = actual_start + timedelta(days=30)
     elif not is_live:
         listing.renews_at = None

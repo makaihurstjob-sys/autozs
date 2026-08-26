@@ -189,6 +189,7 @@ class Product(Base, TimestampMixin):
     return_risk_rate: Mapped[float] = mapped_column(Float, default=0.02)
     undercut_amount: Mapped[float] = mapped_column(Float, default=0.20)
     listing_schedule_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ebay_item_specifics_json: Mapped[str] = mapped_column(Text, default="{}")
     capture_lease_owner: Mapped[str | None] = mapped_column(String(256), nullable=True)
     capture_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -292,6 +293,10 @@ class EbayListing(Base, TimestampMixin):
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set once, the first time this listing ever goes live, and never overwritten again.
+    # started_at tracks the *current* listing period and resets on every relist/resync,
+    # so age-based pruning (queue_zero_view_listing_rotations) must anchor on this instead.
+    first_listed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     renews_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     views: Mapped[int] = mapped_column(Integer, default=0)
     view_delta: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -588,9 +593,22 @@ class Order(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ebay_order_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # eBay's own short numeric ID for this order, distinct from ebay_order_id
+    # (e.g. "122" vs "22-15024-78151"). The `srn` query param on
+    # ebay.com/sh/ord/details requires this specific value -- passing
+    # ebay_order_id there resolves to "Unfortunately there has been an error
+    # retrieving your order" every time, which is what silently broke the
+    # customer-message composer runner.
+    sales_record_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     account_id: Mapped[str] = mapped_column(String(128), default="sandbox")
     buyer_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
     recipient_name: Mapped[str] = mapped_column(String(256), default="")
+    shipping_address_line1: Mapped[str] = mapped_column(String(256), default="")
+    shipping_address_line2: Mapped[str] = mapped_column(String(256), default="")
+    shipping_city: Mapped[str] = mapped_column(String(128), default="")
+    shipping_state: Mapped[str] = mapped_column(String(64), default="")
+    shipping_postal_code: Mapped[str] = mapped_column(String(32), default="")
+    shipping_country: Mapped[str] = mapped_column(String(64), default="United States")
     status: Mapped[str] = mapped_column(String(64), default="imported")
     ship_by: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     total: Mapped[float] = mapped_column(Float, default=0.0)
@@ -670,6 +688,10 @@ class CustomerConversation(Base, TimestampMixin):
         while len(parts) > 1 and parts[0].rstrip(".").lower() in {"mr", "mrs", "ms", "miss", "dr"}:
             parts.pop(0)
         return parts[0].strip(" ,.")
+
+    @property
+    def order_sales_record_number(self) -> str | None:
+        return self.order.sales_record_number if self.order else None
 
 
 class CustomerMessage(Base, TimestampMixin):

@@ -410,6 +410,54 @@ async function runAssistantTest() {
     );
   }
 
+  const virtualDescriptionResult = await vm.runInContext(`(async () => {
+    const saved = {
+      findDescriptionSourceField,
+      findHtmlCodeCheckbox,
+      findHtmlCodeControl,
+      findHtmlCodeLabel,
+      visibleDescriptionSourceField,
+      isVisible,
+      delay,
+      querySelectorAll: document.querySelectorAll,
+    };
+    let mounted = false;
+    let scrolled = false;
+    const checkbox = {
+      checked: false,
+      click() { this.checked = true; },
+      closest: () => null,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
+      id: "virtual-html-mode",
+    };
+    const heading = {
+      innerText: "Description (required) Show HTML Code",
+      textContent: "Description (required) Show HTML Code",
+      scrollIntoView() { scrolled = true; mounted = true; },
+    };
+    document.querySelectorAll = (selector) => selector.includes("h1") ? [heading] : [];
+    isVisible = () => true;
+    delay = async () => {};
+    findDescriptionSourceField = () => null;
+    findHtmlCodeCheckbox = () => (mounted ? checkbox : null);
+    findHtmlCodeControl = () => (mounted ? checkbox : null);
+    findHtmlCodeLabel = () => null;
+    visibleDescriptionSourceField = () => (mounted && checkbox.checked ? { element: {} } : null);
+    const ok = await enableHtmlCodeMode();
+    findDescriptionSourceField = saved.findDescriptionSourceField;
+    findHtmlCodeCheckbox = saved.findHtmlCodeCheckbox;
+    findHtmlCodeControl = saved.findHtmlCodeControl;
+    findHtmlCodeLabel = saved.findHtmlCodeLabel;
+    visibleDescriptionSourceField = saved.visibleDescriptionSourceField;
+    isVisible = saved.isVisible;
+    delay = saved.delay;
+    document.querySelectorAll = saved.querySelectorAll;
+    return { ok, scrolled, mounted };
+  })()`, context);
+  if (!virtualDescriptionResult.ok || !virtualDescriptionResult.scrolled || !virtualDescriptionResult.mounted) {
+    throw new Error(`Expected the virtualized Description section to be scrolled into view before editor lookup, got ${JSON.stringify(virtualDescriptionResult)}`);
+  }
+
   const htmlToggleResult = await vm.runInContext(`(async () => {
     const saved = {
       findHtmlCodeCheckbox,
@@ -482,6 +530,9 @@ async function runAssistantTest() {
     description: "<p>Fresh scented tall kitchen trash bags.</p>",
     item_specifics: { Brand: "HDX" },
   };
+  if (vm.runInContext(`descriptionSourceMatches(${JSON.stringify(packageData.description)})`, context)) {
+    throw new Error("Expected an empty or stale hidden description field not to short-circuit description repair.");
+  }
   if (vm.runInContext("Boolean(findDescriptionSourceField())", context)) {
     throw new Error("Expected hidden raw description source to be ignored before HTML mode is enabled.");
   }
@@ -518,6 +569,14 @@ async function runAssistantTest() {
   if (exactDescriptionMatch) {
     throw new Error("Expected appended HTML after old text to fail exact source verification.");
   }
+  const normalizedDescription = vm.runInContext(`listingDescriptionPlainText(${JSON.stringify(packageData.description)})`, context);
+  if (!vm.runInContext(`normalizedDescriptionTextMatches(${JSON.stringify(normalizedDescription)}, ${JSON.stringify(packageData.description)})`, context)) {
+    throw new Error("Expected eBay-normalized content with identical plain text to pass description verification.");
+  }
+  if (vm.runInContext(`normalizedDescriptionTextMatches("Different listing text", ${JSON.stringify(packageData.description)})`, context)) {
+    throw new Error("Expected different normalized description content to fail verification.");
+  }
+  rawDescription.value = packageData.description;
   if (!values.includes("HDX")) throw new Error("Expected provided brand item specific to be filled.");
   const overlayFocusedField = new FakeField({ id: "autozs-overlay", parentText: "AutoZS loading overlay" });
   const guardedBrandField = new FakeField({ id: "guarded-brand", parentText: "Brand" });
@@ -977,6 +1036,10 @@ async function runAssistantTest() {
   const flooringCategory = new FakeButton("Home & Garden > Home Improvement > Building & Hardware > Flooring & Tiles > Other Flooring & Tiles");
   const carpetCategory = new FakeButton("Home & Garden > Rugs & Carpets > Carpet Tiles");
   const vinylCategory = new FakeButton("Home & Garden > Home Improvement > Building & Hardware > Flooring & Tiles > Vinyl Flooring");
+  carpetCategory.click = () => {
+    carpetCategory.clicked = true;
+    carpetCategory.getAttribute = (name) => name === "aria-selected" ? "true" : null;
+  };
   const categoryDone = new FakeButton("Done");
   categoryDone.click = () => {
     categoryDone.clicked = true;
@@ -986,6 +1049,7 @@ async function runAssistantTest() {
   const categoryDialog = {
     innerText: "Category\nSuggested\nHome & Garden > Rugs & Carpets > Carpet Tiles\nDone",
     textContent: "Category Suggested Home & Garden > Rugs & Carpets > Carpet Tiles Done",
+    querySelector: (selector) => selector.includes('[aria-selected="true"]') && carpetCategory.getAttribute("aria-selected") === "true" ? carpetCategory : null,
     querySelectorAll: (selector) => selector === "button" ? [flooringCategory, carpetCategory, vinylCategory, categoryDone] : [],
   };
   context.document.body.innerText = "Provide a category for your item\nNone selected\nContinue without match";
@@ -1237,6 +1301,95 @@ async function runAssistantTest() {
   }
   if (!source.includes("const finalRepairResult = await repairCriticalListingFields(pkg)")) {
     throw new Error("Expected a second repair pass after eBay's final editor render.");
+  }
+
+  // Regression (job 190 / product 290): runAutoDraftWorkflow re-entering on
+  // its OWN just-published confirmation page (tab reload, service-worker
+  // restart) must complete the job with the real eBay item id instead of
+  // assuming every confirmation page is a stale foreign tab and forcing a
+  // false needs_review.
+  context.document.body.innerText = "Your listing is now live M18 Battery ID-800562536955 View listing";
+  context.document.querySelectorAll = (selector) => selector === 'a[href*="/itm/"]'
+    ? [{ href: "https://www.ebay.com/itm/800562536955" }]
+    : [];
+  context.location.search = "?draftId=5299900012345&mode=AddItem";
+  context.location.hash = "";
+  const ownJob = {
+    id: 190,
+    product_id: 290,
+    ebay_draft_id: "5299900012345",
+    listing_schedule_at: "",
+    status: "needs_review",
+  };
+  const ownWorkflowCalls = [];
+  context.fetch = async (url, options = {}) => {
+    ownWorkflowCalls.push({ url: String(url), body: options.body || "", method: options.method || "GET" });
+    if (/\/listing-jobs\/190$/.test(String(url)) && (options.method || "GET") === "GET") {
+      return { ok: true, json: async () => ownJob };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  vm.runInContext(`
+    (() => {
+      let __ownWorkflow = { mode: "create_draft", phase: "opened", productId: "290", jobId: "190" };
+      readAutoWorkflowState = () => __ownWorkflow;
+      writeAutoWorkflowState = (update) => {
+        __ownWorkflow = Object.assign({}, __ownWorkflow, update, { updatedAt: new Date().toISOString() });
+        return __ownWorkflow;
+      };
+      readSavedProductId = () => "290";
+      readSavedJobId = () => "190";
+    })()
+  `, context);
+  const ownResult = await vm.runInContext(`runAutoDraftWorkflow({ price: 23.53 })`, context);
+  const ownJobUpdateCall = ownWorkflowCalls.find((call) => call.url.endsWith("/listing-jobs/190") && call.method === "PATCH");
+  if (!ownJobUpdateCall) {
+    throw new Error(`Expected runAutoDraftWorkflow to complete job 190 for its own confirmation, got ${JSON.stringify(ownWorkflowCalls)}`);
+  }
+  const ownJobUpdateBody = JSON.parse(ownJobUpdateCall.body);
+  if (ownJobUpdateBody.status !== "completed" || ownJobUpdateBody.listing_id !== "800562536955") {
+    throw new Error(`Expected job 190 to complete with its real eBay item id instead of needs_review, got ${ownJobUpdateCall.body}`);
+  }
+  if (ownResult.terminal !== true || !ownResult.message.includes("800562536955")) {
+    throw new Error(`Expected runAutoDraftWorkflow to report success for its own confirmation, got ${JSON.stringify(ownResult)}`);
+  }
+
+  // A genuinely foreign/stale confirmation page (no owning draft or job)
+  // must still fall back to needs_review, preserving the original guard.
+  context.document.body.innerText = "Your listing is now live Garden Knife ID-800999999999 View listing";
+  context.document.querySelectorAll = (selector) => selector === 'a[href*="/itm/"]'
+    ? [{ href: "https://www.ebay.com/itm/800999999999" }]
+    : [];
+  context.location.search = "";
+  context.location.hash = "";
+  const staleWorkflowCalls = [];
+  context.fetch = async (url, options = {}) => {
+    staleWorkflowCalls.push({ url: String(url), body: options.body || "", method: options.method || "GET" });
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  vm.runInContext(`
+    (() => {
+      let __staleWorkflow = { mode: "create_draft", phase: "opened", jobId: "191" };
+      readAutoWorkflowState = () => __staleWorkflow;
+      writeAutoWorkflowState = (update) => {
+        __staleWorkflow = Object.assign({}, __staleWorkflow, update, { updatedAt: new Date().toISOString() });
+        return __staleWorkflow;
+      };
+      readSavedProductId = () => "";
+      readSavedJobId = () => "191";
+    })()
+  `, context);
+  const staleResult = await vm.runInContext(`runAutoDraftWorkflow({ price: 19.99 })`, context);
+  const staleJobUpdateCall = staleWorkflowCalls.find((call) => call.url.endsWith("/listing-jobs/191") && call.method === "PATCH");
+  if (!staleJobUpdateCall) {
+    throw new Error(`Expected a stale foreign confirmation to still update job 191, got ${JSON.stringify(staleWorkflowCalls)}`);
+  }
+  const staleJobUpdateBody = JSON.parse(staleJobUpdateCall.body);
+  if (staleJobUpdateBody.status !== "needs_review" || !staleJobUpdateBody.message.includes("already-published")) {
+    throw new Error(`Expected a foreign confirmation page to still fall back to needs_review, got ${staleJobUpdateCall.body}`);
+  }
+  if (!staleResult.terminal || staleResult.message !== staleJobUpdateBody.message) {
+    throw new Error(`Expected stale-confirmation result to surface the needs_review message, got ${JSON.stringify(staleResult)}`);
   }
 }
 

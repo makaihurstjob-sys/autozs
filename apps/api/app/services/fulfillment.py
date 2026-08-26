@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain import (
     FulfillmentTask,
+    AppSetting,
     GiftCard,
     GiftCardLedgerEntry,
     Order,
@@ -121,6 +122,89 @@ def list_supplier_orders(db: Session, order_id: int | None = None) -> list[Suppl
     return list(db.scalars(stmt).unique().all())
 
 
+def next_ebay_tracking_upload(db: Session) -> dict[str, Any] | None:
+    supplier_order = db.scalar(
+        select(SupplierOrder)
+        .join(Order, Order.id == SupplierOrder.order_id)
+        .where(
+            SupplierOrder.status == SupplierOrderStatus.shipped.value,
+            SupplierOrder.tracking_number != "",
+            SupplierOrder.carrier != "",
+            SupplierOrder.external_order_id != "",
+            Order.ebay_order_id != "",
+            Order.status.notin_(["shipped", "delivered", "cancelled"]),
+        )
+        .order_by(SupplierOrder.shipped_at.asc(), SupplierOrder.id.asc())
+    )
+    if supplier_order is None or supplier_order.order is None:
+        return None
+    return {
+        "supplier_order_id": supplier_order.id,
+        "order_id": supplier_order.order_id,
+        "ebay_order_id": supplier_order.order.ebay_order_id,
+        "account_key": supplier_order.order.account_id,
+        "sales_record_number": supplier_order.order.sales_record_number or "",
+        "supplier_confirmation": supplier_order.external_order_id,
+        "carrier": supplier_order.carrier,
+        "tracking_number": supplier_order.tracking_number,
+    }
+
+
+def capture_supplier_tracking(
+    db: Session,
+    *,
+    supplier: str,
+    external_order_id: str,
+    tracking_number: str,
+    carrier: str,
+    order_id: int | None = None,
+) -> dict[str, Any]:
+    supplier = supplier.strip().lower()
+    external_order_id = external_order_id.strip().upper()
+    tracking_number = tracking_number.strip().upper()
+    carrier = carrier.strip()
+    if supplier != "home_depot":
+        raise ValueError("Only Home Depot tracking captures are supported.")
+
+    matches = list(db.scalars(select(SupplierOrder).where(
+        SupplierOrder.supplier == supplier,
+        SupplierOrder.external_order_id == external_order_id,
+    )).all())
+    if len(matches) > 1:
+        raise ValueError("More than one supplier order uses this confirmation number.")
+    supplier_order = matches[0] if matches else None
+    created = False
+    if supplier_order is None and order_id is None:
+        return {"matched": False, "created": False, "status": "unmatched"}
+    if supplier_order is None:
+        order = db.get(Order, order_id)
+        if order is None:
+            raise LookupError("Order not found.")
+        existing = db.scalar(select(SupplierOrder).where(SupplierOrder.order_id == order.id))
+        if existing is not None:
+            if existing.external_order_id and existing.external_order_id != external_order_id:
+                raise ValueError("That AUTOZS order is already linked to a different supplier confirmation.")
+            supplier_order = existing
+        else:
+            supplier_order = prepare_supplier_order(db, order.id)
+            created = True
+
+    if supplier_order.tracking_number and supplier_order.tracking_number != tracking_number:
+        raise ValueError("That supplier order already has a different tracking number.")
+    supplier_order.external_order_id = external_order_id
+    supplier_order.tracking_number = tracking_number
+    supplier_order.carrier = carrier
+    _apply_supplier_order_status(db, supplier_order, SupplierOrderStatus.shipped.value)
+    db.commit()
+    return {
+        "matched": True,
+        "created": created,
+        "supplier_order_id": supplier_order.id,
+        "order_id": supplier_order.order_id,
+        "status": supplier_order.status,
+    }
+
+
 def prepare_supplier_order(
     db: Session,
     order_id: int,
@@ -144,6 +228,20 @@ def prepare_supplier_order(
     )
     if order is None:
         raise LookupError("Order not found.")
+    seller_phone = str(db.scalar(select(AppSetting.value).where(
+        AppSetting.key == "fulfillment_notification_phone"
+    )) or "").strip()
+    recipient_defaults = {
+        "recipient_name": recipient_name or order.recipient_name,
+        "address_line1": address_line1 or order.shipping_address_line1,
+        "address_line2": address_line2 or order.shipping_address_line2,
+        "city": city or order.shipping_city,
+        "state": state or order.shipping_state,
+        "postal_code": postal_code or order.shipping_postal_code,
+        # Buyer phone numbers are intentionally never imported or accepted for
+        # supplier checkout. All delivery notifications belong to the seller.
+        "phone": seller_phone,
+    }
     existing = next(
         (supplier_order for supplier_order in order.supplier_orders if supplier_order.status in ACTIVE_SUPPLIER_ORDER_STATUSES),
         None,
@@ -157,13 +255,7 @@ def prepare_supplier_order(
             existing.supplier = card.supplier
         _apply_recipient(
             existing,
-            recipient_name=recipient_name,
-            address_line1=address_line1,
-            address_line2=address_line2,
-            city=city,
-            state=state,
-            postal_code=postal_code,
-            phone=phone,
+            **recipient_defaults,
         )
         _refresh_supplier_order_readiness(db, existing)
         db.commit()
@@ -180,13 +272,7 @@ def prepare_supplier_order(
     )
     _apply_recipient(
         supplier_order,
-        recipient_name=recipient_name,
-        address_line1=address_line1,
-        address_line2=address_line2,
-        city=city,
-        state=state,
-        postal_code=postal_code,
-        phone=phone,
+        **recipient_defaults,
     )
     db.add(supplier_order)
     db.flush()
@@ -327,6 +413,21 @@ def update_supplier_order(
                 raise ValueError(
                     f"Checkout total ${reported_total:,.2f} does not match the approved total ${approved_total:,.2f}."
                 )
+        if status == SupplierOrderStatus.shipped.value:
+            external_order_id = str(values.get("external_order_id", supplier_order.external_order_id) or "").strip()
+            tracking_number = str(values.get("tracking_number", supplier_order.tracking_number) or "").strip()
+            carrier = str(values.get("carrier", supplier_order.carrier) or "").strip()
+            if not external_order_id:
+                raise ValueError("Supplier confirmation number is required before marking an order shipped.")
+            if not tracking_number or not carrier:
+                raise ValueError("Carrier and tracking number are required before marking an order shipped.")
+            if supplier_order.status not in {SupplierOrderStatus.placed.value, SupplierOrderStatus.shipped.value}:
+                raise ValueError("Only a placed supplier order can be marked shipped.")
+        if status == SupplierOrderStatus.delivered.value and supplier_order.status not in {
+            SupplierOrderStatus.shipped.value,
+            SupplierOrderStatus.delivered.value,
+        }:
+            raise ValueError("Only a shipped supplier order can be marked delivered.")
         _apply_supplier_order_status(db, supplier_order, status)
     elif supplier_order.status in {SupplierOrderStatus.draft.value, SupplierOrderStatus.needs_review.value}:
         _refresh_supplier_order_readiness(db, supplier_order)
@@ -343,6 +444,13 @@ def _apply_recipient(supplier_order: SupplierOrder, **values: str) -> None:
 def _refresh_supplier_order_readiness(db: Session, supplier_order: SupplierOrder) -> None:
     supplier_order.item_subtotal = round(
         sum(float(item.unit_price or 0) * int(item.quantity or 1) for item in supplier_order.items),
+        2,
+    )
+    tax_percent = float(db.scalar(select(AppSetting.value).where(
+        AppSetting.key == "default_sales_tax_percent"
+    )) or 0)
+    supplier_order.sales_tax = round(
+        float(supplier_order.item_subtotal or 0) * max(0.0, min(tax_percent, 100.0)) / 100,
         2,
     )
     supplier_order.total = round(

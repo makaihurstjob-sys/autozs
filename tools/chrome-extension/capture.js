@@ -3,7 +3,7 @@ var DASHBOARD = "https://desktop-56u49jf.tailb2892a.ts.net/?api=https://desktop-
 // Bump this on every capture.js change. The popup renders it as "Extension build: ...",
 // which is the only way to tell whether a running Chrome has picked up new code -- nothing
 // restarts Chrome automatically, so an unbumped stamp makes a stale extension invisible.
-var CAPTURE_BUILD = "2026-08-04-home-depot-cent-price";
+var CAPTURE_BUILD = "2026-08-10-home-depot-expired-offer";
 var AUTOZS_WORKER_MODE_KEY = "autozsWorkerMode";
 
 function defaultAutozsWorkerMode() {
@@ -966,9 +966,20 @@ function captureSourceProductFromPage() {
     const parsed = parsePrice(value);
     if (parsed !== null) domPrices.push(parsed);
   };
-  const structuredOfferPrice = parseStructuredPrice(
-    offer.price ?? offer.lowPrice ?? offer.highPrice ?? offer.priceSpecification?.price
-  );
+  // Home Depot's own ld+json can outlive the price it describes: verified live on the
+  // Everbilt 800809 adapter, which still advertised offers.price 9.25 with
+  // priceValidUntil in the past while the rendered page had already reverted to 10.96.
+  // The extension's ready-check accepts the first non-null source_price it sees, and
+  // this structured price is present in the initial HTML before the client-rendered
+  // visible price hydrates, so an expired offer wins the race even though every later
+  // capture of the same page (once settled) reads the correct number. Refusing an
+  // expired offer here costs nothing when the offer is current, and stops a stale
+  // number from ever being eligible.
+  const offerPriceValidUntil = offer.priceValidUntil ? new Date(offer.priceValidUntil) : null;
+  const offerPriceExpired = Boolean(offerPriceValidUntil) && !Number.isNaN(offerPriceValidUntil.getTime()) && offerPriceValidUntil.getTime() < Date.now();
+  const structuredOfferPrice = offerPriceExpired
+    ? null
+    : parseStructuredPrice(offer.price ?? offer.lowPrice ?? offer.highPrice ?? offer.priceSpecification?.price);
   if (structuredOfferPrice !== null) structuredPrices.push(structuredOfferPrice);
   document
     .querySelectorAll('meta[property="product:price:amount"], meta[name="product:price:amount"], meta[itemprop="price"], [itemprop="price"]')
@@ -1051,6 +1062,12 @@ function captureSourceProductFromPage() {
   // the search there and only trust cents when that region carries no dollar price of its
   // own. That is what separates a genuinely sub-dollar item from a "99¢" promo beside a
   // normally priced product.
+  //
+  // The "no dollar price" test must use the same split-aware parser as the rest of the
+  // capture. Home Depot renders a normal price as "$" / "11" / "52" on three separate
+  // elements, so a per-line /\$\s*[0-9]/ test sees no dollar price at all and lets a
+  // per-each unit rate win. That is what put product 7 (True Blue 12x24x1 air filter
+  // 12-pack) at $0.96 instead of its $11.52 package price -- 11.52 / 12 = 0.96 exactly.
   const fulfillmentBoundary = /\b(?:in stock|aisle\s+\d|pickup|delivery|delivering to|add to cart|check nearby stores|ship to)\b/i;
   const detectHomeDepotCentPrice = () => {
     if (!location.hostname.includes("homedepot.com")) return null;
@@ -1060,7 +1077,9 @@ function captureSourceProductFromPage() {
       if (priceRegion.length && fulfillmentBoundary.test(line)) break;
       priceRegion.push(line);
     }
-    if (priceRegion.some((line) => /\$\s*[0-9]/.test(line))) return null;
+    const priceRegionDollars = [];
+    collectVisiblePrices(priceRegion, priceRegionDollars);
+    if (priceRegionDollars.length) return null;
     const match = priceRegion.join(" ").match(/(?:^|[^0-9.,$])([0-9]{1,2})\s*(?:¢|cents\b)/i);
     if (!match) return null;
     const parsed = Number(match[1]) / 100;
@@ -1310,7 +1329,12 @@ function captureSourceProductFromPage() {
   };
   const detectHomeDepotPurchasePrice = () => {
     if (!location.hostname.includes("homedepot.com")) return null;
-    const purchaseUnit = "(case|carton|box|pallet|package|pack|bundle|roll|piece|each|ea)";
+    // Only units that denote the whole purchase belong here. "each"/"ea"/"piece" are the
+    // per-unit RATE Home Depot prints beside a multipack's package price ("$11.52 /package
+    // ... $0.96 /each"), so treating them as the purchase total charges one filter instead
+    // of twelve. A single-unit product still prices correctly: the chain falls through to
+    // the displayed price, which is the same number.
+    const purchaseUnit = "(case|carton|box|pallet|package|pack|bundle|roll)";
     const explicitPackagePatterns = [
       new RegExp(`\\(\\s*\\$\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.\\d{2})?)\\s*\\/\\s*${purchaseUnit}\\s*\\)`, "i"),
       new RegExp(`\\$\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.\\d{2})?)\\s*(?:per|\\/)\\s*${purchaseUnit}\\b`, "i"),
@@ -1408,11 +1432,19 @@ function dedupeHomeDepotImageVariants(urls) {
 }
 
 async function importCapturedProduct(payload) {
-  const response = await autozsApiFetch("/products/import-captured", {
+  const request = () => autozsApiFetch("/products/import-captured", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  let response = await request();
+  // Captured imports are idempotent by supplier URL/SKU. One short retry keeps
+  // a valid browser capture from being discarded when SQLite is briefly busy
+  // with image preparation, while persistent failures still surface normally.
+  if (response.status >= 500 && response.status < 600) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    response = await request();
+  }
   if (!response.ok) throw new Error(await response.text());
   return response.json();
 }

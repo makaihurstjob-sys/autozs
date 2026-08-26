@@ -1,3 +1,4 @@
+import base64
 from datetime import datetime, timezone
 
 
@@ -60,3 +61,89 @@ def test_finance_overview_tracks_accounts_subscriptions_and_expenses(client) -> 
     assert overview["operating_expenses"] == 20.0
     assert overview["subscriptions"][0]["name"] == "AutoZS hosting"
     assert overview["periods"][0]["period"] == "All time"
+    assert overview["profit_verified"] is False
+    assert overview["available_business_profit"] == 0.0
+
+
+def test_finance_profit_stays_unverified_when_fulfilled_order_has_no_supplier_cost_or_fees(client) -> None:
+    queued = client.post("/orders/sync?account_key=a.m.anim-59").json()
+    claimed = client.post("/orders/sync/next?account_key=a.m.anim-59").json()
+    report = (
+        "Order Number,Buyer Username,Ship To Name,Ship To Address 1,Ship To Address 2,Ship To City,Ship To State,Ship To Zip,Ship To Country,Item Number,Item Title,Custom Label,Quantity,"
+        "Sold For,Shipping And Handling,Total Price,Paid On Date,Ship By Date,Shipped On Date,Shipping Service,Tracking Number\n"
+        "22-11111-22222,buyer,Test Buyer,1 Main St,,Denver,CO,80202,United States,800123456789,Test item,,1,"
+        "$10.00,$0.00,$10.80,Aug-20-26,Aug-22-26,Aug-21-26,USPS,9400000000000000000000\n"
+    ).encode()
+    order = client.post("/orders/import-file", json={
+        "account_key": "a.m.anim-59",
+        "run_id": claimed["id"],
+        "filename": "finance-order.csv",
+        "report_base64": base64.b64encode(report).decode(),
+    })
+    assert order.status_code == 200, order.text
+    overview = client.get("/finance/overview").json()
+    assert overview["gross_merchandise_revenue"] == 10.0
+    assert overview["realized_revenue"] == 10.0
+    assert overview["profit_verified"] is False
+    assert overview["verified_profit"] is None
+    assert overview["available_business_profit"] == 0.0
+    assert overview["unverified_order_count"] == 1
+    assert any("supplier" in issue.lower() for issue in overview["profit_data_issues"])
+    assert any("fee" in issue.lower() for issue in overview["profit_data_issues"])
+
+
+def test_finance_exposes_liquidity_bounded_profit_only_after_cost_and_fee_evidence(client) -> None:
+    client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Finance-Verified/123456",
+            "title": "Finance Verified Product",
+            "source_price": 20.0,
+            "source_shipping": 0.0,
+        },
+    )
+    order = client.post("/orders/sync-sandbox").json()
+    prepared = client.post(f"/orders/{order['id']}/supplier-orders/prepare", json={
+        "recipient_name": "Test Buyer",
+        "address_line1": "1 Main Street",
+        "city": "Denver",
+        "state": "CO",
+        "postal_code": "80202",
+    }).json()
+    approved = client.post(f"/supplier-orders/{prepared['id']}/approve")
+    assert approved.status_code == 200, approved.text
+    claimed = client.post("/supplier-orders/next")
+    assert claimed.status_code == 200, claimed.text
+    placed = client.patch(f"/supplier-orders/{prepared['id']}", json={
+        "status": "placed",
+        "external_order_id": "HD-VERIFIED-1",
+        "item_subtotal": 20.0,
+        "sales_tax": 0.0,
+        "shipping_cost": 0.0,
+        "card_amount": 20.0,
+        "total": 20.0,
+    })
+    assert placed.status_code == 200, placed.text
+    account = client.post("/finance/accounts", json={
+        "provider": "manual",
+        "external_id": "checking-verified",
+        "account_type": "bank",
+        "name": "Business checking",
+        "current_balance": 100.0,
+        "available_balance": 100.0,
+    }).json()
+    client.post("/finance/entries/import", json=[{
+        "provider": "ebay",
+        "external_id": "fee-verified-1",
+        "financial_account_id": account["id"],
+        "entry_type": "fee",
+        "category": "marketplace_fee",
+        "amount": -5.0,
+        "description": "Actual eBay fee",
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+    }])
+    overview = client.get("/finance/overview").json()
+    assert overview["profit_verified"] is True
+    assert overview["verified_profit"] is not None
+    assert overview["available_business_profit"] == max(0.0, overview["verified_profit"])
+    assert overview["profit_data_issues"] == []

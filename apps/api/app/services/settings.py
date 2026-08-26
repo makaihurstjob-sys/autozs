@@ -34,6 +34,8 @@ DEFAULT_SETTING_KEYS = {
     "display_timezone",
     "auto_delist_zero_view_enabled",
     "auto_delist_zero_view_days",
+    "active_listing_target_enabled",
+    "active_listing_cap",
     "default_vero_remove_brand_from_title",
     "default_strip_brand_from_title",
     "default_title_suffix",
@@ -73,6 +75,7 @@ DEFAULT_SETTING_KEYS = {
     "notifications_order_updates",
     "notifications_listing_errors",
     "notifications_email",
+    "fulfillment_notification_phone",
 }
 
 FLOAT_SETTING_KEYS = {
@@ -94,6 +97,7 @@ FLOAT_SETTING_KEYS = {
     "default_buyer_shipping_cost",
     "default_rounding_cents",
     "auto_delist_zero_view_days",
+    "active_listing_cap",
 }
 
 
@@ -134,6 +138,10 @@ def read_pricing_settings(db: Session) -> dict[str, float | bool | str]:
         "display_timezone": "America/New_York",
         "auto_delist_zero_view_enabled": False,
         "auto_delist_zero_view_days": 25.0,
+        # Off by default: this queues real eBay publish jobs on its own, so it
+        # should only run once someone has confirmed the cap is right.
+        "active_listing_target_enabled": False,
+        "active_listing_cap": 250.0,
         "default_vero_remove_brand_from_title": True,
         "default_strip_brand_from_title": True,
         "default_title_suffix": " | FREE SHIPPING",
@@ -188,6 +196,7 @@ def read_pricing_settings(db: Session) -> dict[str, float | bool | str]:
         "notifications_order_updates": True,
         "notifications_listing_errors": True,
         "notifications_email": "",
+        "fulfillment_notification_phone": "",
     }
     stored_keys: set[str] = set()
     for setting in db.query(AppSetting).all():
@@ -200,6 +209,7 @@ def read_pricing_settings(db: Session) -> dict[str, float | bool | str]:
             "default_gift_card_discount_enabled",
             "default_offers_enabled",
             "auto_delist_zero_view_enabled",
+            "active_listing_target_enabled",
             "source_refresh_auto_enabled",
             "ebay_revision_auto_approve_enabled",
             "default_vero_remove_brand_from_title",

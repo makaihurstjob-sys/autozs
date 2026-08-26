@@ -486,6 +486,8 @@ def import_listing_report_rows(
         listing.status = row["status"]
         if row["started_at"] is not None:
             listing.started_at = row["started_at"]
+            if listing.first_listed_at is None:
+                listing.first_listed_at = row["started_at"]
         if row["renews_at"] is not None:
             listing.renews_at = row["renews_at"]
         if row["views"] is not None:

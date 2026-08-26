@@ -250,11 +250,37 @@ def update_message(db: Session, message: CustomerMessage, values: dict) -> Custo
         if message.status == "sent":
             message.sent_at = message.sent_at or datetime.utcnow()
             message.lease_expires_at = None
-        elif message.status in {"failed", "cancelled"}:
+        elif message.status in {"failed", "cancelled", "prepared"}:
             message.lease_expires_at = None
     db.commit()
     db.refresh(message)
     return message
+
+
+def delete_message(db: Session, message: CustomerMessage) -> None:
+    conversation = db.get(CustomerConversation, message.conversation_id)
+    db.delete(message)
+    db.flush()
+    if conversation is not None:
+        _refresh_last_message_at(db, conversation)
+    db.commit()
+
+
+def delete_conversation(db: Session, conversation: CustomerConversation) -> None:
+    for message in list(conversation.messages):
+        db.delete(message)
+    db.delete(conversation)
+    db.commit()
+
+
+def _refresh_last_message_at(db: Session, conversation: CustomerConversation) -> None:
+    latest = db.scalar(
+        select(CustomerMessage.created_at)
+        .where(CustomerMessage.conversation_id == conversation.id)
+        .order_by(CustomerMessage.created_at.desc())
+        .limit(1)
+    )
+    conversation.last_message_at = latest
 
 
 def _load_conversation(db: Session, conversation_id: int) -> CustomerConversation:

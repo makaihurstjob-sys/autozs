@@ -2,9 +2,13 @@ const fs = require("fs");
 const vm = require("vm");
 
 const source = fs.readFileSync(`${__dirname}/capture.js`, "utf8");
+if (!source.includes("response.status >= 500") || !source.includes("response = await request()")) {
+  throw new Error("Expected captured product imports to retry one transient server failure.");
+}
 
 function runCapture(visibleText, {
   offerPrice = "17.97",
+  offerPriceValidUntil = null,
   productName = "HDX 13 Gallon Reinforced Top Drawstring Fresh Scented Tall Kitchen Trash Bags 200 Count",
   standardPrice = null,
   href = "https://www.homedepot.com/p/HDX-13-Gallon-Reinforced-Top-Drawstring-Fresh-Scented-Tall-Kitchen-Trash-Bags-with-20-PCR-200-Count-HDR13XHFN200W-F/331012931?ea_auto_import=1&auto_download_test=1&MERCH=REC",
@@ -36,7 +40,7 @@ function runCapture(visibleText, {
               textContent: JSON.stringify({
                 "@type": "Product",
                 name: productName,
-                offers: offerPrice === null ? undefined : { price: offerPrice },
+                offers: offerPrice === null ? undefined : { price: offerPrice, priceValidUntil: offerPriceValidUntil || undefined },
                 image: ["https://images.thdstatic.com/productImages/hdx-trash-bags-front.jpg"],
               }),
             },
@@ -1166,7 +1170,129 @@ if (centPromoBesideDollarPrice.capture_debug.detected_cent_price !== null) {
   );
 }
 
+// A multipack prints its package price and a per-each rate side by side. Both must lose to
+// the package price. Product 7 (True Blue 12x24x1 air filter 12-pack) was captured at $0.96
+// instead of $11.52 for three days -- 11.52 / 12 = 0.96, the per-each rate -- which drove
+// revision #378 to reprice the live listing from $16.53 to $3.53. Two defects fed it: the
+// cent detector's dollar-price guard tested one line at a time and so could not see the
+// split "$" / "11" / "52" rendering, and "each"/"ea" was accepted as a package-total unit.
+const multipackPriceOptions = {
+  offerPrice: "11.52",
+  productName: "True Blue 12 x 24 x 1 Fiberglass FPR 1 Air Filter (12-Pack) 112241",
+  href: "https://www.homedepot.com/p/True-Blue-12-x-24-x-1-Fiberglass-FPR-1-Air-Filter-12-Pack-112241/306611325",
+  pathname: "/p/True-Blue-12-x-24-x-1-Fiberglass-FPR-1-Air-Filter-12-Pack-112241/306611325",
+};
+
+const multipackSplitPriceWithCentUnitRate = runCapture(
+  `
+True Blue 12 x 24 x 1 Fiberglass FPR 1 Air Filter (12-Pack)
+Shop True Blue
+(842)
+Questions & Answers (18)
+$
+11
+52
+/package
+96
+¢
+/each
+Free Delivery
+Add to Cart
+`,
+  multipackPriceOptions
+);
+
+if (multipackSplitPriceWithCentUnitRate.source_price !== 11.52) {
+  throw new Error(
+    `Expected multipack package price 11.52 to beat the 96c per-each rate, got ${multipackSplitPriceWithCentUnitRate.source_price}`
+  );
+}
+if (multipackSplitPriceWithCentUnitRate.capture_debug.detected_cent_price !== null) {
+  throw new Error(
+    `Expected no cent price beside a split dollar price, got ${multipackSplitPriceWithCentUnitRate.capture_debug.detected_cent_price}`
+  );
+}
+
+const multipackSplitPriceWithDollarUnitRate = runCapture(
+  `
+True Blue 12 x 24 x 1 Fiberglass FPR 1 Air Filter (12-Pack)
+Shop True Blue
+(842)
+$
+11
+52
+/package
+$0.96 /each
+Free Delivery
+Add to Cart
+`,
+  multipackPriceOptions
+);
+
+if (multipackSplitPriceWithDollarUnitRate.source_price !== 11.52) {
+  throw new Error(
+    `Expected multipack package price 11.52 to beat the $0.96 per-each rate, got ${multipackSplitPriceWithDollarUnitRate.source_price}`
+  );
+}
+if (multipackSplitPriceWithDollarUnitRate.capture_debug.purchase_unit === "each") {
+  throw new Error("Expected a per-each rate not to be treated as the purchase total");
+}
+
 console.log("home depot cent-notation price tests ok");
+console.log("home depot multipack unit-rate price tests ok");
+
+// Home Depot's ld+json can outlive the price it describes. Verified live on the Everbilt
+// 800809 adapter: offers.price 9.25 with priceValidUntil already in the past, while the
+// rendered page had reverted to 10.96. The extension's ready-check accepts the first
+// non-null source_price it sees and the structured price is present before the
+// client-rendered visible price hydrates, so the expired offer won the race on every
+// refresh until this guard existed, driving revision #394/#400 off a price Home Depot
+// itself had already stopped honoring.
+const expiredOfferPriceOptions = {
+  offerPrice: "9.25",
+  offerPriceValidUntil: "2020-01-01",
+  productName: "Everbilt 3/8 in. OD Compression x 1/2 in. Sweat Brass Adapter Fitting (2-Pack) 800809",
+  href: "https://www.homedepot.com/p/Everbilt-3-8-in-OD-Compression-x-1-2-in-Sweat-Brass-Adapter-Fitting-2-Pack-800809/207176374",
+  pathname: "/p/Everbilt-3-8-in-OD-Compression-x-1-2-in-Sweat-Brass-Adapter-Fitting-2-Pack-800809/207176374",
+};
+
+const expiredStructuredOfferLosesToVisiblePrice = runCapture(
+  `
+Everbilt 3/8 in. OD Compression x 1/2 in. Sweat Brass Adapter Fitting (2-Pack) 800809
+Questions & Answers (2)
+Contains 2 units
+$
+10
+.
+96
+($5.48 /unit)
+Free Delivery
+Add to Cart
+`,
+  expiredOfferPriceOptions
+);
+
+if (expiredStructuredOfferLosesToVisiblePrice.source_price !== 10.96) {
+  throw new Error(
+    `Expected the visible 10.96 to beat the expired 9.25 structured offer, got ${expiredStructuredOfferLosesToVisiblePrice.source_price}`
+  );
+}
+if (expiredStructuredOfferLosesToVisiblePrice.capture_debug.structured_prices.includes(9.25)) {
+  throw new Error("Expected an expired structured offer price to be excluded from structured_prices entirely");
+}
+
+const unexpiredStructuredOfferStillUsableAsLastResort = runCapture("Everbilt 3/8 in. OD Compression x 1/2 in. Sweat Brass Adapter Fitting (2-Pack) 800809\nNo visible dollar price rendered yet\n", {
+  ...expiredOfferPriceOptions,
+  offerPriceValidUntil: "2099-01-01",
+});
+
+if (unexpiredStructuredOfferStillUsableAsLastResort.source_price !== 9.25) {
+  throw new Error(
+    `Expected a non-expired structured offer to still work as the last-resort price, got ${unexpiredStructuredOfferStillUsableAsLastResort.source_price}`
+  );
+}
+
+console.log("home depot expired structured-offer price tests ok");
 
 runEbayAccountFallbackTest()
   .then(runEbayMissingDraftVerificationTest)

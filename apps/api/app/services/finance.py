@@ -13,6 +13,11 @@ from app.models.domain import (
     SubscriptionExpense,
     SupplierOrder,
 )
+from app.services.settings import read_pricing_settings
+
+
+FULFILLED_ORDER_STATUSES = {"shipped", "delivered", "completed"}
+PLACED_SUPPLIER_ORDER_STATUSES = {"placed", "shipped", "delivered"}
 
 
 def upsert_financial_account(db: Session, values: dict) -> FinancialAccount:
@@ -69,7 +74,11 @@ def import_finance_entries(db: Session, entries: list[dict]) -> int:
 
 
 def finance_overview(db: Session) -> dict:
-    orders = list(db.scalars(select(Order).where(Order.status != "cancelled")).all())
+    orders = list(db.scalars(
+        select(Order)
+        .options(selectinload(Order.items), selectinload(Order.supplier_orders).selectinload(SupplierOrder.gift_card))
+        .where(Order.status != "cancelled")
+    ).all())
     supplier_orders = list(
         db.scalars(
             select(SupplierOrder)
@@ -81,6 +90,7 @@ def finance_overview(db: Session) -> dict:
     accounts = list(db.scalars(select(FinancialAccount).order_by(FinancialAccount.account_type, FinancialAccount.name)).all())
     subscriptions = list(db.scalars(select(SubscriptionExpense).order_by(SubscriptionExpense.status, SubscriptionExpense.name)).all())
     cards = list(db.scalars(select(GiftCard)).all())
+    pricing = read_pricing_settings(db)
 
     revenue = round(sum(float(order.total or 0) for order in orders), 2)
     supplier_cost = round(sum(_cash_supplier_cost(order) for order in supplier_orders), 2)
@@ -88,6 +98,56 @@ def finance_overview(db: Session) -> dict:
         sum(abs(float(entry.amount)) for entry in entries if entry.entry_type in {"expense", "fee"}),
         2,
     )
+    gross_merchandise_revenue = round(sum(_order_merchandise_revenue(order) for order in orders), 2)
+    fulfilled_orders = [order for order in orders if _is_realized_order(order)]
+    realized_revenue = round(sum(_order_merchandise_revenue(order) for order in fulfilled_orders), 2)
+    marketplace_rate = float(pricing.get("default_ebay_fee_rate", 0.0) or 0.0) + float(
+        pricing.get("default_promoted_rate", 0.0) or 0.0
+    )
+    return_risk_rate = float(pricing.get("default_return_risk_rate", 0.0) or 0.0)
+    estimated_marketplace_fees = round(realized_revenue * marketplace_rate, 2)
+    return_risk_reserve = round(realized_revenue * return_risk_rate, 2)
+    realized_supplier_orders = [
+        supplier_order
+        for order in fulfilled_orders
+        for supplier_order in order.supplier_orders
+        if str(supplier_order.status or "").lower() in PLACED_SUPPLIER_ORDER_STATUSES
+    ]
+    missing_supplier_cost_orders = [
+        order for order in fulfilled_orders
+        if _order_merchandise_revenue(order) > 0
+        and not any(str(item.status or "").lower() in PLACED_SUPPLIER_ORDER_STATUSES for item in order.supplier_orders)
+    ]
+    recorded_fee_expenses = round(sum(
+        abs(float(entry.amount)) for entry in entries if entry.entry_type == "fee"
+    ), 2)
+    non_fee_expenses = round(sum(
+        abs(float(entry.amount)) for entry in entries if entry.entry_type == "expense"
+    ), 2)
+    issues: list[str] = []
+    if missing_supplier_cost_orders:
+        issues.append(f"{len(missing_supplier_cost_orders)} fulfilled order(s) are missing a placed supplier order and verified supplier cost.")
+    if realized_revenue > 0 and recorded_fee_expenses <= 0:
+        issues.append("No actual eBay fee expense is recorded for fulfilled revenue.")
+    fresh_accounts = [account for account in accounts if account.last_synced_at]
+    if not fresh_accounts:
+        issues.append("No recently synchronized business account balance is available.")
+    elif any((datetime.utcnow() - account.last_synced_at).total_seconds() > 48 * 3600 for account in fresh_accounts):
+        issues.append("One or more business account balances are older than 48 hours.")
+    profit_verified = realized_revenue > 0 and not issues
+    verified_profit = None
+    available_business_profit = 0.0
+    if profit_verified:
+        realized_supplier_cost = round(sum(_cash_supplier_cost(order) for order in realized_supplier_orders), 2)
+        verified_profit = round(
+            realized_revenue - realized_supplier_cost - recorded_fee_expenses - non_fee_expenses - return_risk_reserve,
+            2,
+        )
+        liquid_balance = round(sum(
+            float(account.available_balance if account.available_balance is not None else account.current_balance or 0)
+            for account in accounts if account.account_type in {"bank", "ebay"}
+        ), 2)
+        available_business_profit = round(max(0.0, min(verified_profit, liquid_balance)), 2)
     period_rows: dict[str, dict] = defaultdict(lambda: {"revenue": 0.0, "supplier_cost": 0.0, "operating_expenses": 0.0, "orders": 0})
     for order in orders:
         for period in _periods(order.created_at):
@@ -132,10 +192,30 @@ def finance_overview(db: Session) -> dict:
         "credit_card_balance": round(sum(float(account.current_balance or 0) for account in accounts if account.account_type == "credit_card"), 2),
         "ebay_available": round(sum(float(account.available_balance or 0) for account in accounts if account.account_type == "ebay"), 2),
         "ebay_held": round(sum(float(account.held_balance or 0) for account in accounts if account.account_type == "ebay"), 2),
+        "gross_merchandise_revenue": gross_merchandise_revenue,
+        "realized_revenue": realized_revenue,
+        "estimated_marketplace_fees": estimated_marketplace_fees,
+        "return_risk_reserve": return_risk_reserve,
+        "verified_profit": verified_profit,
+        "available_business_profit": available_business_profit,
+        "profit_verified": profit_verified,
+        "unverified_order_count": len(missing_supplier_cost_orders),
+        "profit_data_issues": issues,
         "accounts": accounts,
         "subscriptions": subscriptions,
         "periods": periods,
-    }
+}
+
+
+def _order_merchandise_revenue(order: Order) -> float:
+    item_revenue = sum(float(item.sale_price or 0) * max(1, int(item.quantity or 1)) for item in order.items)
+    return item_revenue if item_revenue > 0 else float(order.total or 0)
+
+
+def _is_realized_order(order: Order) -> bool:
+    if str(order.status or "").lower() in FULFILLED_ORDER_STATUSES:
+        return True
+    return any(str(item.status or "").lower() in PLACED_SUPPLIER_ORDER_STATUSES for item in order.supplier_orders)
 
 
 def _cash_supplier_cost(order: SupplierOrder) -> float:

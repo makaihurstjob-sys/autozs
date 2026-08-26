@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 
@@ -9,16 +10,22 @@ PNG_DATA_URL = (
 )
 
 
-def create_ready_product(client, title: str = "Queue Ready Product", source_id: str = "123456789") -> dict:
+def create_ready_product(
+    client,
+    title: str = "Queue Ready Product",
+    source_id: str = "123456789",
+    source_price: float = 10.0,
+    competitor_price: float = 24.99,
+) -> dict:
     configure_matching_browser_account(client)
     return client.post(
         "/products/import-captured",
         json={
             "source_url": f"https://www.homedepot.com/p/Queue-Ready/{source_id}",
             "title": title,
-            "source_price": 10.0,
+            "source_price": source_price,
             "source_shipping": 0.0,
-            "competitor_price": 24.99,
+            "competitor_price": competitor_price,
             "description": "Captured details for queue testing",
             "image_urls": PNG_DATA_URL,
         },
@@ -240,6 +247,31 @@ def test_listing_jobs_next_only_starts_due_jobs(client) -> None:
     assert due["package"]["sku"] == product["sku"]
 
 
+def test_listing_jobs_next_rolls_expired_publish_schedule_forward(client) -> None:
+    configure_matching_browser_account(client)
+    product = create_ready_product(client, "Expired eBay Schedule Product")
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "a.m.anim-59",
+            "action": "publish",
+            "listing_schedule_at": "2020-01-01T19:00:00",
+        },
+    ).json()[0]
+
+    started = client.post("/listing-jobs/next?ebay_account_key=a.m.anim-59").json()
+    rolled = datetime.fromisoformat(started["job"]["listing_schedule_at"])
+    eastern_now = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+
+    assert started["job"]["id"] == job["id"]
+    assert started["job"]["status"] == "running"
+    assert rolled >= eastern_now + timedelta(minutes=44)
+    assert started["package"]["listing_schedule_at"] == started["job"]["listing_schedule_at"]
+    saved_product = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert saved_product["listing_schedule_at"] == started["job"]["listing_schedule_at"]
+
+
 def test_listing_jobs_next_refuses_a_second_concurrent_runner(client) -> None:
     configure_matching_browser_account(client)
     first = create_ready_product(client, "Concurrent Runner One", source_id="770000001")
@@ -266,20 +298,16 @@ def test_listing_jobs_next_refuses_a_second_concurrent_runner(client) -> None:
     assert resumed["job"]["id"] != started["job"]["id"]
 
 
-def test_listing_job_needs_review_when_product_is_not_ready(client) -> None:
+def test_unpriced_product_is_rejected_before_entering_listing_queue(client) -> None:
     configure_matching_browser_account(client)
     product = client.post(
         "/products/import",
         json={"urls": "https://www.homedepot.com/p/Queue-Missing/987654321"},
     ).json()["products"][0]
-    job = client.post("/listing-jobs", json={"product_ids": [product["id"]]}).json()[0]
+    response = client.post("/listing-jobs", json={"product_ids": [product["id"]]})
 
-    run = client.post(f"/listing-jobs/{job['id']}/run").json()
-
-    assert run["job"]["status"] == "needs_review"
-    assert run["package"] is None
-    assert "Needs review" in run["job"]["message"]
-    assert run["job"]["missing_manual"]
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No matching products found"
 
 
 def test_listing_job_blocks_when_browser_account_mismatches(client) -> None:
@@ -344,6 +372,23 @@ def test_browser_account_preserves_match_on_listing_page_false_positive(client) 
         json={
             "detected_username": "Nickel",
             "url": "https://www.ebay.com/lstng?draftId=123&mode=AddItem",
+            "marketplace": "EBAY_US",
+            "source": "chrome-extension",
+        },
+    ).json()
+
+    assert status["detected_username"] == "a.m.anim-59"
+    assert status["can_list"] is True
+
+
+def test_browser_account_preserves_seller_identity_on_tracking_page_buyer_name(client) -> None:
+    configure_matching_browser_account(client, username="a.m.anim-59")
+
+    status = client.post(
+        "/ebay/browser-account",
+        json={
+            "detected_username": "concat",
+            "url": "https://www.ebay.com/ship/trk/tracking-details?itemid=800367161756",
             "marketplace": "EBAY_US",
             "source": "chrome-extension",
         },
@@ -644,6 +689,62 @@ def test_completed_job_reuses_listing_when_browser_account_label_changes(client)
     assert listings[0]["account_id"] == "a.m.anim-59"
 
 
+def test_completed_job_quarantines_duplicate_confirmation_and_preserves_production_schedule(client) -> None:
+    product = create_ready_product(client, "Duplicate Confirmation Reconciliation", "987654324")
+    schedule_at = (
+        datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")) + timedelta(days=3)
+    ).replace(tzinfo=None, microsecond=0).isoformat()
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "a.m.anim-59",
+            "action": "publish",
+            "listing_schedule_at": schedule_at,
+        },
+    ).json()[0]
+
+    client.post(
+        f"/products/{product['id']}/mark-listed",
+        json={
+            "listing_id": "800262913584",
+            "account_id": "a.m.anim-59",
+            "environment": "production",
+            "status": "scheduled",
+        },
+    )
+    # Reproduce the legacy duplicate row using a different account label, which
+    # bypasses the account/listing unique key just as the old browser race did.
+    duplicate_product = create_ready_product(client, "Duplicate Confirmation Shadow", "987654325")
+    client.post(
+        f"/products/{duplicate_product['id']}/mark-listed",
+        json={
+            "listing_id": "800262913584",
+            "account_id": "manual",
+            "environment": "manual",
+            "status": "active",
+        },
+    )
+
+    client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "completed",
+            "listing_id": "800262913584",
+            "message": "Scheduled on eBay as item 800262913584.",
+        },
+    )
+
+    matches = [item for item in client.get("/ebay/listings").json() if item["listing_id"] == "800262913584"]
+    sellable = [item for item in matches if item["status"] != "tombstoned"]
+    assert len(sellable) == 1
+    assert sellable[0]["environment"] == "production"
+    assert sellable[0]["status"] == "scheduled"
+    duplicate = next(item for item in matches if item["status"] == "tombstoned")
+    assert duplicate["quantity"] == 0
+    assert duplicate["removal_reason"] == "duplicate_local_record"
+
+
 def test_product_listing_schedule_can_be_saved_and_cleared(client) -> None:
     product = create_ready_product(client, "Per Product Listing Schedule")
     schedule_at = "2026-07-01T08:00:00"
@@ -712,6 +813,260 @@ def test_unavailable_supplier_cannot_be_enqueued_for_listing(client) -> None:
     assert response.json()["detail"] == "No matching products found"
 
 
+def test_supplier_without_a_usable_price_cannot_be_enqueued_for_listing(client) -> None:
+    product = create_ready_product(client, "Price Unavailable Product", "price-unavailable")
+    client.patch(
+        f"/products/{product['id']}/capture",
+        json={"source_price": None, "source_price_unavailable": True, "source_in_stock": True},
+    ).raise_for_status()
+
+    response = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "a.m.anim-59",
+            "action": "publish",
+            "listing_schedule_at": "2026-08-02T19:00:00Z",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No matching products found"
+
+
+def test_zero_view_rotation_publishes_replacement_before_retiring_old_listing(client) -> None:
+    old_product = create_ready_product(client, "Old Zero View Faucet", "rotation-old")
+    replacement = create_ready_product(client, "Replacement Faucet Connector", "rotation-new")
+    client.post(
+        f"/products/{replacement['id']}/supplier",
+        json={
+            "supplier": "home_depot",
+            "source_url": "https://www.homedepot.com/p/Queue-Ready/rotation-new",
+            "last_price": 10.0,
+            "last_shipping": 0.0,
+            "in_stock": True,
+        },
+    ).raise_for_status()
+    client.post(
+        f"/products/{old_product['id']}/mark-listed",
+        json={"listing_id": "890000000001", "account_id": "a.m.anim-59", "status": "active"},
+    ).raise_for_status()
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "rotation_test",
+            "tombstone_missing": False,
+            "rows": [{
+                "listing_id": "890000000001",
+                "sku": old_product["sku"],
+                "title": old_product["title"],
+                "price": "24.99",
+                "quantity": "1",
+                "status": "Active",
+                "views": "0",
+                "started_at": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
+            }],
+        },
+    ).raise_for_status()
+    client.patch(
+        "/settings/pricing",
+        json={"auto_delist_zero_view_enabled": True, "auto_delist_zero_view_days": 29},
+    ).raise_for_status()
+    client.post(f"/products/{replacement['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+    readiness = client.get(f"/products/{replacement['id']}/listing-readiness").json()
+    package = client.get(f"/products/{replacement['id']}/ebay-package").json()
+    assert readiness["manual_ready"] is True, readiness
+    assert package["meets_minimum_profit"] is True, package
+
+    queued = client.post(
+        "/listing-rotations/auto-queue?ebay_account_key=a.m.anim-59&limit=1"
+    )
+    assert queued.status_code == 200
+    payload = queued.json()
+    assert payload["eligible"] == 1
+    assert payload["queued"] == 1
+    assert payload["pairs"][0]["replacement_product_id"] == replacement["id"]
+    assert not [job for job in client.get("/ebay/revision-jobs").json() if job["action"] == "retire_zero_view"]
+
+    job_id = payload["pairs"][0]["job_id"]
+    client.patch(
+        f"/listing-jobs/{job_id}",
+        json={
+            "status": "completed",
+            "listing_id": "890000000002",
+            "message": "Replacement is live on eBay.",
+        },
+    ).raise_for_status()
+
+    # Completion only proves eBay accepted a scheduled item. The old listing
+    # remains live until the active-listings report proves the replacement is live.
+    assert not [job for job in client.get("/ebay/revision-jobs").json() if job["action"] == "retire_zero_view"]
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "rotation_test",
+            "tombstone_missing": False,
+            "rows": [{
+                "listing_id": "890000000002",
+                "sku": replacement["sku"],
+                "quantity": "1",
+                "status": "Active",
+                "views": "0",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }],
+        },
+    ).raise_for_status()
+    client.post("/listing-rotations/auto-queue?ebay_account_key=a.m.anim-59&limit=1").raise_for_status()
+
+    revisions = [job for job in client.get("/ebay/revision-jobs").json() if job["action"] == "retire_zero_view"]
+    assert len(revisions) == 1
+    assert revisions[0]["action"] == "retire_zero_view"
+    assert revisions[0]["status"] == "queued"
+    before = next(item for item in client.get("/ebay/listings").json() if item["listing_id"] == "890000000001")
+    assert before["quantity"] == 1
+    assert before["relist_blocked"] is False
+
+    client.patch(
+        f"/ebay/revision-jobs/{revisions[0]['id']}",
+        json={"status": "completed", "message": "Quantity zero confirmed by eBay."},
+    ).raise_for_status()
+    retired = next(item for item in client.get("/ebay/listings").json() if item["listing_id"] == "890000000001")
+    assert retired["quantity"] == 0
+    assert retired["relist_blocked"] is True
+    assert retired["removal_reason"] == "zero_views_29_days"
+
+
+def test_zero_view_rotation_survives_a_relist_that_resets_started_at(client) -> None:
+    # Regression: started_at is overwritten on every relist/resync, so age-based
+    # pruning must anchor on first_listed_at instead or a long-dead listing that
+    # happens to get relisted dodges rotation forever.
+    old_product = create_ready_product(client, "Old Zero View Sprayer", "rotation-relist-old")
+    replacement = create_ready_product(client, "Replacement Sprayer Head", "rotation-relist-new")
+    client.post(
+        f"/products/{replacement['id']}/supplier",
+        json={
+            "supplier": "home_depot",
+            "source_url": "https://www.homedepot.com/p/Queue-Ready/rotation-relist-new",
+            "last_price": 10.0,
+            "last_shipping": 0.0,
+            "in_stock": True,
+        },
+    ).raise_for_status()
+    client.post(
+        f"/products/{old_product['id']}/mark-listed",
+        json={"listing_id": "890000000101", "account_id": "a.m.anim-59", "status": "active"},
+    ).raise_for_status()
+
+    # First sync: the listing genuinely started 60 days ago.
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "rotation_test",
+            "tombstone_missing": False,
+            "rows": [{
+                "listing_id": "890000000101",
+                "sku": old_product["sku"],
+                "title": old_product["title"],
+                "price": "24.99",
+                "quantity": "1",
+                "status": "Active",
+                "views": "0",
+                "started_at": (datetime.now(timezone.utc) - timedelta(days=60)).isoformat(),
+            }],
+        },
+    ).raise_for_status()
+    before_relist = next(item for item in client.get("/ebay/listings").json() if item["listing_id"] == "890000000101")
+    assert before_relist["first_listed_at"] is not None
+
+    # Second sync: eBay reports a relist, resetting started_at to 5 days ago.
+    # first_listed_at must stay pinned to the original 60-day-old date.
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "rotation_test",
+            "tombstone_missing": False,
+            "rows": [{
+                "listing_id": "890000000101",
+                "sku": old_product["sku"],
+                "title": old_product["title"],
+                "price": "24.99",
+                "quantity": "1",
+                "status": "Active",
+                "views": "0",
+                "started_at": (datetime.now(timezone.utc) - timedelta(days=5)).isoformat(),
+            }],
+        },
+    ).raise_for_status()
+    after_relist = next(item for item in client.get("/ebay/listings").json() if item["listing_id"] == "890000000101")
+    assert after_relist["started_at"] != before_relist["started_at"]
+    assert after_relist["first_listed_at"] == before_relist["first_listed_at"]
+
+    client.patch(
+        "/settings/pricing",
+        json={"auto_delist_zero_view_enabled": True, "auto_delist_zero_view_days": 29},
+    ).raise_for_status()
+    client.post(f"/products/{replacement['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+
+    queued = client.post("/listing-rotations/auto-queue?ebay_account_key=a.m.anim-59&limit=1")
+    assert queued.status_code == 200
+    payload = queued.json()
+    assert payload["eligible"] == 1, payload
+    assert payload["queued"] == 1
+    assert payload["pairs"][0]["replacement_product_id"] == replacement["id"]
+
+
+def test_zero_view_rotation_never_duplicates_an_existing_quantity_zero_item(client) -> None:
+    old_product = create_ready_product(client, "Old Zero View Lock", "rotation-old-lock")
+    existing_zero = create_ready_product(client, "Existing Quantity Zero Connector", "rotation-existing-zero")
+    clean_replacement = create_ready_product(client, "Clean Replacement Connector", "rotation-clean")
+    for product in (existing_zero, clean_replacement):
+        client.post(
+            f"/products/{product['id']}/supplier",
+            json={
+                "supplier": "home_depot",
+                "source_url": f"https://www.homedepot.com/p/{product['id']}",
+                "last_price": 10.0,
+                "last_shipping": 0.0,
+                "in_stock": True,
+            },
+        ).raise_for_status()
+        client.post(f"/products/{product['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+    client.post(
+        f"/products/{old_product['id']}/mark-listed",
+        json={"listing_id": "890000000011", "account_id": "a.m.anim-59", "status": "active"},
+    ).raise_for_status()
+    client.post(
+        f"/products/{existing_zero['id']}/mark-listed",
+        json={"listing_id": "890000000012", "account_id": "a.m.anim-59", "status": "active"},
+    ).raise_for_status()
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "rotation_test",
+            "tombstone_missing": False,
+            "rows": [
+                {"listing_id": "890000000011", "sku": old_product["sku"], "quantity": "1", "status": "Active", "views": "0", "started_at": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()},
+                {"listing_id": "890000000012", "sku": existing_zero["sku"], "quantity": "0", "status": "Active", "views": "0"},
+            ],
+        },
+    ).raise_for_status()
+    client.patch(
+        "/settings/pricing",
+        json={"auto_delist_zero_view_enabled": True, "auto_delist_zero_view_days": 29},
+    ).raise_for_status()
+
+    payload = client.post(
+        "/listing-rotations/auto-queue?ebay_account_key=a.m.anim-59&limit=1"
+    ).json()
+    assert payload["queued"] == 1
+    assert payload["pairs"][0]["replacement_product_id"] == clean_replacement["id"]
+
+
 def test_queued_listing_is_blocked_if_supplier_becomes_unavailable(client) -> None:
     product = create_ready_product(client, "Availability Changed After Queue")
     job = client.post(
@@ -733,3 +1088,127 @@ def test_queued_listing_is_blocked_if_supplier_becomes_unavailable(client) -> No
 
     assert started["status"] == "needs_review"
     assert "delivery is unavailable" in started["message"]
+
+
+def test_listing_expansion_is_off_by_default(client) -> None:
+    create_ready_product(client, "Expansion Off By Default", "expansion-off")
+    queued = client.post("/listing-expansion/auto-queue?ebay_account_key=a.m.anim-59&limit=5")
+    assert queued.status_code == 200
+    payload = queued.json()
+    assert payload == {"cap": 0, "active_count": 0, "headroom": 0, "eligible": 0, "queued": 0, "product_ids": []}
+
+
+def test_listing_expansion_fills_headroom_with_the_most_profitable_candidate_first(client) -> None:
+    # Cheaper source cost against a higher competitor price means a bigger margin;
+    # low_profit uses the same known-good defaults as every other fixture in this file.
+    high_profit = create_ready_product(
+        client, "Expansion High Profit Widget", "expansion-high", source_price=5.0, competitor_price=40.0
+    )
+    low_profit = create_ready_product(client, "Expansion Low Profit Widget", "expansion-low")
+    for product in (high_profit, low_profit):
+        client.post(f"/products/{product['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+        package = client.get(f"/products/{product['id']}/ebay-package").json()
+        assert package["meets_minimum_profit"] is True, package
+
+    client.patch(
+        "/settings/pricing",
+        json={"active_listing_target_enabled": True, "active_listing_cap": 1},
+    ).raise_for_status()
+
+    queued = client.post("/listing-expansion/auto-queue?ebay_account_key=a.m.anim-59&limit=5")
+    assert queued.status_code == 200
+    payload = queued.json()
+    assert payload["cap"] == 1
+    assert payload["active_count"] == 0
+    assert payload["headroom"] == 1
+    assert payload["eligible"] == 2
+    assert payload["queued"] == 1
+    assert payload["product_ids"] == [high_profit["id"]]
+
+    jobs = client.get("/listing-jobs").json()
+    queued_product_ids = {job["product_id"] for job in jobs if job["action"] == "publish"}
+    assert high_profit["id"] in queued_product_ids
+    assert low_profit["id"] not in queued_product_ids
+
+
+def test_listing_expansion_respects_existing_active_listings_against_the_cap(client) -> None:
+    already_listed = create_ready_product(client, "Expansion Already Listed", "expansion-listed")
+    client.post(
+        f"/products/{already_listed['id']}/mark-listed",
+        json={"listing_id": "890000000201", "account_id": "a.m.anim-59", "status": "active"},
+    ).raise_for_status()
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "expansion_test",
+            "tombstone_missing": False,
+            "rows": [{
+                "listing_id": "890000000201",
+                "sku": already_listed["sku"],
+                "quantity": "1",
+                "status": "Active",
+                "views": "0",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }],
+        },
+    ).raise_for_status()
+
+    candidate = create_ready_product(client, "Expansion New Candidate", "expansion-candidate")
+    client.post(f"/products/{candidate['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+
+    client.patch(
+        "/settings/pricing",
+        json={"active_listing_target_enabled": True, "active_listing_cap": 1},
+    ).raise_for_status()
+
+    queued = client.post("/listing-expansion/auto-queue?ebay_account_key=a.m.anim-59&limit=5")
+    payload = queued.json()
+    assert payload["active_count"] == 1
+    assert payload["headroom"] == 0
+    assert payload["queued"] == 0
+
+
+def test_listing_expansion_does_not_count_quantity_zero_listings_against_the_cap(client) -> None:
+    # A listing correctly marked out of stock (quantity 0) keeps eBay status
+    # "active" until tombstoned/restocked, but it isn't sellable -- it must not
+    # occupy a cap slot that a real, in-stock listing could otherwise fill.
+    out_of_stock = create_ready_product(client, "Expansion Out Of Stock", "expansion-oos")
+    client.post(
+        f"/products/{out_of_stock['id']}/mark-listed",
+        json={"listing_id": "890000000301", "account_id": "a.m.anim-59", "status": "active"},
+    ).raise_for_status()
+    client.post(
+        "/ebay/sync-runs/listing-report",
+        json={
+            "account_key": "a.m.anim-59",
+            "source": "expansion_test",
+            "tombstone_missing": False,
+            "rows": [{
+                "listing_id": "890000000301",
+                "sku": out_of_stock["sku"],
+                "quantity": "0",
+                "status": "Active",
+                "views": "0",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }],
+        },
+    ).raise_for_status()
+    zeroed = next(item for item in client.get("/ebay/listings").json() if item["listing_id"] == "890000000301")
+    assert zeroed["status"] == "active"
+    assert zeroed["quantity"] == 0
+
+    candidate = create_ready_product(client, "Expansion Fills Zeroed Slot", "expansion-fills-zeroed")
+    client.post(f"/products/{candidate['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+
+    client.patch(
+        "/settings/pricing",
+        json={"active_listing_target_enabled": True, "active_listing_cap": 1},
+    ).raise_for_status()
+
+    queued = client.post("/listing-expansion/auto-queue?ebay_account_key=a.m.anim-59&limit=5")
+    payload = queued.json()
+    assert payload["active_count"] == 0
+    assert payload["headroom"] == 1
+    assert payload["queued"] == 1
+    assert payload["product_ids"] == [candidate["id"]]

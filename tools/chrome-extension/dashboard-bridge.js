@@ -3,7 +3,7 @@
   window.__autozsDashboardBridgeInstalled = true;
 
   const requestedWorkerMode = new URLSearchParams(location.search).get("autozs_worker_mode");
-  if (["operations", "capture", "viewer"].includes(requestedWorkerMode)) {
+  if (["operations", "capture", "checkout", "viewer"].includes(requestedWorkerMode)) {
     try {
       chrome.runtime.sendMessage({ type: "autozs-configure-worker-mode", mode: requestedWorkerMode })?.catch?.(() => {});
     } catch {}

@@ -517,6 +517,7 @@ def _priced_product(db, *, cost: float, draft_price: float, live_price: float, s
         account_id="a.m.anim-59",
         status="active",
         price=live_price,
+        quantity=1,
     )
     db.add(listing)
     db.commit()
@@ -548,6 +549,78 @@ def test_profitable_revision_target_is_still_proposed() -> None:
     job = db.query(EbayRevisionJob).one()
     assert job.target_price == 59.53
     assert job.projected_profit > 0
+
+
+def _enable_revision_auto_approval(db) -> None:
+    from app.models.domain import AppSetting
+
+    db.add_all([
+        AppSetting(key="ebay_revision_auto_approve_enabled", value="true"),
+        AppSetting(key="ebay_revision_max_change_percent", value="25"),
+        AppSetting(key="source_refresh_interval_hours", value="6"),
+        AppSetting(key="default_min_profit_guard_enabled", value="true"),
+        AppSetting(key="default_min_profit", value="2"),
+    ])
+    db.commit()
+
+
+def test_fresh_guarded_price_revision_is_automatically_approved() -> None:
+    db = make_session()
+    _enable_revision_auto_approval(db)
+    _priced_product(db, cost=20.0, draft_price=39.53, live_price=38.53)
+
+    enqueue_ebay_price_revisions(db)
+
+    job = db.query(EbayRevisionJob).one()
+    assert job.guard_passed is True
+    assert job.status == EbayRevisionJobStatus.queued.value
+    assert job.approval_required is False
+    assert job.approved_at is not None
+
+
+def test_stale_supplier_evidence_keeps_price_revision_in_manual_review() -> None:
+    db = make_session()
+    _enable_revision_auto_approval(db)
+    _priced_product(db, cost=20.0, draft_price=39.53, live_price=38.53)
+    supplier = db.query(SupplierProduct).one()
+    supplier.updated_at = datetime.utcnow() - timedelta(hours=7)
+    db.commit()
+
+    enqueue_ebay_price_revisions(db)
+
+    job = db.query(EbayRevisionJob).one()
+    assert job.guard_passed is True
+    assert job.status == EbayRevisionJobStatus.needs_review.value
+    assert job.approval_required is True
+    assert job.approved_at is None
+    assert "older than 6 hours" in (job.guard_reason or "")
+
+
+def test_zero_quantity_listing_is_never_auto_approved_for_price_change() -> None:
+    db = make_session()
+    _enable_revision_auto_approval(db)
+    _, listing = _priced_product(db, cost=20.0, draft_price=39.53, live_price=38.53)
+    listing.quantity = 0
+    db.commit()
+
+    enqueue_ebay_price_revisions(db)
+
+    job = db.query(EbayRevisionJob).one()
+    assert job.status == EbayRevisionJobStatus.needs_review.value
+    assert job.approval_required is True
+
+
+def test_oversized_price_change_is_never_auto_approved() -> None:
+    db = make_session()
+    _enable_revision_auto_approval(db)
+    _priced_product(db, cost=20.0, draft_price=55.53, live_price=38.53)
+
+    enqueue_ebay_price_revisions(db)
+
+    job = db.query(EbayRevisionJob).one()
+    assert job.guard_passed is True
+    assert job.status == EbayRevisionJobStatus.needs_review.value
+    assert "exceeds" in (job.guard_reason or "")
 
 
 def test_below_cost_target_cancels_an_existing_open_revision() -> None:
@@ -849,6 +922,42 @@ def test_out_of_stock_sheet_adds_a_quantity_column_when_the_template_lacks_one()
     # Appended with eBay's own column name so the sheet stays importable.
     assert "Action,Item number,Start price,Available quantity\r\n" in content
     assert "Revise,800123456789,,0\r\n" in content
+
+
+def test_duplicate_retirement_tombstones_sibling_rows_for_same_ebay_item() -> None:
+    db = make_session()
+    live = EbayListing(
+        product_id=1, listing_id="800123456789", account_id="a.m.anim-59", environment="manual", status="active", price=24.53, quantity=1
+    )
+    scheduled = EbayListing(
+        product_id=1, listing_id="800123456789", account_id="legacy-import", environment="production", status="scheduled", price=24.53, quantity=1
+    )
+    db.add_all([live, scheduled])
+    db.flush()
+    job = EbayRevisionJob(
+        product_id=1,
+        ebay_listing_id=live.id,
+        ebay_account_key="a.m.anim-59",
+        action="retire_duplicate",
+        target_price=24.53,
+        status=EbayRevisionJobStatus.running.value,
+        guard_passed=True,
+        guard_reason="Preserve the canonical listing.",
+        approval_required=False,
+    )
+    db.add(job)
+    db.commit()
+
+    update_ebay_revision_job(db, job, status=EbayRevisionJobStatus.completed.value)
+
+    db.refresh(live)
+    db.refresh(scheduled)
+    assert live.quantity == 0
+    assert live.relist_blocked is True
+    assert scheduled.quantity == 0
+    assert scheduled.status == "tombstoned"
+    assert scheduled.relist_blocked is True
+    assert scheduled.removal_reason == "duplicate_supplier_listing"
 
 
 

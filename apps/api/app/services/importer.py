@@ -90,7 +90,10 @@ def normalize_source_url(url: str) -> str:
 NOISY_DESCRIPTION_PATTERNS = re.compile(
     r"sponsored|advertisement|sign in|view more details|customer service|check order status|"
     r"pickup,\s*shipping|pay your credit card|order cancellation|privacy|terms of use|"
-    r"download our app|special financing|subscribe|local store prices",
+    r"download our app|special financing|subscribe|local store prices|"
+    r"return policy|refund policy|product recalls|my preference center|specials\s*&\s*offers|"
+    r"military discount benefit|diy projects\s*&\s*ideas|truck\s*&\s*tool rental|"
+    r"installation\s*&\s*services",
     re.I,
 )
 
@@ -890,13 +893,21 @@ def download_missing_product_images(db: Session) -> tuple[int, int, int, int, li
 
 def _find_product_for_source(db: Session, source_url: str, sku: str) -> Product | None:
     normalized_source_url = normalize_source_url(source_url)
+    source_supplier = supplier_from_url(source_url)
+    source_supplier_sku = _sku_from_url(source_url)
     candidate_ids: set[int] = set()
     sku_product_id = db.scalar(select(Product.id).where(Product.sku == sku))
     if sku_product_id is not None:
         candidate_ids.add(sku_product_id)
 
     for supplier in db.scalars(select(SupplierProduct)).all():
-        if normalize_source_url(supplier.source_url) == normalized_source_url:
+        same_stable_supplier_id = (
+            source_supplier == "home_depot"
+            and supplier.supplier == source_supplier
+            and source_supplier_sku
+            and _sku_from_url(supplier.source_url) == source_supplier_sku
+        )
+        if normalize_source_url(supplier.source_url) == normalized_source_url or same_stable_supplier_id:
             candidate_ids.add(supplier.product_id)
 
     if not candidate_ids:
@@ -935,10 +946,21 @@ def _product_source_match_score(product: Product) -> tuple[int, int, int, int, i
 
 def _archive_source_duplicates(db: Session, canonical_product: Product, source_url: str) -> None:
     normalized_source_url = normalize_source_url(source_url)
+    source_supplier = supplier_from_url(source_url)
+    source_supplier_sku = _sku_from_url(source_url)
     duplicate_ids = {
         supplier.product_id
         for supplier in db.scalars(select(SupplierProduct)).all()
-        if supplier.product_id != canonical_product.id and normalize_source_url(supplier.source_url) == normalized_source_url
+        if supplier.product_id != canonical_product.id
+        and (
+            normalize_source_url(supplier.source_url) == normalized_source_url
+            or (
+                source_supplier == "home_depot"
+                and supplier.supplier == source_supplier
+                and source_supplier_sku
+                and _sku_from_url(supplier.source_url) == source_supplier_sku
+            )
+        )
     }
     for product_id in duplicate_ids:
         has_listing = db.scalar(select(EbayListing.id).where(EbayListing.product_id == product_id).limit(1)) is not None
@@ -1385,6 +1407,18 @@ def listing_item_specifics(product: Product, supplier: SupplierProduct | None) -
         specifics["MPN"] = model
     elif supplier and supplier.supplier_sku:
         specifics["MPN"] = supplier.supplier_sku
+    try:
+        overrides = json.loads(product.ebay_item_specifics_json or "{}")
+    except (TypeError, ValueError):
+        overrides = {}
+    if isinstance(overrides, dict):
+        specifics.update(
+            {
+                str(key).strip(): str(value).strip()
+                for key, value in overrides.items()
+                if str(key).strip() and str(value).strip()
+            }
+        )
     return specifics
 
 

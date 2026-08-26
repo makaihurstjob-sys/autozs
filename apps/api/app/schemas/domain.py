@@ -149,6 +149,10 @@ class ProductListingScheduleUpdate(BaseModel):
     listing_schedule_at: datetime | None = None
 
 
+class ProductItemSpecificsUpdate(BaseModel):
+    item_specifics: dict[str, str] = Field(default_factory=dict)
+
+
 class SourceCaptureQueueItem(BaseModel):
     product_id: int
     sku: str
@@ -358,6 +362,7 @@ class EbayListingRead(BaseModel):
     quantity: int
     status: str
     started_at: datetime | None = None
+    first_listed_at: datetime | None = None
     renews_at: datetime | None = None
     views: int = 0
     view_delta: int | None = None
@@ -1088,7 +1093,7 @@ class CustomerMessageCreate(BaseModel):
 
 
 class CustomerMessageUpdate(BaseModel):
-    status: str | None = Field(default=None, pattern="^(draft|queued|sending|sent|failed|cancelled)$")
+    status: str | None = Field(default=None, pattern="^(draft|queued|sending|sent|failed|cancelled|prepared)$")
     external_message_id: str | None = Field(default=None, max_length=256)
     sent_at: datetime | None = None
     error: str | None = None
@@ -1117,6 +1122,7 @@ class CustomerConversationRead(BaseModel):
     account_id: str
     ebay_thread_id: str
     order_id: int | None = None
+    order_sales_record_number: str | None = None
     buyer_username: str
     buyer_first_name: str = ""
     subject: str
@@ -1251,6 +1257,22 @@ class SupplierOrderUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=64)
 
 
+class SupplierTrackingCapture(BaseModel):
+    supplier: str = Field(pattern="^home_depot$")
+    external_order_id: str = Field(min_length=3, max_length=128)
+    tracking_number: str = Field(min_length=5, max_length=256)
+    carrier: str = Field(min_length=2, max_length=128)
+    order_id: int | None = Field(default=None, ge=1)
+
+
+class SupplierTrackingCaptureResult(BaseModel):
+    matched: bool
+    created: bool = False
+    supplier_order_id: int | None = None
+    order_id: int | None = None
+    status: str = "unmatched"
+
+
 class SupplierOrderRead(BaseModel):
     id: int
     order_id: int
@@ -1298,9 +1320,29 @@ class SupplierOrderClaimRead(SupplierOrderRead):
 class SupplierCheckoutCredentialRead(BaseModel):
     supplier_order_id: int
     card_number: str
-    pin: str
+    pin: str = ""
+    expiration_month: int | None = None
+    expiration_year: int | None = None
+    security_code: str = ""
+    cardholder_name: str = ""
+    billing_postal_code: str = ""
     approved_total: float
-    current_balance: float
+    current_balance: float = 0.0
+
+
+class SupplierPaymentCredentialWrite(BaseModel):
+    card_number: str = Field(min_length=12, max_length=32)
+    expiration_month: int = Field(ge=1, le=12)
+    expiration_year: int = Field(ge=2026, le=2100)
+    security_code: str = Field(min_length=3, max_length=4)
+    cardholder_name: str = Field(min_length=1, max_length=128)
+    billing_postal_code: str = Field(min_length=5, max_length=16)
+
+
+class SupplierPaymentCredentialStatus(BaseModel):
+    supplier: str
+    stored: bool
+    last_four: str = ""
 
 
 class FinancialAccountUpsert(BaseModel):
@@ -1377,6 +1419,15 @@ class FinanceOverviewRead(BaseModel):
     credit_card_balance: float
     ebay_available: float
     ebay_held: float
+    gross_merchandise_revenue: float = 0.0
+    realized_revenue: float = 0.0
+    estimated_marketplace_fees: float = 0.0
+    return_risk_reserve: float = 0.0
+    verified_profit: float | None = None
+    available_business_profit: float = 0.0
+    profit_verified: bool = False
+    unverified_order_count: int = 0
+    profit_data_issues: list[str] = []
     accounts: list[FinancialAccountRead]
     subscriptions: list[SubscriptionExpenseRead]
     periods: list[ProfitLossPeriodRead]
@@ -1385,9 +1436,16 @@ class FinanceOverviewRead(BaseModel):
 class OrderRead(BaseModel):
     id: int
     ebay_order_id: str
+    sales_record_number: str | None = None
     account_id: str = "sandbox"
     buyer_username: str | None = None
     recipient_name: str = ""
+    shipping_address_line1: str = ""
+    shipping_address_line2: str = ""
+    shipping_city: str = ""
+    shipping_state: str = ""
+    shipping_postal_code: str = ""
+    shipping_country: str = "United States"
     status: str
     ship_by: datetime | None = None
     total: float
@@ -1453,6 +1511,8 @@ class SettingsRead(BaseModel):
     display_timezone: str = "America/New_York"
     auto_delist_zero_view_enabled: bool = False
     auto_delist_zero_view_days: float = 25.0
+    active_listing_target_enabled: bool = False
+    active_listing_cap: float = 250.0
     default_vero_remove_brand_from_title: bool = True
     default_strip_brand_from_title: bool = True
     default_title_suffix: str = " | FREE SHIPPING"
@@ -1482,6 +1542,7 @@ class SettingsRead(BaseModel):
     notifications_order_updates: bool = True
     notifications_listing_errors: bool = True
     notifications_email: str = ""
+    fulfillment_notification_phone: str = ""
 
 
 class PricingSettingsUpdate(BaseModel):
@@ -1528,6 +1589,8 @@ class PricingSettingsUpdate(BaseModel):
     )
     auto_delist_zero_view_enabled: bool | None = None
     auto_delist_zero_view_days: float | None = Field(default=None, ge=1, le=365)
+    active_listing_target_enabled: bool | None = None
+    active_listing_cap: float | None = Field(default=None, ge=0, le=100000)
     default_vero_remove_brand_from_title: bool | None = None
     default_strip_brand_from_title: bool | None = None
     default_title_suffix: str | None = Field(default=None, max_length=40)
@@ -1563,6 +1626,7 @@ class CatalogSettingsUpdate(BaseModel):
     notifications_order_updates: bool | None = None
     notifications_listing_errors: bool | None = None
     notifications_email: str | None = Field(default=None, max_length=320)
+    fulfillment_notification_phone: str | None = Field(default=None, max_length=64)
 
 
 class EbayConnectionStatus(BaseModel):

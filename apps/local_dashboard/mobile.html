@@ -225,7 +225,7 @@
       font-weight: 950;
     }
     .segments {
-      width: min(100%, 330px);
+      width: min(100%, 400px);
       min-height: 42px;
       margin: 0 auto 18px;
       border: 1px solid var(--line);
@@ -233,7 +233,7 @@
       background: #0b1712;
       padding: 4px;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 2px;
     }
     .segment {
@@ -242,7 +242,8 @@
       background: transparent;
       color: var(--muted);
       font-weight: 950;
-      font-size: 15px;
+      font-size: 13px;
+      padding: 0 2px;
     }
     .segment.active {
       background: #173e35;
@@ -623,6 +624,145 @@
       min-height: 36px;
       padding: 6px 8px;
     }
+    .chat-shell { display: none; }
+    .chat-shell.visible { display: block; }
+    .chat-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    .chat-empty {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 15px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .chat-item {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-left: 6px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 13px 15px;
+    }
+    .chat-item.unread { border-left-color: var(--accent); }
+    .chat-item-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+    .chat-item-name { font-weight: 900; font-size: 15px; }
+    .chat-item-time { color: var(--muted-2); font-size: 11px; white-space: nowrap; }
+    .chat-item-subject { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .chat-item-preview {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat-thread[hidden] { display: none; }
+    .chat-thread {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    }
+    .chat-thread-head {
+      display: grid;
+      grid-template-columns: 40px minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .chat-thread-title { min-width: 0; }
+    .chat-thread-title strong { display: block; font-size: 16px; }
+    .chat-thread-title span { display: block; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chat-messages {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 14px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      align-content: start;
+    }
+    .bubble {
+      max-width: 82%;
+      border-radius: 14px;
+      padding: 10px 13px;
+      font-size: 14px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .bubble-meta { display: block; font-size: 10.5px; margin-top: 5px; opacity: .72; }
+    .bubble.inbound { justify-self: start; background: var(--panel-3); color: var(--text); border: 1px solid var(--line); }
+    .bubble.outbound-human { justify-self: end; background: #163f6e; color: #eaf2ff; border: 1px solid var(--blue); }
+    .bubble.outbound-automatic { justify-self: end; background: #4a3a12; color: #fff3d6; border: 1px solid var(--warn); }
+    .bubble.outbound-failed { justify-self: end; background: #3a1f17; color: #ffcfc0; border: 1px solid var(--danger); }
+    .bubble.outbound-prepared { justify-self: end; background: #3a2c10; color: #ffe9b8; border: 1px solid var(--warn); }
+    .bubble-note { font-size: 12px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,.22); opacity: .9; }
+    .chat-compose {
+      display: grid;
+      gap: 8px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-compose-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 74px;
+      gap: 8px;
+    }
+    .chat-compose textarea {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: var(--text);
+      padding: 10px;
+      resize: none;
+      font: inherit;
+      min-width: 0;
+    }
+    .chat-compose button {
+      border: 1px solid rgba(85, 200, 184, 0.62);
+      background: #123b34;
+      color: var(--text);
+      border-radius: 10px;
+      font-weight: 900;
+    }
+    .chat-compose button:disabled { opacity: .5; }
+    .chat-template-bar select,
+    .chat-template-fields input {
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+      min-width: 0;
+    }
+    .chat-template-fields { display: grid; gap: 6px; }
+    .chat-template-fields[hidden] { display: none; }
+    .chat-template-field label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: capitalize;
+      margin-bottom: 3px;
+    }
+    .chat-template-note {
+      font-size: 11.5px;
+      color: var(--warn);
+      background: #3a2c10;
+      border: 1px solid #5e491c;
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
     @media (max-width: 380px) {
       .shell { padding-left: 10px; padding-right: 10px; }
       .hero { grid-template-columns: 46px minmax(0, 1fr); gap: 9px; }
@@ -634,7 +774,7 @@
       .stats-grid { gap: 8px; }
       .stat-card { min-height: 78px; padding: 10px; }
       .stat-card label { font-size: 11px; }
-      .segment { font-size: 14px; }
+      .segment { font-size: 12px; }
     }
   </style>
 </head>
@@ -674,6 +814,7 @@
     <section class="segments" aria-label="Mobile view">
       <button class="segment active" data-view="stats" type="button">Stats</button>
       <button class="segment" data-view="queue" type="button">Worker Queue</button>
+      <button class="segment" data-view="chat" type="button">Messages</button>
     </section>
 
     <div class="error" id="error-box"></div>
@@ -737,6 +878,30 @@
     </section>
 
     <section class="alert-list" id="alerts"></section>
+
+    <section class="chat-shell" id="chat-view">
+      <div class="chat-list" id="chat-list"></div>
+      <div class="chat-thread" id="chat-thread" hidden>
+        <div class="chat-thread-head">
+          <button class="icon-btn" id="chat-back" type="button" aria-label="Back to conversations">&#8249;</button>
+          <div class="chat-thread-title">
+            <strong id="chat-thread-name">Buyer</strong>
+            <span id="chat-thread-subject" class="muted"></span>
+          </div>
+        </div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-compose">
+          <div class="chat-template-bar">
+            <select id="chat-template-select" aria-label="Quick reply template"></select>
+          </div>
+          <div class="chat-template-fields" id="chat-template-fields" hidden></div>
+          <div class="chat-compose-row">
+            <textarea id="chat-compose-input" placeholder="Write a reply..." rows="2"></textarea>
+            <button id="chat-send" type="button">Send</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <div class="notification-modal" id="notification-modal" hidden>
@@ -769,7 +934,7 @@
     const businessTimeZone = "America/New_York";
     const storeKey = `autozs-mobile-store:${apiBase}`;
     const privacyKey = "autozs-mobile-privacy";
-    let selectedView = params.get("view") === "queue" ? "queue" : "stats";
+    let selectedView = ["queue", "chat"].includes(params.get("view")) ? params.get("view") : "stats";
     let selectedStore = localStorage.getItem(storeKey) || "all";
     let privacyMode = localStorage.getItem(privacyKey) === "true";
     let pushConfig = null;
@@ -778,6 +943,11 @@
     let currentPushSubscription = null;
     let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     let calendarSelectedDate = localDateKey(new Date());
+    let chatConversations = [];
+    let openChatConversationId = null;
+    let chatSending = false;
+    let chatTemplates = [];
+    let chatTemplateDraft = null;
     let calendarEvents = [];
     let calendarEventFilter = "all";
 
@@ -821,12 +991,35 @@
     document.querySelectorAll("[data-view]").forEach((button) => {
       button.addEventListener("click", () => setView(button.dataset.view));
     });
+    document.getElementById("chat-back").addEventListener("click", closeChatThread);
+    document.getElementById("chat-send").addEventListener("click", sendChatMessage);
+    document.getElementById("chat-template-select").addEventListener("change", (event) => {
+      onChatTemplateSelect(event.target.value);
+    });
+    document.getElementById("chat-compose-input").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+      }
+    });
 
     applyPrivacy();
     setView(selectedView);
     initializePushState();
     refresh();
+    loadChatTemplates();
     setInterval(refresh, 30000);
+
+    async function loadChatTemplates() {
+      try {
+        chatTemplates = await api("/customer-service/templates");
+        if (openChatConversationId) renderChatTemplateSelect();
+      } catch {
+        // Quick-reply templates are a convenience on top of manual replies,
+        // which still work without them, so a failed fetch here should not
+        // surface as a page-level error.
+      }
+    }
 
     function defaultApiBase() {
       if (window.location.hostname.includes(".ts.net")) {
@@ -872,6 +1065,7 @@
         api(statsPath(7)),
         api(viewSummaryPath()),
         api(trafficPath(30)),
+        api("/customer-service/conversations"),
       ]);
       const failures = results.filter((result) => result.status === "rejected");
       const [
@@ -889,6 +1083,7 @@
         stats7,
         viewSummary,
         traffic30,
+        conversations,
       ] = results.map((result) => result.status === "fulfilled" ? result.value : null);
 
       setError(failures.length
@@ -904,6 +1099,13 @@
       if (traffic30) updateTrafficStats(traffic30);
       if (listingJobs && sourceRefreshJobs && revisionJobs && revisionBatches && captureQueue && products) {
         updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue, products });
+      }
+      if (conversations) {
+        chatConversations = conversations;
+        if (selectedView === "chat") {
+          renderChatList();
+          if (openChatConversationId) renderChatThread();
+        }
       }
     }
 
@@ -945,7 +1147,7 @@
     }
 
     function setView(view) {
-      selectedView = view === "queue" ? "queue" : "stats";
+      selectedView = ["queue", "chat"].includes(view) ? view : "stats";
       document.querySelectorAll("[data-view]").forEach((button) => {
         button.classList.toggle("active", button.dataset.view === selectedView);
       });
@@ -953,6 +1155,189 @@
       document.getElementById("mobile-calendar").classList.toggle("visible", selectedView === "stats");
       document.getElementById("queue-summary").classList.toggle("visible", selectedView === "queue");
       document.getElementById("alerts").classList.toggle("visible", selectedView === "queue");
+      document.getElementById("chat-view").classList.toggle("visible", selectedView === "chat");
+      if (selectedView === "chat") renderChatList();
+    }
+
+    function renderChatList() {
+      const list = document.getElementById("chat-list");
+      if (!list) return;
+      if (!chatConversations.length) {
+        list.innerHTML = `<div class="chat-empty">No eBay conversations yet. They'll show up here once buyers message you or an order comes in.</div>`;
+        return;
+      }
+      const sorted = [...chatConversations].sort((a, b) => apiDate(b.last_message_at) - apiDate(a.last_message_at));
+      list.innerHTML = sorted.map((conversation) => {
+        const messages = conversation.messages || [];
+        const last = messages[messages.length - 1];
+        const preview = last ? String(last.body || "").replace(/\s+/g, " ").trim() : "No messages yet";
+        return `<button class="chat-item" type="button" onclick="openChatConversation(${conversation.id})">
+          <div class="chat-item-top">
+            <span class="chat-item-name">${escapeHtml(conversation.buyer_first_name || conversation.buyer_username || "eBay buyer")}</span>
+            <span class="chat-item-time">${formatDate(conversation.last_message_at)}</span>
+          </div>
+          <div class="chat-item-subject">${escapeHtml(conversation.subject || "")}</div>
+          <div class="chat-item-preview">${escapeHtml(preview)}</div>
+        </button>`;
+      }).join("");
+    }
+
+    function openChatConversation(id) {
+      openChatConversationId = id;
+      resetChatTemplateDraft();
+      document.getElementById("chat-compose-input").value = "";
+      document.getElementById("chat-thread").hidden = false;
+      renderChatTemplateSelect();
+      renderChatThread();
+    }
+
+    function closeChatThread() {
+      openChatConversationId = null;
+      resetChatTemplateDraft();
+      document.getElementById("chat-thread").hidden = true;
+    }
+
+    function resetChatTemplateDraft() {
+      chatTemplateDraft = null;
+      const fields = document.getElementById("chat-template-fields");
+      if (fields) {
+        fields.hidden = true;
+        fields.innerHTML = "";
+      }
+    }
+
+    function renderChatTemplateSelect() {
+      const select = document.getElementById("chat-template-select");
+      if (!select) return;
+      const categories = [...new Set(chatTemplates.map((template) => template.category))];
+      const options = categories.map((category) => `<optgroup label="${escapeHtml(category)}">${
+        chatTemplates.filter((template) => template.category === category).map((template) =>
+          `<option value="${escapeHtml(template.key)}">${template.number}. ${escapeHtml(template.title)}</option>`
+        ).join("")
+      }</optgroup>`).join("");
+      select.innerHTML = `<option value="">Quick reply template...</option>${options}`;
+      select.value = chatTemplateDraft?.key || "";
+    }
+
+    function onChatTemplateSelect(key) {
+      const conversation = chatConversations.find((item) => Number(item.id) === Number(openChatConversationId));
+      const template = chatTemplates.find((item) => item.key === key);
+      if (!template || !conversation) {
+        resetChatTemplateDraft();
+        return;
+      }
+      chatTemplateDraft = {
+        key,
+        variables: {
+          buyer_first_name: conversation.buyer_first_name || "",
+          seller_first_name: localStorage.getItem("customerServiceSellerFirstName") || "",
+        },
+      };
+      renderChatTemplateFields();
+      applyChatTemplate();
+    }
+
+    function renderChatTemplateFields() {
+      const template = chatTemplates.find((item) => item.key === chatTemplateDraft?.key);
+      const container = document.getElementById("chat-template-fields");
+      if (!container) return;
+      if (!template) {
+        container.hidden = true;
+        container.innerHTML = "";
+        return;
+      }
+      container.hidden = false;
+      const note = template.requires_review
+        ? `<div class="chat-template-note">${escapeHtml(template.review_note || "Review before sending — not safe to auto-send.")}</div>`
+        : "";
+      const fields = template.placeholders.map((placeholder) => `<div class="chat-template-field">
+        <label>${escapeHtml(placeholder.replaceAll("_", " "))}</label>
+        <input value="${escapeHtml(chatTemplateDraft.variables[placeholder] || "")}" oninput="updateChatTemplateVariable('${escapeHtml(placeholder)}', this.value)" />
+      </div>`).join("");
+      container.innerHTML = note + fields;
+    }
+
+    function updateChatTemplateVariable(placeholder, value) {
+      if (!chatTemplateDraft) return;
+      chatTemplateDraft.variables[placeholder] = value;
+      if (placeholder === "seller_first_name" && value.trim()) {
+        localStorage.setItem("customerServiceSellerFirstName", value.trim());
+      }
+      applyChatTemplate();
+    }
+
+    function applyChatTemplate() {
+      const template = chatTemplates.find((item) => item.key === chatTemplateDraft?.key);
+      const input = document.getElementById("chat-compose-input");
+      if (!template || !input) return;
+      let body = template.body;
+      Object.entries(chatTemplateDraft.variables || {}).forEach(([placeholder, value]) => {
+        if (String(value || "").trim()) {
+          body = body.replaceAll(`[[${placeholder}]]`, String(value).trim());
+        }
+      });
+      input.value = body;
+    }
+
+    function renderChatThread() {
+      const conversation = chatConversations.find((item) => Number(item.id) === Number(openChatConversationId));
+      if (!conversation) {
+        closeChatThread();
+        return;
+      }
+      setText("chat-thread-name", conversation.buyer_first_name || conversation.buyer_username || "eBay buyer");
+      setText("chat-thread-subject", conversation.subject || "");
+      const messages = conversation.messages || [];
+      const container = document.getElementById("chat-messages");
+      container.innerHTML = messages.length
+        ? messages.map(chatBubbleHtml).join("")
+        : `<div class="chat-empty">No messages in this conversation yet.</div>`;
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function chatBubbleHtml(message) {
+      let variant = "inbound";
+      if (message.direction === "outbound") {
+        variant = message.status === "failed" ? "outbound-failed"
+          : message.status === "prepared" ? "outbound-prepared"
+          : message.origin === "automatic" ? "outbound-automatic" : "outbound-human";
+      }
+      const label = message.direction === "outbound"
+        ? (message.status === "failed" ? "Failed to send"
+          : message.status === "prepared" ? "Filled in eBay — tap Send on your computer"
+          : message.origin === "automatic" ? "Automatic" : "You")
+        : "Buyer";
+      const note = message.status === "prepared"
+        ? `<div class="bubble-note">AutoZS typed this into eBay's message box but did not press Send — open eBay on your computer to finish sending it.</div>`
+        : message.status === "failed"
+          ? `<div class="bubble-note">This was not sent to the buyer. AutoZS could not prepare it in eBay, so copy or type it directly in eBay on your computer.</div>`
+          : "";
+      return `<div class="bubble ${variant}">${escapeHtml(message.body || "")}${note}<span class="bubble-meta">${escapeHtml(label)} &middot; ${formatDate(message.sent_at || message.created_at)}</span></div>`;
+    }
+
+    async function sendChatMessage() {
+      if (chatSending || !openChatConversationId) return;
+      const input = document.getElementById("chat-compose-input");
+      const body = (input.value || "").trim();
+      if (!body) return;
+      chatSending = true;
+      document.getElementById("chat-send").disabled = true;
+      try {
+        await api(`/customer-service/conversations/${openChatConversationId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ body, origin: "human", queue_immediately: true }),
+        });
+        input.value = "";
+        resetChatTemplateDraft();
+        renderChatTemplateSelect();
+        await refresh();
+        renderChatThread();
+      } catch (error) {
+        setError(error.message || "Could not send that message.");
+      } finally {
+        chatSending = false;
+        document.getElementById("chat-send").disabled = false;
+      }
     }
 
     function updateApiStatus(health) {
