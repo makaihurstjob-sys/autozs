@@ -73,6 +73,20 @@ def import_finance_entries(db: Session, entries: list[dict]) -> int:
     return imported
 
 
+def record_order_ebay_fee(db: Session, order: Order, *, fee_amount: float, evidence_ref: str) -> Order:
+    clean_evidence = str(evidence_ref or "").strip()
+    if not clean_evidence:
+        raise ValueError("An evidence reference (the eBay order/transaction id the fee was read from) is required.")
+    if float(fee_amount) < 0:
+        raise ValueError("eBay fee amount cannot be negative.")
+    order.ebay_fee_amount = round(float(fee_amount), 2)
+    order.ebay_fee_evidence_ref = clean_evidence
+    order.ebay_fee_recorded_at = datetime.utcnow()
+    db.commit()
+    db.refresh(order)
+    return order
+
+
 def finance_overview(db: Session) -> dict:
     orders = list(db.scalars(
         select(Order)
@@ -118,8 +132,15 @@ def finance_overview(db: Session) -> dict:
         if _order_merchandise_revenue(order) > 0
         and not any(str(item.status or "").lower() in PLACED_SUPPLIER_ORDER_STATUSES for item in order.supplier_orders)
     ]
+    # Real per-order eBay fees only -- never the rate-based estimate above and
+    # never a generic imported ledger entry, so verified_profit can't be built
+    # on a number nobody can trace back to an actual eBay transaction.
+    fee_missing_orders = [
+        order for order in fulfilled_orders
+        if _order_merchandise_revenue(order) > 0 and order.ebay_fee_amount is None
+    ]
     recorded_fee_expenses = round(sum(
-        abs(float(entry.amount)) for entry in entries if entry.entry_type == "fee"
+        float(order.ebay_fee_amount or 0) for order in fulfilled_orders if order.ebay_fee_amount is not None
     ), 2)
     non_fee_expenses = round(sum(
         abs(float(entry.amount)) for entry in entries if entry.entry_type == "expense"
@@ -127,13 +148,16 @@ def finance_overview(db: Session) -> dict:
     issues: list[str] = []
     if missing_supplier_cost_orders:
         issues.append(f"{len(missing_supplier_cost_orders)} fulfilled order(s) are missing a placed supplier order and verified supplier cost.")
-    if realized_revenue > 0 and recorded_fee_expenses <= 0:
-        issues.append("No actual eBay fee expense is recorded for fulfilled revenue.")
-    fresh_accounts = [account for account in accounts if account.last_synced_at]
-    if not fresh_accounts:
-        issues.append("No recently synchronized business account balance is available.")
-    elif any((datetime.utcnow() - account.last_synced_at).total_seconds() > 48 * 3600 for account in fresh_accounts):
-        issues.append("One or more business account balances are older than 48 hours.")
+    if fee_missing_orders:
+        issues.append(f"{len(fee_missing_orders)} fulfilled order(s) are missing a recorded actual eBay fee.")
+    # Available funds come from Robinhood specifically -- z_finance (or any
+    # other provider) never counts here, per the corrected accounting rules.
+    robinhood_accounts = [account for account in accounts if account.provider == "robinhood"]
+    fresh_robinhood_accounts = [account for account in robinhood_accounts if account.last_synced_at]
+    if not fresh_robinhood_accounts:
+        issues.append("No verified Robinhood balance is connected.")
+    elif any((datetime.utcnow() - account.last_synced_at).total_seconds() > 48 * 3600 for account in fresh_robinhood_accounts):
+        issues.append("The connected Robinhood balance is older than 48 hours.")
     profit_verified = realized_revenue > 0 and not issues
     verified_profit = None
     available_business_profit = 0.0
@@ -145,7 +169,7 @@ def finance_overview(db: Session) -> dict:
         )
         liquid_balance = round(sum(
             float(account.available_balance if account.available_balance is not None else account.current_balance or 0)
-            for account in accounts if account.account_type in {"bank", "ebay"}
+            for account in fresh_robinhood_accounts
         ), 2)
         available_business_profit = round(max(0.0, min(verified_profit, liquid_balance)), 2)
     period_rows: dict[str, dict] = defaultdict(lambda: {"revenue": 0.0, "supplier_cost": 0.0, "operating_expenses": 0.0, "orders": 0})
@@ -199,7 +223,7 @@ def finance_overview(db: Session) -> dict:
         "verified_profit": verified_profit,
         "available_business_profit": available_business_profit,
         "profit_verified": profit_verified,
-        "unverified_order_count": len(missing_supplier_cost_orders),
+        "unverified_order_count": len({order.id for order in missing_supplier_cost_orders} | {order.id for order in fee_missing_orders}),
         "profit_data_issues": issues,
         "accounts": accounts,
         "subscriptions": subscriptions,

@@ -594,6 +594,13 @@ def update_listing_job(
         if status == ListingJobStatus.queued.value:
             job.started_at = None
             job.completed_at = None
+            # A stale scheduled time is a silent failure mode: eBay rejects the
+            # final submit with "The scheduled time occurs in the past" and the
+            # automation reports it as "never confirmed", which reads like a fill
+            # bug but is really just a schedule that expired while the job sat
+            # unprocessed or got retried later. Requeuing must push it forward.
+            if job.listing_schedule_at is not None and job.listing_schedule_at <= _now_utc_naive():
+                job.listing_schedule_at = _now_utc_naive() + timedelta(minutes=30)
         if status == ListingJobStatus.tombstoned.value:
             job.listing_schedule_at = None
             _tombstone_missing_draft_records(db, job)

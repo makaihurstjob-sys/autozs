@@ -2,7 +2,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import asyncio
 import contextlib
+import multiprocessing
+import sys
 from pathlib import Path
+
+# Windows' multiprocessing "spawn" start method re-launches a child interpreter
+# for uvicorn's server process, and without this it resolves to whatever
+# "python.exe" the base install registered system-wide -- not this venv's
+# interpreter -- even though sys.executable here is correct. That child then
+# starts a second, environment-less AutoZS instance racing for the same
+# ports. Pinning the executable explicitly is the standard fix.
+multiprocessing.set_executable(sys.executable)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +57,9 @@ def _ensure_lightweight_columns() -> None:
             "shipping_postal_code": "VARCHAR(32) DEFAULT '' NOT NULL",
             "shipping_country": "VARCHAR(64) DEFAULT 'United States' NOT NULL",
             "sales_record_number": "VARCHAR(64)",
+            "ebay_fee_amount": "FLOAT",
+            "ebay_fee_evidence_ref": "VARCHAR(256) DEFAULT '' NOT NULL",
+            "ebay_fee_recorded_at": "DATETIME",
         },
         "ebay_listings": {
             "account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL",

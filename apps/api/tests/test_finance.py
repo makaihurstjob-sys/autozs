@@ -124,26 +124,60 @@ def test_finance_exposes_liquidity_bounded_profit_only_after_cost_and_fee_eviden
         "total": 20.0,
     })
     assert placed.status_code == 200, placed.text
-    account = client.post("/finance/accounts", json={
-        "provider": "manual",
-        "external_id": "checking-verified",
+    # Available funds come from a verified Robinhood balance specifically --
+    # any other provider (the old z_finance/plaid-style accounts) no longer
+    # counts toward liquidity, per the corrected accounting rules.
+    client.post("/finance/accounts", json={
+        "provider": "robinhood",
+        "external_id": "robinhood-verified",
         "account_type": "bank",
-        "name": "Business checking",
+        "name": "Robinhood available funds",
         "current_balance": 100.0,
         "available_balance": 100.0,
     }).json()
-    client.post("/finance/entries/import", json=[{
-        "provider": "ebay",
-        "external_id": "fee-verified-1",
-        "financial_account_id": account["id"],
-        "entry_type": "fee",
-        "category": "marketplace_fee",
-        "amount": -5.0,
-        "description": "Actual eBay fee",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-    }])
+    fee_response = client.post(f"/orders/{order['id']}/ebay-fee", json={
+        "fee_amount": 5.0,
+        "evidence_ref": "eBay Seller Hub order 22-00000-00000",
+    })
+    assert fee_response.status_code == 200, fee_response.text
     overview = client.get("/finance/overview").json()
     assert overview["profit_verified"] is True
     assert overview["verified_profit"] is not None
     assert overview["available_business_profit"] == max(0.0, overview["verified_profit"])
     assert overview["profit_data_issues"] == []
+
+
+def test_ebay_fee_requires_a_real_evidence_reference(client) -> None:
+    client.post(
+        "/products/import-captured",
+        json={
+            "source_url": "https://www.homedepot.com/p/Fee-Evidence/999999",
+            "title": "Fee Evidence Product",
+            "source_price": 10.0,
+            "source_shipping": 0.0,
+        },
+    )
+    order = client.post("/orders/sync-sandbox").json()
+
+    rejected = client.post(f"/orders/{order['id']}/ebay-fee", json={"fee_amount": 2.0, "evidence_ref": "   "})
+    assert rejected.status_code == 422
+
+    missing_order = client.post(f"/orders/999999/ebay-fee", json={"fee_amount": 2.0, "evidence_ref": "ref"})
+    assert missing_order.status_code == 404
+
+
+def test_finance_liquidity_ignores_non_robinhood_accounts(client) -> None:
+    # A z_finance-style (or any other non-Robinhood) account balance must never
+    # count toward available_business_profit -- that's the whole point of the
+    # corrected accounting rules.
+    client.post("/finance/accounts", json={
+        "provider": "z_finance",
+        "external_id": "old-bank-1",
+        "account_type": "bank",
+        "name": "Old operating account",
+        "current_balance": 5000.0,
+        "available_balance": 5000.0,
+    })
+    overview = client.get("/finance/overview").json()
+    assert any("Robinhood" in issue for issue in overview["profit_data_issues"])
+    assert overview["available_business_profit"] == 0.0

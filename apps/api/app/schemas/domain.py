@@ -1449,6 +1449,9 @@ class OrderRead(BaseModel):
     status: str
     ship_by: datetime | None = None
     total: float
+    ebay_fee_amount: float | None = None
+    ebay_fee_evidence_ref: str = ""
+    ebay_fee_recorded_at: datetime | None = None
     items: list[OrderItemRead] = []
     fulfillment_tasks: list[FulfillmentTaskRead] = []
     customer_updates: list[CustomerUpdateRead] = []
@@ -1457,6 +1460,11 @@ class OrderRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OrderEbayFeeUpdate(BaseModel):
+    fee_amount: float = Field(ge=0)
+    evidence_ref: str = Field(min_length=1, max_length=256)
 
 
 class EbayOrderReportImport(BaseModel):

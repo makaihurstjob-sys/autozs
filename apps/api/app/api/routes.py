@@ -153,6 +153,7 @@ from app.schemas.domain import (
     ListingJobRunResult,
     ListingJobUpdate,
     ListingReadinessReport,
+    OrderEbayFeeUpdate,
     OrderUpdateDraftRunRead,
     OrderRead,
     OperationalAlertRead,
@@ -334,6 +335,7 @@ from app.services.finance import (
     create_subscription,
     finance_overview,
     import_finance_entries,
+    record_order_ebay_fee,
     upsert_financial_account,
 )
 from app.services.z_finance import (
@@ -3485,6 +3487,21 @@ def add_subscription_expense(
 @router.post("/finance/entries/import")
 def import_financial_entries(entries: list[FinanceEntryImport], db: Session = Depends(get_db)) -> dict[str, int]:
     return {"imported": import_finance_entries(db, [entry.model_dump() for entry in entries])}
+
+
+@router.post("/orders/{order_id}/ebay-fee", response_model=OrderRead)
+def write_order_ebay_fee(
+    order_id: int,
+    payload: OrderEbayFeeUpdate,
+    db: Session = Depends(get_db),
+) -> Order:
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    try:
+        return record_order_ebay_fee(db, order, fee_amount=payload.fee_amount, evidence_ref=payload.evidence_ref)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/api/z-finance/summary", dependencies=[Depends(_require_z_finance_bearer)])

@@ -1090,6 +1090,46 @@ def test_queued_listing_is_blocked_if_supplier_becomes_unavailable(client) -> No
     assert "delivery is unavailable" in started["message"]
 
 
+def test_requeuing_a_job_with_a_stale_schedule_pushes_it_into_the_future(client) -> None:
+    # Regression: eBay rejects the final submit with "The scheduled time occurs
+    # in the past" if listing_schedule_at has already elapsed, which the
+    # automation reports as a generic "never confirmed" needs_review -- looks
+    # like a fill bug but is really just a stale requeue. Requeuing (status ->
+    # queued) must refresh a past schedule time, not resubmit it as-is.
+    product = create_ready_product(client, "Stale Schedule Product", "stale-schedule")
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "a.m.anim-59",
+            "action": "publish",
+            "listing_schedule_at": "2020-01-01T00:00:00",
+        },
+    ).json()[0]
+    assert job["listing_schedule_at"].startswith("2020-01-01")
+
+    requeued = client.patch(f"/listing-jobs/{job['id']}", json={"status": "queued"}).json()
+    refreshed = datetime.fromisoformat(requeued["listing_schedule_at"])
+    assert refreshed > datetime.utcnow()
+
+
+def test_requeuing_a_job_with_a_future_schedule_leaves_it_untouched(client) -> None:
+    product = create_ready_product(client, "Future Schedule Product", "future-schedule")
+    future = (datetime.now(timezone.utc) + timedelta(hours=5)).replace(microsecond=0)
+    job = client.post(
+        "/listing-jobs",
+        json={
+            "product_ids": [product["id"]],
+            "ebay_account_key": "a.m.anim-59",
+            "action": "publish",
+            "listing_schedule_at": future.isoformat(),
+        },
+    ).json()[0]
+
+    requeued = client.patch(f"/listing-jobs/{job['id']}", json={"status": "queued"}).json()
+    assert requeued["listing_schedule_at"] == job["listing_schedule_at"]
+
+
 def test_listing_expansion_is_off_by_default(client) -> None:
     create_ready_product(client, "Expansion Off By Default", "expansion-off")
     queued = client.post("/listing-expansion/auto-queue?ebay_account_key=a.m.anim-59&limit=5")

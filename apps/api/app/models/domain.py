@@ -612,6 +612,13 @@ class Order(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(64), default="imported")
     ship_by: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     total: Mapped[float] = mapped_column(Float, default=0.0)
+    # The actual eBay fee charged on this specific order, read from Seller Hub --
+    # never a rate-based estimate. evidence_ref anchors it to something checkable
+    # (an eBay transaction/order id) so a verified-profit figure can't be built
+    # on a number nobody can trace back to its source.
+    ebay_fee_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ebay_fee_evidence_ref: Mapped[str] = mapped_column(String(256), default="")
+    ebay_fee_recorded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order")
     fulfillment_tasks: Mapped[list["FulfillmentTask"]] = relationship(back_populates="order")
