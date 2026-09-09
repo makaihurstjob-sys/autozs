@@ -1704,7 +1704,7 @@ async function submitScheduledListing(pkg, interactionTimeoutMs = 8000) {
   if (!confirmed) {
     // Capture what eBay actually showed so the next failure explains itself
     // instead of needing a live browser session to diagnose.
-    const shown = describeUnconfirmedSubmission();
+    const shown = describeUnconfirmedSubmission(pkg);
     return {
       ok: false,
       message: `eBay never confirmed the scheduled listing after the final click, so it is still a draft.${shown ? ` eBay showed: ${shown}` : " eBay showed no visible error."} Review the draft and retry.`,
@@ -1726,10 +1726,21 @@ function listingDescriptionIsEmpty() {
   return !(editable && String(editable.innerText || "").trim());
 }
 
-function describeUnconfirmedSubmission() {
+function describeUnconfirmedSubmission(pkg = {}) {
   const parts = [];
-  if (listingFillReviewLabels.length) parts.push(`AUTOZS fill review: ${listingFillReviewLabels.slice(0, 8).join(", ")}`);
-  if (listingFillReviewLabels.includes("condition")) {
+  // listingFillReviewLabels reflects the fill pass that ran before repairs
+  // and before the final submit click. eBay's own click-time validation can
+  // reject a field that looked fine at that snapshot, so a stale, empty
+  // label list here used to report "no cause found" even when a fresh check
+  // right now would identify exactly what regressed.
+  const freshChecks = criticalListingCheckDetails(pkg);
+  const freshFailedLabels = freshChecks.filter((check) => !check.ok).map((check) => check.label);
+  const reviewLabels = [...new Set([...freshFailedLabels, ...listingFillReviewLabels])];
+  if (reviewLabels.length) parts.push(`AUTOZS fill review: ${reviewLabels.slice(0, 8).join(", ")}`);
+  if (reviewLabels.includes("item specifics")) {
+    parts.push(`item specifics diagnostic: ${itemSpecificDiagnostic(pkg)}`);
+  }
+  if (reviewLabels.includes("condition")) {
     const conditionContext = conditionControls()
       .filter(isVisible)
       .map((element) => ({
@@ -2191,6 +2202,20 @@ function conditionSelectionMatches(condition) {
       );
     });
   if (summarySelected) return true;
+  // Some categories render the live condition value as a bare button (for
+  // example just "New") with no "condition" wording on the control itself
+  // or its immediate ancestor, so nearbyText never surfaces the section
+  // context. Fall back to the page's own "Condition" heading and look for
+  // the expected value anywhere inside that heading's section.
+  const conditionHeading = [...document.querySelectorAll('h2, h3, [role="heading"]')]
+    .find((element) => /^item condition$|^condition$/i.test(String(element.innerText || element.textContent || "").trim()));
+  if (conditionHeading) {
+    const container = conditionHeading.closest("section, div") || conditionHeading.parentElement;
+    const headingSectionSelected = container && [...container.querySelectorAll("button, [role='button'], span, div")]
+      .filter(isVisible)
+      .some((element) => normalizeText(element.innerText || element.textContent || "") === normalized);
+    if (headingSectionSelected) return true;
+  }
   // Some categories (for example seeds) do not expose an item-condition
   // selector in the editor at all. eBay renders only the optional Condition
   // description textarea and applies the category's fixed condition itself.
