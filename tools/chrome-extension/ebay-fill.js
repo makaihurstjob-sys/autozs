@@ -3673,7 +3673,9 @@ async function applyListingSchedule(pkg) {
 }
 
 async function ensureListingScheduleStable(pkg) {
-  const schedule = parseListingSchedule(pkg.listing_schedule_at);
+  let schedule = parseListingSchedule(pkg.listing_schedule_at);
+  if (!schedule) return false;
+  schedule = await refreshListingScheduleIfStale(pkg, schedule);
   if (!schedule) return false;
   const matches = () => scheduleDateFieldMatches(findScheduleDayField(), schedule) && scheduleTimeMatches(schedule);
   // The schedule panel can re-render more than once as other listing fields
@@ -4189,7 +4191,47 @@ function parseListingSchedule(value) {
     usDate: `${parts.month}/${parts.day}/${parts.year}`,
     time24: `${pad(hour)}:${pad(minute)}`,
     time12: `${hour12}:${pad(minute)} ${suffix}`,
+    instant: date.getTime(),
   };
+}
+
+function formatAsEasternWallClock(date) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+const LISTING_SCHEDULE_MIN_LEAD_MS = 20 * 60 * 1000;
+const LISTING_SCHEDULE_REFRESH_LEAD_MS = 40 * 60 * 1000;
+
+async function refreshListingScheduleIfStale(pkg, schedule) {
+  if (!schedule || schedule.instant - Date.now() >= LISTING_SCHEDULE_MIN_LEAD_MS) return schedule;
+  // The backend only pushes a stale schedule forward when the job is first
+  // claimed. A job that gets retried repeatedly (fill/repair loops, or
+  // sitting in needs-review between manual requeues) can outlive that
+  // claim-time buffer by the time this final pre-click check runs. Recompute
+  // a fresh future time now instead of resubmitting a time eBay will reject
+  // as already in the past.
+  const freshEasternWallClock = formatAsEasternWallClock(new Date(Date.now() + LISTING_SCHEDULE_REFRESH_LEAD_MS));
+  pkg.listing_schedule_at = freshEasternWallClock;
+  const refreshed = parseListingSchedule(freshEasternWallClock);
+  const jobId = currentWorkflowJobId();
+  if (jobId) {
+    try {
+      await updateListingJob(jobId, { listing_schedule_at: freshEasternWallClock });
+    } catch {}
+  }
+  return refreshed;
 }
 
 function easternWallTimeToUtc(value) {
