@@ -21,6 +21,16 @@
       --muted-2: #7f9189;
       --accent: #55c8b8;
       --accent-2: #168777;
+      --bg-glow: rgba(85, 200, 184, 0.08);
+      --control-bg: #091510;
+      --accent-soft: #123b34;
+      --accent-soft-2: #173e35;
+      --accent-border: rgba(85, 200, 184, 0.62);
+      --banner-border: #35b6a3;
+      --banner-start: #1c9583;
+      --banner-end: #177d6f;
+      --card-bg: rgba(16, 27, 22, 0.98);
+      --card-inset: rgba(42, 58, 52, 0.38);
       --blue: #58a8ff;
       --warn: #f2a642;
       --danger: #ee7b5b;
@@ -31,7 +41,30 @@
     /* Marketplace switch: one pill split into an eBay half and a Depop half.
        The active half lights up and the app accent follows it, so which store
        you are in is readable at a glance. */
-    body[data-marketplace="depop"] { --accent: #f0616a; --accent-2: #b3161f; }
+    :root[data-marketplace="depop"],
+    body[data-marketplace="depop"] {
+      --bg: #11080a;
+      --panel: #1b0d11;
+      --panel-2: #211016;
+      --panel-3: #2b1118;
+      --line: #432029;
+      --line-strong: #65313d;
+      --text: #fff5f6;
+      --muted: #c6a3aa;
+      --muted-2: #9f7b83;
+      --accent: #ff4d69;
+      --accent-2: #c52f49;
+      --bg-glow: rgba(255, 77, 105, 0.11);
+      --control-bg: #160a0d;
+      --accent-soft: #36131b;
+      --accent-soft-2: #451722;
+      --accent-border: rgba(255, 77, 105, 0.62);
+      --banner-border: #e34860;
+      --banner-start: #c52f49;
+      --banner-end: #8f2033;
+      --card-bg: rgba(27, 13, 17, 0.98);
+      --card-inset: rgba(91, 35, 48, 0.34);
+    }
     /* Its own row: squeezed into the store row it collapsed the store picker
        and clipped the icon buttons on a phone-width screen. */
     .market-row { display: flex; justify-content: flex-end; margin-bottom: 8px; }
@@ -73,7 +106,7 @@
       min-height: 100vh;
       margin: 0;
       background:
-        radial-gradient(circle at 50% -20%, rgba(85, 200, 184, 0.08), transparent 40%),
+        radial-gradient(circle at 50% -20%, var(--bg-glow), transparent 40%),
         var(--bg);
       color: var(--text);
       padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
@@ -124,7 +157,7 @@
       min-height: 40px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #091510;
+      background: var(--control-bg);
       color: var(--text);
       font-size: 16px;
       font-weight: 850;
@@ -160,8 +193,8 @@
       min-width: 34px;
       height: 34px;
       border-radius: 999px;
-      border: 1px solid rgba(85, 200, 184, 0.62);
-      background: #123b34;
+      border: 1px solid var(--accent-border);
+      background: var(--accent-soft);
       color: var(--text);
       display: inline-grid;
       place-items: center;
@@ -213,8 +246,8 @@
     .dashboard-banner {
       min-height: 54px;
       border-radius: 7px;
-      border: 1px solid #35b6a3;
-      background: linear-gradient(180deg, #1c9583, #177d6f);
+      border: 1px solid var(--banner-border);
+      background: linear-gradient(180deg, var(--banner-start), var(--banner-end));
       display: grid;
       place-items: center;
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
@@ -230,7 +263,7 @@
       margin: 0 auto 18px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: #0b1712;
+      background: var(--control-bg);
       padding: 4px;
       display: grid;
       grid-template-columns: 1fr 1fr 1fr;
@@ -246,9 +279,9 @@
       padding: 0 2px;
     }
     .segment.active {
-      background: #173e35;
+      background: var(--accent-soft-2);
       color: var(--text);
-      box-shadow: inset 0 0 0 1px rgba(85, 200, 184, 0.62);
+      box-shadow: inset 0 0 0 1px var(--accent-border);
     }
     .error {
       display: none;
@@ -269,10 +302,10 @@
     .stat-card {
       min-height: 84px;
       border: 1px solid var(--line);
-      background: rgba(16, 27, 22, 0.98);
+      background: var(--card-bg);
       border-radius: 13px;
       padding: 11px 13px;
-      box-shadow: inset 0 0 0 3px rgba(42, 58, 52, 0.38);
+      box-shadow: inset 0 0 0 3px var(--card-inset);
       display: grid;
       align-content: space-between;
     }
@@ -348,7 +381,7 @@
     }
     .mobile-calendar-day:nth-child(7n) { border-right: 0; }
     .mobile-calendar-day.muted { color: #53625c; }
-    .mobile-calendar-day.selected { background: #173b33; box-shadow: inset 0 0 0 1px var(--accent); }
+    .mobile-calendar-day.selected { background: var(--accent-soft-2); box-shadow: inset 0 0 0 1px var(--accent); }
     .mobile-calendar-day.today .day-number { color: var(--accent); }
     .calendar-dots {
       position: absolute;
@@ -373,7 +406,7 @@
     .calendar-detail-toolbar { display: flex; align-items: center; gap: 9px; }
     .calendar-detail-toolbar select {
       flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 7px;
-      background: #102019; color: var(--text); padding: 9px 10px; font: inherit; font-weight: 850;
+      background: var(--control-bg); color: var(--text); padding: 9px 10px; font: inherit; font-weight: 850;
     }
     .calendar-detail-count { color: var(--muted); font-size: 12px; font-weight: 900; white-space: nowrap; }
     .calendar-detail-items {
@@ -389,7 +422,7 @@
       border: 1px solid var(--line);
       border-left: 4px solid var(--accent);
       border-radius: 7px;
-      background: #0b1813;
+      background: var(--control-bg);
     }
     .calendar-mini-card.scheduled { border-left-color: var(--blue); }
     .calendar-mini-card.listed { border-left-color: var(--ok); }
@@ -433,7 +466,9 @@
     }
     .alert-list {
       display: none;
+      grid-template-columns: minmax(0, 1fr);
       gap: 10px;
+      min-width: 0;
     }
     .alert-list.visible { display: grid; }
     .alert {
@@ -441,6 +476,9 @@
       background: var(--panel);
       border-left: 6px solid var(--accent);
       border-radius: 8px;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
       padding: 15px;
     }
     .alert.critical { border-left-color: var(--danger); }
@@ -454,6 +492,7 @@
       display: flex;
       gap: 10px;
       align-items: flex-start;
+      min-width: 0;
     }
     .alert-title {
       flex: 1;
@@ -461,9 +500,10 @@
       font-size: 20px;
       font-weight: 950;
       line-height: 1.18;
+      overflow-wrap: anywhere;
     }
     .pill {
-      background: #263b34;
+      background: var(--accent-soft);
       color: var(--accent);
       border-radius: 999px;
       padding: 6px 10px;
@@ -474,7 +514,7 @@
     .pill.critical { color: #ffb39f; background: #4b2017; }
     .pill.warning { color: #ffd18a; background: #3b2c12; }
     .pill.running { color: #9ac8ff; background: #17365a; }
-    .pill.queued { color: #9ce8dc; background: #173e35; }
+    .pill.queued { color: var(--accent); background: var(--accent-soft-2); }
     .pill.attention { color: #ffb39f; background: #4b2017; }
     .pill.done { color: #8ce4ae; background: #173b28; }
     .message {
@@ -489,16 +529,17 @@
       word-break: break-word;
       margin-top: 9px;
     }
-    .worker-progress { height: 7px; margin-top: 11px; border-radius: 999px; overflow: hidden; background: #20342c; }
+    .worker-progress { height: 7px; margin-top: 11px; border-radius: 999px; overflow: hidden; background: var(--accent-soft); }
     .worker-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
     .worker-progress-label { margin-top: 5px; color: var(--muted); font-size: 12px; font-weight: 850; text-align: right; }
     .revision-prices {
-      background: #0b1813;
+      background: var(--control-bg);
       border: 1px solid var(--line);
       border-radius: 8px;
       display: grid;
       gap: 8px;
       margin-top: 12px;
+      min-width: 0;
       padding: 11px 12px;
     }
     .revision-price-row {
@@ -506,6 +547,7 @@
       display: flex;
       gap: 10px;
       justify-content: space-between;
+      min-width: 0;
     }
     .revision-price-row span {
       color: var(--muted);
@@ -515,6 +557,8 @@
     .revision-price-row strong {
       color: var(--text);
       font-size: 15px;
+      min-width: 0;
+      overflow-wrap: anywhere;
       text-align: right;
     }
     .alert-actions {
@@ -526,7 +570,7 @@
     }
     .small-btn {
       border: 1px solid var(--line);
-      background: #24352f;
+      background: var(--panel-3);
       border-radius: 8px;
       min-height: 42px;
       padding: 0 12px;
@@ -535,7 +579,7 @@
       display: inline-flex;
       align-items: center;
     }
-    .small-btn.accent { background: #16796a; border-color: #209a88; }
+    .small-btn.accent { background: var(--accent-2); border-color: var(--accent); }
     .small-btn.danger { background: #7d3e2d; border-color: #9d4f39; }
     .small-btn:disabled { cursor: wait; opacity: .55; }
     .empty {
@@ -626,6 +670,16 @@
     }
     .chat-shell { display: none; }
     .chat-shell.visible { display: block; }
+    .photo-review-shell { display: none; margin: 0 -14px; }
+    .photo-review-shell.visible { display: block; }
+    .photo-review-frame {
+      display: block;
+      width: 100%;
+      height: calc(100dvh - 238px - env(safe-area-inset-bottom));
+      min-height: 480px;
+      border: 0;
+      background: var(--bg);
+    }
     .chat-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
     .chat-empty {
       border: 1px solid var(--line);
@@ -728,8 +782,8 @@
       min-width: 0;
     }
     .chat-compose button {
-      border: 1px solid rgba(85, 200, 184, 0.62);
-      background: #123b34;
+      border: 1px solid var(--accent-border);
+      background: var(--accent-soft);
       color: var(--text);
       border-radius: 10px;
       font-weight: 900;
@@ -814,7 +868,7 @@
     <section class="segments" aria-label="Mobile view">
       <button class="segment active" data-view="stats" type="button">Stats</button>
       <button class="segment" data-view="queue" type="button">Worker Queue</button>
-      <button class="segment" data-view="chat" type="button">Messages</button>
+      <button class="segment" data-view="chat" id="chat-segment" type="button">Messages</button>
     </section>
 
     <div class="error" id="error-box"></div>
@@ -826,12 +880,15 @@
       <div class="stat-card money"><label>1W Revenue</label><strong id="revenue-7d">-</strong></div>
       <div class="stat-card"><label>Orders</label><strong id="orders-count">-</strong></div>
       <div class="stat-card"><label>Drafts</label><strong id="drafts-count">-</strong></div>
-      <div class="stat-card"><label>30D Views</label><strong id="views-30d">-</strong></div>
-      <div class="stat-card"><label>1W Views</label><strong id="views-7d">-</strong></div>
-      <div class="stat-card"><label>Impressions</label><strong id="traffic-impressions">-</strong></div>
+      <div class="stat-card"><label id="views-30d-label">30D Views</label><strong id="views-30d">-</strong></div>
+      <div class="stat-card ebay-period-stat"><label>1W Views</label><strong id="views-7d">-</strong></div>
+      <div class="stat-card ebay-period-stat"><label>Impressions</label><strong id="traffic-impressions">-</strong></div>
       <div class="stat-card"><label>CTR</label><strong id="traffic-ctr">-</strong></div>
       <div class="stat-card"><label>Conversion</label><strong id="traffic-conversion">-</strong></div>
-      <div class="stat-card"><label>Traffic Sales</label><strong id="traffic-transactions">-</strong></div>
+      <div class="stat-card depop-engagement-stat"><label>Clicks</label><strong id="depop-clicks">-</strong></div>
+      <div class="stat-card depop-engagement-stat"><label>Likes</label><strong id="depop-likes">-</strong></div>
+      <div class="stat-card depop-engagement-stat"><label>Bags</label><strong id="depop-bags">-</strong></div>
+      <div class="stat-card depop-engagement-stat"><label>Offers</label><strong id="depop-offers">-</strong></div>
     </section>
 
     <section class="mobile-calendar" id="mobile-calendar" aria-label="Listing calendar">
@@ -902,6 +959,10 @@
         </div>
       </div>
     </section>
+
+    <section class="photo-review-shell" id="photo-review-view" aria-label="Depop photo review">
+      <iframe class="photo-review-frame" id="photo-review-frame" title="Depop photo review"></iframe>
+    </section>
   </main>
 
   <div class="notification-modal" id="notification-modal" hidden>
@@ -950,23 +1011,37 @@
     let chatTemplateDraft = null;
     let calendarEvents = [];
     let calendarEventFilter = "all";
+    let refreshController = null;
 
     document.getElementById("dashboard-link").href = dashboardUrl;
 
     // Marketplace switch. Shares the desktop dashboard's storage key so the two
     // stay on the same store, and paints the whole app in that store's accent.
     const MARKETPLACE_KEY = "autozsMarketplaceMode";
+    const MARKETPLACE_STATS_KEY = "autozsMobileMarketplaceStats";
     function applyMarketplace(mode) {
       const marketplace = mode === "depop" ? "depop" : "ebay";
+      const previousMarketplace = document.body.dataset.marketplace;
+      const changed = previousMarketplace !== marketplace;
+      if (changed && previousMarketplace) cacheMarketplaceStats(previousMarketplace);
+      document.documentElement.dataset.marketplace = marketplace;
       document.body.dataset.marketplace = marketplace;
+      document.querySelector('meta[name="theme-color"]').content = marketplace === "depop" ? "#11080a" : "#06110d";
       localStorage.setItem(MARKETPLACE_KEY, marketplace);
       document.querySelectorAll("#market-switch button").forEach((button) => {
         button.classList.toggle("active", button.dataset.market === marketplace);
       });
+      if (changed) restoreMarketplaceStats(marketplace);
+      applyMarketplaceStatLabels(marketplace);
+      document.getElementById("chat-segment").textContent = marketplace === "depop" ? "Photo Review" : "Messages";
     }
     document.getElementById("market-switch").addEventListener("click", (event) => {
       const button = event.target.closest("button[data-market]");
-      if (button) applyMarketplace(button.dataset.market);
+      if (button) {
+        applyMarketplace(button.dataset.market);
+        setView(selectedView);
+        refresh();
+      }
     });
     applyMarketplace(localStorage.getItem(MARKETPLACE_KEY));
 
@@ -1008,7 +1083,7 @@
     initializePushState();
     refresh();
     loadChatTemplates();
-    setInterval(refresh, 30000);
+    setInterval(() => refresh(false), 30000);
 
     async function loadChatTemplates() {
       try {
@@ -1028,12 +1103,19 @@
       return "http://127.0.0.1:8000";
     }
 
-    async function refresh() {
+    async function refresh(force = true) {
+      if (!force && refreshController) return;
+      refreshController?.abort();
+      const controller = new AbortController();
+      refreshController = controller;
+      const request = (path) => api(path, { signal: controller.signal });
+      const refreshMarketplace = document.body.dataset.marketplace || "ebay";
       let health;
       try {
-        health = await api("/health");
+        health = await request("/health");
         updateApiStatus(health);
       } catch (error) {
+        if (error?.name === "AbortError") return;
         updateApiStatus(null);
         // Without this the health lamp sits on its placeholder forever and
         // looks like the worker is being checked when nothing is loading.
@@ -1042,71 +1124,113 @@
         setText("health-verdict", "Cannot reach AutoZS");
         setText("health-note", "Check Tailscale on this iPhone, then refresh.");
         setError("Windows API unavailable. Open Tailscale on this iPhone, confirm it is connected, then refresh AutoZS.");
+        if (refreshController === controller) refreshController = null;
         return;
       }
 
-      const results = await Promise.allSettled([
-        api("/workers"),
-        api("/products"),
-        api("/ebay/listings"),
+      if (refreshMarketplace === "depop") {
+        await refreshDepop(controller.signal);
+        if (refreshController === controller) refreshController = null;
+        return;
+      }
+
+      const workersRequest = request("/workers");
+      const productsRequest = request("/products");
+      const listingsRequest = request("/ebay/listings");
+      const listingJobsRequest = request("/listing-jobs?limit=1000&lite=1");
+      const sourceRefreshRequest = request("/source-refresh/jobs");
+      const revisionJobsRequest = request("/ebay/revision-jobs");
+      const revisionBatchesRequest = request("/ebay/revision-batches");
+      const ordersRequest = request("/orders");
+      const captureQueueRequest = request("/products/capture-queue");
+      const storesRequest = request("/ebay/accounts");
+      const conversationsRequest = request("/customer-service/conversations");
+      const coreReady = Promise.all([productsRequest, listingsRequest, listingJobsRequest, ordersRequest]);
+      const afterCore = (path) => coreReady.then(() => request(path));
+      const requests = [
+        workersRequest,
+        productsRequest,
+        listingsRequest,
         // lite=1 skips the per-job eBay package/readiness rebuild that made a full
         // fetch take tens of seconds. Without the full list the default limit of 100
         // silently dropped jobs (the list is ordered by created_at, so any job whose
         // created_at was backdated to reprioritise it fell off the end) and those jobs
         // vanished from the calendar entirely while the desktop still showed them.
-        api("/listing-jobs?limit=1000&lite=1"),
-        api("/source-refresh/jobs"),
-        api("/ebay/revision-jobs"),
-        api("/ebay/revision-batches"),
-        api("/orders"),
-        api("/products/capture-queue"),
-        api("/ebay/accounts"),
-        api(statsPath(30)),
-        api(statsPath(7)),
-        api(viewSummaryPath()),
-        api(trafficPath(30)),
-        api("/customer-service/conversations"),
-      ]);
-      const failures = results.filter((result) => result.status === "rejected");
-      const [
-        workers,
-        products,
-        listings,
-        listingJobs,
-        sourceRefreshJobs,
-        revisionJobs,
-        revisionBatches,
-        orders,
-        captureQueue,
-        stores,
-        stats30,
-        stats7,
-        viewSummary,
-        traffic30,
-        conversations,
-      ] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+        listingJobsRequest,
+        sourceRefreshRequest,
+        revisionJobsRequest,
+        revisionBatchesRequest,
+        ordersRequest,
+        captureQueueRequest,
+        storesRequest,
+        afterCore(statsPath(30)),
+        afterCore(statsPath(7)),
+        afterCore(viewSummaryPath()),
+        afterCore(trafficPath(30)),
+        conversationsRequest,
+      ];
+      const isCurrent = () => document.body.dataset.marketplace === refreshMarketplace;
 
-      setError(failures.length
-        ? `${failures.length} dashboard section${failures.length === 1 ? "" : "s"} could not refresh.`
-        : "");
-      if (workers) updateWorker(workers);
-      if (stores) updateStores(stores);
-      if (products && listings && listingJobs && orders && stats30 && stats7) {
-        updateStats({ products, listings, listingJobs, orders, stats30, stats7 });
-        updateMobileCalendar({ products, listings, listingJobs, orders });
-      }
-      if (viewSummary) updateViewStats(viewSummary);
-      if (traffic30) updateTrafficStats(traffic30);
-      if (listingJobs && sourceRefreshJobs && revisionJobs && revisionBatches && captureQueue && products) {
-        updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue, products });
-      }
-      if (conversations) {
+      // Paint independent sections as soon as their own data is available.
+      // In particular, the 30-day overview can take much longer than the core
+      // listing calls and must not hold the whole marketplace switch hostage.
+      requests[0].then((workers) => { if (isCurrent()) updateWorker(workers); }).catch(() => {});
+      requests[9].then((stores) => { if (isCurrent()) updateStores(stores); }).catch(() => {});
+      requests[10].then((stats) => { if (isCurrent()) setText("revenue-30d", money(stats?.totals?.order_revenue)); }).catch(() => {});
+      requests[11].then((stats) => { if (isCurrent()) setText("revenue-7d", money(stats?.totals?.order_revenue)); }).catch(() => {});
+      requests[12].then((summary) => { if (isCurrent()) updateViewStats(summary); }).catch(() => {});
+      requests[13].then((traffic) => { if (isCurrent()) updateTrafficStats(traffic); }).catch(() => {});
+      requests[14].then((conversations) => {
+        if (!isCurrent()) return;
         chatConversations = conversations;
         if (selectedView === "chat") {
           renderChatList();
           if (openChatConversationId) renderChatThread();
         }
-      }
+      }).catch(() => {});
+      Promise.all([requests[1], requests[2], requests[3], requests[7]])
+        .then(([products, listings, listingJobs, orders]) => {
+          if (!isCurrent()) return;
+          updateEbayCoreStats({ products, listings, listingJobs, orders });
+          updateMobileCalendar({ products, listings, listingJobs, orders });
+        })
+        .catch(() => {});
+      Promise.all([requests[1], requests[3], requests[4], requests[5], requests[6], requests[8]])
+        .then(([products, listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue]) => {
+          if (isCurrent()) updateWorkerQueue({ listingJobs, sourceRefreshJobs, revisionJobs, revisionBatches, captureQueue, products });
+        })
+        .catch(() => {});
+
+      const results = await Promise.allSettled(requests);
+      const failures = results.filter((result) => result.status === "rejected");
+
+      // A marketplace switch can happen while these requests are in flight.
+      // Never let a late eBay response repaint the Depop dashboard.
+      if (document.body.dataset.marketplace !== refreshMarketplace) return;
+
+      setError(failures.length
+        ? `${failures.length} dashboard section${failures.length === 1 ? "" : "s"} could not refresh.`
+        : "");
+      if (refreshController === controller) refreshController = null;
+    }
+
+    async function refreshDepop(signal) {
+      const results = await Promise.allSettled([
+        api("/workers", { signal }),
+        api("/depop/variants", { signal }),
+        api("/depop/jobs", { signal }),
+        api("/depop/accounts", { signal }),
+      ]);
+      if (document.body.dataset.marketplace !== "depop") return;
+
+      const failures = results.filter((result) => result.status === "rejected");
+      const [workers, variants, jobs, stores] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+      setError(failures.length
+        ? `${failures.length} Depop dashboard section${failures.length === 1 ? "" : "s"} could not refresh.`
+        : "");
+      if (workers) updateWorker(workers);
+      if (stores) updateStores(stores);
+      if (variants && jobs) updateDepopStats({ variants, jobs });
     }
 
     async function api(path, options = {}) {
@@ -1152,11 +1276,24 @@
         button.classList.toggle("active", button.dataset.view === selectedView);
       });
       document.getElementById("stats-view").style.display = selectedView === "stats" ? "grid" : "none";
-      document.getElementById("mobile-calendar").classList.toggle("visible", selectedView === "stats");
+      document.getElementById("mobile-calendar").classList.toggle(
+        "visible",
+        selectedView === "stats" && document.body.dataset.marketplace !== "depop",
+      );
       document.getElementById("queue-summary").classList.toggle("visible", selectedView === "queue");
       document.getElementById("alerts").classList.toggle("visible", selectedView === "queue");
-      document.getElementById("chat-view").classList.toggle("visible", selectedView === "chat");
-      if (selectedView === "chat") renderChatList();
+      const depopPhotoReview = selectedView === "chat" && document.body.dataset.marketplace === "depop";
+      document.getElementById("chat-view").classList.toggle("visible", selectedView === "chat" && !depopPhotoReview);
+      document.getElementById("photo-review-view").classList.toggle("visible", depopPhotoReview);
+      if (depopPhotoReview) {
+        const frame = document.getElementById("photo-review-frame");
+        const target = new URL("photos.html", location.href);
+        target.searchParams.set("embedded", "1");
+        if (apiBase) target.searchParams.set("api", apiBase);
+        if (!frame.src) frame.src = target.href;
+      } else if (selectedView === "chat") {
+        renderChatList();
+      }
     }
 
     function renderChatList() {
@@ -1387,7 +1524,47 @@
       return `${label} (${accountId})`;
     }
 
-    function updateStats({ products, listings, listingJobs, orders, stats30, stats7 }) {
+    function resetMarketplaceStats() {
+      [
+        "active-count", "revenue-30d", "scheduled-count", "revenue-7d", "orders-count",
+        "drafts-count", "views-30d", "views-7d", "traffic-impressions", "traffic-ctr",
+        "traffic-conversion", "depop-clicks", "depop-likes", "depop-bags", "depop-offers",
+      ].forEach((id) => setText(id, "—"));
+    }
+
+    function marketplaceStatIds() {
+      return [
+        "active-count", "revenue-30d", "scheduled-count", "revenue-7d", "orders-count",
+        "drafts-count", "views-30d", "views-7d", "traffic-impressions", "traffic-ctr",
+        "traffic-conversion", "depop-clicks", "depop-likes", "depop-bags", "depop-offers",
+      ];
+    }
+
+    function cacheMarketplaceStats(marketplace) {
+      const cache = JSON.parse(localStorage.getItem(MARKETPLACE_STATS_KEY) || "{}");
+      cache[marketplace] = Object.fromEntries(
+        marketplaceStatIds().map((id) => [id, document.getElementById(id)?.textContent || "—"]),
+      );
+      localStorage.setItem(MARKETPLACE_STATS_KEY, JSON.stringify(cache));
+    }
+
+    function restoreMarketplaceStats(marketplace) {
+      const cached = JSON.parse(localStorage.getItem(MARKETPLACE_STATS_KEY) || "{}")[marketplace];
+      if (!cached) {
+        resetMarketplaceStats();
+        return;
+      }
+      marketplaceStatIds().forEach((id) => setText(id, cached[id] ?? "—"));
+    }
+
+    function applyMarketplaceStatLabels(marketplace) {
+      const depop = marketplace === "depop";
+      setText("views-30d-label", depop ? "Views" : "30D Views");
+      document.querySelectorAll(".ebay-period-stat").forEach((card) => { card.style.display = depop ? "none" : "grid"; });
+      document.querySelectorAll(".depop-engagement-stat").forEach((card) => { card.style.display = depop ? "grid" : "none"; });
+    }
+
+    function updateEbayCoreStats({ products, listings, listingJobs, orders }) {
       const scopedListings = selectedStore === "all"
         ? listings
         : listings.filter((listing) => listing.account_id === selectedStore);
@@ -1430,8 +1607,46 @@
       setText("scheduled-count", scheduledListings.length + pendingScheduledJobs.length);
       setText("orders-count", scopedOrders.length);
       setText("drafts-count", draftProducts.length);
-      setText("revenue-30d", money(stats30?.totals?.order_revenue));
-      setText("revenue-7d", money(stats7?.totals?.order_revenue));
+    }
+
+    function updateDepopStats({ variants, jobs }) {
+      const scopedVariants = selectedStore === "all"
+        ? variants
+        : variants.filter((variant) => variant.account_key === selectedStore);
+      const scopedJobs = selectedStore === "all"
+        ? jobs
+        : jobs.filter((job) => job.account_key === selectedStore);
+      const liveStatuses = new Set(["active", "listed", "live", "published", "completed"]);
+      const liveVariants = scopedVariants.filter((variant) =>
+        Boolean(variant.depop_listing_id || variant.published_at)
+        || liveStatuses.has(String(variant.status || "").toLowerCase())
+      );
+      const scheduledJobs = scopedJobs.filter((job) => {
+        const scheduledFor = apiDateMs(job.scheduled_for);
+        return Number.isFinite(scheduledFor)
+          && scheduledFor > Date.now()
+          && ["queued", "running"].includes(String(job.status || "").toLowerCase());
+      });
+
+      setText("active-count", liveVariants.length);
+      setText("scheduled-count", scheduledJobs.length);
+      setText("drafts-count", Math.max(0, scopedVariants.length - liveVariants.length));
+
+      const views = scopedVariants.reduce((sum, item) => sum + Number(item.views_count || 0), 0);
+      const clicks = scopedVariants.reduce((sum, item) => sum + Number(item.clicks_count || 0), 0);
+      setText("views-30d", views.toLocaleString());
+      setText("depop-clicks", clicks.toLocaleString());
+      setText("depop-likes", scopedVariants.reduce((sum, item) => sum + Number(item.likes_count || 0), 0).toLocaleString());
+      setText("depop-bags", scopedVariants.reduce((sum, item) => sum + Number(item.bags_count || 0), 0).toLocaleString());
+      setText("depop-offers", scopedVariants.reduce((sum, item) => sum + Number(item.offers_count || 0), 0).toLocaleString());
+      setText("traffic-ctr", views ? `${((clicks / views) * 100).toFixed(2)}%` : "0.00%");
+      setText("traffic-conversion", "—");
+
+      // Depop sales and discovery analytics are not ingested yet. An em dash is
+      // deliberate: zero would claim that Depop reported a measured value.
+      [
+        "revenue-30d", "revenue-7d", "orders-count",
+      ].forEach((id) => setText(id, "—"));
     }
 
     function updateViewStats(summary) {
@@ -1444,7 +1659,6 @@
       setText("traffic-impressions", Number(summary.total_impressions || 0).toLocaleString());
       setText("traffic-ctr", mobilePercent(summary.click_through_rate));
       setText("traffic-conversion", mobilePercent(summary.sales_conversion_rate));
-      setText("traffic-transactions", Number(summary.transactions || 0).toLocaleString());
     }
 
     function mobilePercent(value) {

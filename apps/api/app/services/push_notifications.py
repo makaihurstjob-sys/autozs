@@ -779,6 +779,9 @@ def _send_payload(subscription: PushSubscription, payload: dict[str, Any]) -> No
         data=json.dumps(payload),
         vapid_private_key=private_key,
         vapid_claims={"sub": settings.autozs_push_vapid_subject},
+        # A dead push endpoint must never hold SQLite's write transaction
+        # indefinitely and freeze dashboard/extension updates.
+        timeout=5,
     )
 
 

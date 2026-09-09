@@ -1,0 +1,11 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(`${__dirname}/background.js`,'utf8');
+const start=source.indexOf('function parseEbayAllowanceText(');
+const ctx={Intl,Date};vm.createContext(ctx);vm.runInContext(source.slice(start,source.indexOf('\n}',start)+2),ctx);
+const period=['2026-09-01T07:00:00+00:00','2026-10-01T07:00:00+00:00'];
+const text='Monthly limits 844 more items. List up to 250 Items for FREE Every Month! Start:Sep 1, 2026 at 12:00am PDTEnd:Oct 1, 2026 at 12:00am PDT Used/Left:148 Promotional offers, 148 used, 102 left.';
+assert.equal(ctx.parseEbayAllowanceText(text,...period).used,148);
+assert.equal(ctx.parseEbayAllowanceText(text.replace('102 left','103 left'),...period),null);
+assert.equal(ctx.parseEbayAllowanceText(text.replace('Sep 1','Aug 1'),...period),null);
+assert.equal(ctx.parseEbayAllowanceText('Monthly limits 156 listed and sold / 1000',...period),null);
+console.log('allowance tests passed');

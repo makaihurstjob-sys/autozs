@@ -1,0 +1,1 @@
+[...document.querySelectorAll('a,button')].filter(e=>/cart/i.test((e.getAttribute('href')||'')+' '+(e.getAttribute('aria-label')||'')+' '+e.innerText)&&e.offsetParent!==null).map(e=>({html:e.outerHTML.slice(0,2400)})).slice(0,8)

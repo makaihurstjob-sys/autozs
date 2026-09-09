@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+const [target, input] = process.argv.slice(2);
+const tabs = await (await fetch('http://127.0.0.1:9225/json/list')).json();
+const tab = tabs.find(t=>t.id === target || t.url.includes(target));
+if (!tab) throw Error('Target missing');
+const ws = new WebSocket(tab.webSocketDebuggerUrl);
+await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j});
+const timer=setTimeout(()=>{ws.close();process.exit(2)},45000);
+ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id===1){console.log(JSON.stringify(m.result?.exceptionDetails ? m.result : (m.result?.result ?? m))); clearTimeout(timer);ws.close();}};
+ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:fs.readFileSync(input,'utf8'),returnByValue:true,awaitPromise:true}}));

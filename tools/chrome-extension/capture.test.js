@@ -968,7 +968,8 @@ function runAmazonVariationCapture() {
       images: [],
       scripts: [{ textContent: `var obj = jQuery.parseJSON('${JSON.stringify(imageBlock)}');` }],
       querySelector: (selector) => {
-        if (selector === "#productTitle") return { innerText: "Vegan Leather Bag" };
+        if (selector === "#productTitle") return { innerText: "COOLOME Vegan Leather Bag" };
+        if (selector === "#bylineInfo") return { innerText: "Visit the COOLOME Store" };
         return null;
       },
       querySelectorAll: (selector) => {
@@ -987,6 +988,9 @@ function runAmazonVariationCapture() {
 const amazonVariants = runAmazonVariationCapture();
 const depopExtras = amazonVariants.depop_amazon;
 if (!depopExtras) throw new Error("Expected depop_amazon on the Amazon capture payload.");
+if (depopExtras.source_brand !== "COOLOME") {
+  throw new Error(`Expected Amazon byline brand COOLOME, got ${depopExtras.source_brand}`);
+}
 if (depopExtras.parent_asin !== "B0PARENT01") {
   throw new Error(`Expected parent ASIN, got ${depopExtras.parent_asin}`);
 }

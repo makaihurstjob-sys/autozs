@@ -27,6 +27,7 @@ const EBAY_TRAFFIC_ALARM = "autozs-ebay-traffic-poll";
 const EBAY_TRAFFIC_LAST_OPENED_KEY = "autozsEbayTrafficLastOpened";
 const EBAY_ACTIVE_LISTINGS_ALARM = "autozs-ebay-active-listings-poll";
 const EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY = "autozsEbayActiveListingsLastOpened";
+const DEPOP_METRICS_ALARM = "autozs-depop-metrics-poll";
 const EBAY_ORDER_ALARM = "autozs-ebay-order-poll";
 const EBAY_ORDER_LAST_OPENED_KEY = "autozsEbayOrderLastOpened";
 const EBAY_TRACKING_UPLOAD_ALARM = "autozs-ebay-tracking-upload-poll";
@@ -53,6 +54,44 @@ const AUTOZS_WORKER_OPENED_AT_PARAM = "autozs_worker_opened_at";
 const SUPPLIER_CHECKOUT_ERROR_COOLDOWN_MS = 30 * 60 * 1000;
 const SUPPLIER_TRACKING_MIN_GAP_MS = 6 * 60 * 60 * 1000;
 const SUPPLIER_TRACKING_ERROR_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+function isDepopMetricsUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    if (parsed.hostname !== "www.depop.com") return false;
+    if (parsed.pathname.startsWith("/sellinghub/selling/active")) return true;
+    // When the session expires Depop redirects the single metrics tab here.
+    // Treat it as the same worker tab so the five-minute alarm never creates
+    // a pile of duplicate login tabs.
+    const redirect = parsed.searchParams.get("redirect") || "";
+    return parsed.pathname.startsWith("/login")
+      && redirect.startsWith("/sellinghub/selling/active");
+  } catch {
+    return false;
+  }
+}
+
+async function ensureDepopMetricsTab() {
+  if (!(await canRunAutozsWorkerJobs())) return;
+  const tabs = (await chrome.tabs.query({})).filter((tab) =>
+    isDepopMetricsUrl(tab.url || tab.pendingUrl)
+  );
+  if (!tabs.length) {
+    await chrome.tabs.create({
+      url: "https://www.depop.com/sellinghub/selling/active",
+      active: false,
+    });
+    return;
+  }
+
+  // Keep exactly one quiet metrics page. Reloading it reruns depop-fill's
+  // scraper; removing duplicates prevents the runaway-tab failure mode.
+  const [primary, ...duplicates] = tabs;
+  if (duplicates.length) {
+    await chrome.tabs.remove(duplicates.map((tab) => tab.id).filter(Boolean));
+  }
+  if (primary?.id) await chrome.tabs.reload(primary.id);
+}
 
 const PRODUCT_CAPTURE_WORKER_ID_KEY = "autozsProductCaptureWorkerId";
 
@@ -195,32 +234,15 @@ async function canRunAutozsSourceJobs() {
 
 async function clearHomeDepotBatchState() {
   if (!(await canRunAutozsSourceJobs())) return { cleared: 0, skipped: true };
-  const cookies = await chrome.cookies.getAll({ domain: ".homedepot.com" });
-  const removals = await Promise.allSettled((cookies || []).map((cookie) => {
-    const protocol = cookie.secure ? "https" : "http";
-    const host = String(cookie.domain || "www.homedepot.com").replace(/^\./, "");
-    const details = { url: `${protocol}://${host}${cookie.path || "/"}`, name: cookie.name, storeId: cookie.storeId };
-    if (cookie.partitionKey) details.partitionKey = cookie.partitionKey;
-    return chrome.cookies.remove(details);
-  }));
+  // Source refresh shares this profile with checkout and tracking. Removing
+  // cookies or site storage here signs the account out between tracking checks.
   if (chrome.browsingData?.remove) {
     await chrome.browsingData.remove(
       { origins: ["https://www.homedepot.com"] },
-      {
-        cache: true,
-        cacheStorage: true,
-        cookies: true,
-        indexedDB: true,
-        localStorage: true,
-        serviceWorkers: true,
-      }
+      { cache: true, cacheStorage: true }
     );
   }
-  return {
-    cleared: removals.filter((result) => result.status === "fulfilled" && result.value).length,
-    failed: removals.filter((result) => result.status === "rejected").length,
-    skipped: false,
-  };
+  return { cleared: 0, failed: 0, skipped: false, sessionPreserved: true };
 }
 
 async function ensureHomeDepotBatchState(batchKey) {
@@ -585,6 +607,26 @@ function listingJobIsFreshReservation(job) {
     && /^reserved for scheduled ebay publishing$/i.test(String(job?.message || "").trim());
 }
 
+async function closeCompletedForeignListingRunner(tab, job) {
+  // A completed confirmation keeps its /lstng URL. It is not a runner for
+  // the next reservation, even if an earlier poll tracked it under that job.
+  try {
+    const draftId = new URL(tab.url || "").searchParams.get("draftId");
+    if (!draftId || String(job.ebay_draft_id || "") === draftId) return false;
+    const response = await fetch(`${LOCAL_API}/listing-jobs?lite=true&limit=250`, { cache: "no-store" });
+    if (!response.ok) return false;
+    const jobs = await response.json();
+    const owner = jobs.find((entry) => String(entry.id) !== String(job.id)
+      && String(entry.ebay_draft_id || "") === draftId && entry.status === "completed");
+    if (!owner) return false;
+    await chrome.tabs.remove(tab.id);
+    return true;
+  } catch {
+    // Unknown ownership must never cause a second editor to be opened.
+    return false;
+  }
+}
+
 async function reopenOrphanedListingJob(job) {
   if (!job?.id || !job?.assistant_url) return false;
   // Never reopen a runner that just reported progress. Reopening destroys the
@@ -605,15 +647,20 @@ async function reopenOrphanedListingJob(job) {
   if (trackedTabId !== null) {
     try {
       const trackedTab = await chrome.tabs.get(trackedTabId);
-      if (trackedTab.discarded || trackedTab.status === "unloaded") {
-        await chrome.tabs.reload(trackedTab.id);
+      if (!(await closeCompletedForeignListingRunner(trackedTab, job))) {
+        if (trackedTab.discarded || trackedTab.status === "unloaded") {
+          await chrome.tabs.reload(trackedTab.id);
+        }
+        return true;
       }
-      return true;
     } catch {
       // Tab no longer exists; fall through to the URL-based search / reopen.
     }
   }
-  const tabs = await chrome.tabs.query({ url: ["https://www.ebay.com/*", "https://sell.ebay.com/*"] });
+  const tabs = [];
+  for (const tab of await chrome.tabs.query({ url: ["https://www.ebay.com/*", "https://sell.ebay.com/*"] })) {
+    if (!(await closeCompletedForeignListingRunner(tab, job))) tabs.push(tab);
+  }
   // A working runner navigates from the assistant URL to /lstng?draftId=...,
   // which drops autozs_job_id. Matching only on that param made the background
   // treat a healthy job as orphaned and open a SECOND runner, and two tabs
@@ -784,8 +831,8 @@ function isHomeDepotTrackingUrl(url, externalOrderId) {
   try {
     const parsed = new URL(url || "");
     return parsed.hostname === "www.homedepot.com"
-      && /\/order\//i.test(parsed.pathname)
-      && parsed.searchParams.get("orderId") === String(externalOrderId || "");
+      && (/\/order\//i.test(parsed.pathname) || parsed.pathname === "/myaccount/order-details")
+      && (parsed.searchParams.get("orderNumber") || parsed.searchParams.get("orderId")) === String(externalOrderId || "");
   } catch {
     return false;
   }
@@ -888,7 +935,7 @@ async function openNextSupplierOrder() {
 function supplierTrackingRunnerUrl(supplierOrder) {
   const externalOrderId = String(supplierOrder?.external_order_id || "").trim();
   if (!/^[A-Z0-9-]{6,128}$/i.test(externalOrderId)) throw new Error("Supplier order has no valid Home Depot confirmation number.");
-  const url = new URL("https://www.homedepot.com/order/view/orderdetails");
+  const url = new URL("https://www.homedepot.com/myaccount/purchase-history");
   url.searchParams.set("orderId", externalOrderId);
   url.searchParams.set("autozs_tracking_poll", "1");
   url.searchParams.set(AUTOZS_WORKER_OPENED_AT_PARAM, String(Date.now()));
@@ -899,7 +946,7 @@ function isSupplierTrackingRunnerUrl(url) {
   try {
     const parsed = new URL(url || "");
     return parsed.hostname === "www.homedepot.com"
-      && /\/order\//i.test(parsed.pathname)
+      && (/\/order\//i.test(parsed.pathname) || ["/myaccount/order-details", "/myaccount/purchase-history"].includes(parsed.pathname))
       && parsed.searchParams.get("autozs_tracking_poll") === "1"
       && /^[A-Z0-9-]{6,128}$/i.test(parsed.searchParams.get("orderId") || "");
   } catch {
@@ -907,25 +954,63 @@ function isSupplierTrackingRunnerUrl(url) {
   }
 }
 
+async function recordSupplierTrackingResult(urlValue, outcome) {
+  const url = new URL(urlValue);
+  if (url.hostname !== "www.homedepot.com") return;
+  const redirect = new URL(url.searchParams.get("redirect") || "/", url.origin);
+  const orderId = url.searchParams.get("orderNumber") || url.searchParams.get("orderId") || redirect.searchParams.get("orderId");
+  if (!/^[A-Z0-9-]{6,128}$/i.test(orderId || "")) return;
+  const key = `autozsTrackingResults:${orderId}`;
+  const stored = await chrome.storage.local.get(key);
+  const events = Array.isArray(stored[key]) ? stored[key] : [];
+  events.push({ outcome, checkedAt: new Date().toISOString(), page: url.pathname });
+  await chrome.storage.local.set({ [key]: events.slice(-20) });
+}
+
 async function openNextSupplierTrackingCheck() {
-  if (!(await canRunAutozsCheckoutJobs())) return;
+  if (!(await canRunAutozsCheckoutJobs()) && !(await canRunAutozsWorkerJobs())) return;
   const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
-  if (tabs.some((tab) => isSupplierTrackingRunnerUrl(tab.url))) return;
+  // Authentication redirects are no longer runner URLs. Keep one visible handoff
+  // instead of opening a fresh login tab for every pending supplier order.
+  const signInTabs = tabs.filter(tab => {
+    try {
+      const url = new URL(tab.url);
+      const redirect = new URL(url.searchParams.get("redirect") || "/", url.origin);
+      return url.hostname === "www.homedepot.com" && url.pathname === "/auth/view/signin"
+        && redirect.pathname === "/myaccount/purchase-history"
+        && (url.searchParams.get("autozs_tracking_poll") === "1"
+          || redirect.searchParams.get("autozs_tracking_poll") === "1");
+    } catch { return false; }
+  });
+  if (signInTabs.length) {
+    await recordSupplierTrackingResult(signInTabs[0].url, "sign_in_required");
+    for (const duplicate of signInTabs.slice(1)) await chrome.tabs.remove(duplicate.id);
+    return;
+  }
+  for (const tab of tabs.filter(tab => isSupplierTrackingRunnerUrl(tab.url))) {
+    const opened = Number(new URL(tab.url).searchParams.get(AUTOZS_WORKER_OPENED_AT_PARAM) || 0);
+    if (opened && Date.now() - opened < 120000) return;
+    await recordSupplierTrackingResult(tab.url, "page_timeout");
+    await chrome.tabs.remove(tab.id);
+  }
   const stored = await chrome.storage.local.get([SUPPLIER_TRACKING_LAST_OPENED_KEY, SUPPLIER_TRACKING_BLOCKED_UNTIL_KEY]);
   const blockedUntil = Number(stored?.[SUPPLIER_TRACKING_BLOCKED_UNTIL_KEY] || 0);
   if (blockedUntil > Date.now()) return;
   if (blockedUntil) await chrome.storage.local.remove(SUPPLIER_TRACKING_BLOCKED_UNTIL_KEY);
-  const lastOpened = Number(stored?.[SUPPLIER_TRACKING_LAST_OPENED_KEY] || 0);
-  if (Date.now() - lastOpened < SUPPLIER_TRACKING_MIN_GAP_MS) return;
+  const historyKey = "autozsSupplierTrackingChecks";
+  const history = (await chrome.storage.local.get(historyKey))[historyKey] || {};
   const supplierOrders = await localApiJson("/supplier-orders");
   const eligible = (supplierOrders || [])
     .filter((order) => order.supplier === "home_depot"
       && ["placed", "shipped"].includes(order.status)
-      && /^[A-Z0-9-]{6,128}$/i.test(String(order.external_order_id || "")))
-    .sort((left, right) => String(left.updated_at || "").localeCompare(String(right.updated_at || "")));
+      && /^[A-Z0-9-]{6,128}$/i.test(String(order.external_order_id || ""))
+      && Date.now() - Number(history[order.id] || 0) >= SUPPLIER_TRACKING_MIN_GAP_MS)
+    .sort((left, right) => Number(history[left.id] || 0) - Number(history[right.id] || 0));
   if (!eligible.length) return;
   await chrome.storage.local.set({ [SUPPLIER_TRACKING_LAST_OPENED_KEY]: Date.now() });
   await chrome.tabs.create({ url: supplierTrackingRunnerUrl(eligible[0]), active: false });
+  history[eligible[0].id] = Date.now();
+  await chrome.storage.local.set({ [historyKey]: history });
 }
 
 function ebayTrackingUploadRunnerUrl(candidate) {
@@ -938,6 +1023,7 @@ function ebayTrackingUploadRunnerUrl(candidate) {
   url.searchParams.set("q", ebayOrderId);
   url.searchParams.set("autozs_workflow", "tracking_upload");
   url.searchParams.set("autozs_supplier_order_id", String(supplierOrderId));
+  url.searchParams.set(AUTOZS_WORKER_OPENED_AT_PARAM, String(Date.now()));
   return url.href;
 }
 
@@ -946,7 +1032,7 @@ function isEbayTrackingUploadRunnerUrl(url, supplierOrderId = null) {
     const parsed = new URL(url || "");
     const id = parsed.searchParams.get("autozs_supplier_order_id");
     return parsed.hostname === "www.ebay.com"
-      && parsed.pathname === "/sh/ord"
+      && (parsed.pathname === "/sh/ord" || parsed.pathname.includes("/ship/trk/trackings"))
       && parsed.searchParams.get("autozs_workflow") === "tracking_upload"
       && /^\d{2}-\d{5}-\d{5}$/.test(parsed.searchParams.get("q") || "")
       && /^\d+$/.test(id || "")
@@ -959,16 +1045,25 @@ function isEbayTrackingUploadRunnerUrl(url, supplierOrderId = null) {
 async function openNextEbayTrackingUpload() {
   if (!(await canRunAutozsWorkerJobs())) return;
   const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/*" });
-  if (tabs.some((tab) => isEbayTrackingUploadRunnerUrl(tab.url))) return;
+  for (const tab of tabs.filter(tab => isEbayTrackingUploadRunnerUrl(tab.url))) {
+    const opened = Number(new URL(tab.url).searchParams.get(AUTOZS_WORKER_OPENED_AT_PARAM) || 0);
+    if (opened && Date.now() - opened < 120000) return;
+    await chrome.tabs.remove(tab.id);
+  }
   const stored = await chrome.storage.local.get(EBAY_TRACKING_UPLOAD_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_TRACKING_UPLOAD_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 5 * 60 * 1000) return;
   const candidate = await localApiJson("/supplier-orders/ebay-tracking-next");
   if (!candidate) return;
-  const preparedStore = await chrome.storage.local.get(EBAY_TRACKING_PREPARED_KEY);
-  const prepared = preparedStore?.[EBAY_TRACKING_PREPARED_KEY] || {};
+  const preparedStore = await chrome.storage.local.get(EBAY_TRACKING_SUBMITTED_KEY);
   const fingerprint = `${Number(candidate.supplier_order_id)}:${String(candidate.tracking_number || "").replace(/[^A-Z0-9]/gi, "").toUpperCase()}`;
-  if (prepared[String(candidate.supplier_order_id)] === fingerprint) return;
+  if (preparedStore[EBAY_TRACKING_SUBMITTED_KEY]?.[String(candidate.supplier_order_id)] === fingerprint) {
+    await chrome.storage.local.set({ [EBAY_TRACKING_UPLOAD_LAST_OPENED_KEY]: Date.now() });
+    await localApiJson(`/orders/sync?account_key=${encodeURIComponent(candidate.account_key)}`, { method: "POST" });
+    return;
+  }
+  // A previous submit attempt must be reconciled from eBay before another click.
+  // Reopen the order read-only; the broker marks this handoff verification-only.
   await chrome.storage.local.set({ [EBAY_TRACKING_UPLOAD_LAST_OPENED_KEY]: Date.now() });
   await chrome.tabs.create({ url: ebayTrackingUploadRunnerUrl(candidate), active: false });
 }
@@ -1076,8 +1171,10 @@ function isEbayActiveListingsRunnerUrl(url, runId = null) {
     const parsed = new URL(url || "");
     const params = new URLSearchParams(String(parsed.hash || "").replace(/^#/, ""));
     const id = params.get("autozs_sync_run");
+    const activePage = /^\/sh\/lst\/active/i.test(parsed.pathname);
+    const reportDownloadsPage = /^\/sh\/reports\/downloads/i.test(parsed.pathname);
     return parsed.hostname === "www.ebay.com"
-      && /^\/sh\/lst\/active/i.test(parsed.pathname)
+      && (activePage || reportDownloadsPage)
       && params.get("autozs_report_type") === "active_listings"
       && Boolean(id)
       && (runId === null || id === String(runId));
@@ -1093,7 +1190,12 @@ async function openNextEbayActiveListingsSync() {
   if (Date.now() - lastOpened < 60 * 1000) return;
   const run = await claimNextEbayActiveListingsSync();
   if (!run?.runner_url || run.status !== "running") return;
-  const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/sh/lst/active*" });
+  const tabs = await chrome.tabs.query({
+    url: [
+      "https://www.ebay.com/sh/lst/active*",
+      "https://www.ebay.com/sh/reports/downloads*",
+    ],
+  });
   const exact = tabs.find((tab) => isEbayActiveListingsRunnerUrl(tab.url, run.id));
   if (exact?.id) {
     await chrome.tabs.reload(exact.id);
@@ -1817,8 +1919,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "autozs-supplier-tracking-observation") {
     reconcileSupplierTrackingObservation(sender.tab?.url, message)
-      .then((order) => sendResponse({ ok: true, status: order.status }))
+      .then(async (order) => {
+        await recordSupplierTrackingResult(sender.tab.url, "tracking_captured");
+        sendResponse({ ok: true, status: order.status });
+        if (isSupplierTrackingRunnerUrl(sender.tab?.url)) await chrome.tabs.remove(sender.tab.id);
+      })
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+  if (message?.type === "autozs-supplier-tracking-waiting") {
+    if (!isSupplierTrackingRunnerUrl(sender.tab?.url)) {
+      sendResponse({ ok: false });
+      return false;
+    }
+    recordSupplierTrackingResult(sender.tab.url, message.orderVerified === true ? "verified_no_tracking" : "page_unverified")
+      .then(() => chrome.tabs.remove(sender.tab.id))
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
   }
   if (message?.type === "autozs-supplier-tracking-blocked") {
@@ -1826,7 +1943,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: false, error: "Supplier tracking tab identity did not match." });
       return false;
     }
-    chrome.storage.local.set({ [SUPPLIER_TRACKING_BLOCKED_UNTIL_KEY]: Date.now() + SUPPLIER_TRACKING_ERROR_COOLDOWN_MS })
+    recordSupplierTrackingResult(sender.tab.url, "page_failed")
+      .then(() => chrome.storage.local.set({ [SUPPLIER_TRACKING_BLOCKED_UNTIL_KEY]: Date.now() + SUPPLIER_TRACKING_ERROR_COOLDOWN_MS }))
       .then(() => sender.tab?.id ? chrome.tabs.remove(sender.tab.id) : null)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
@@ -1845,6 +1963,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         || candidate.ebay_order_id !== page.searchParams.get("q")) {
         throw new Error("eBay tracking handoff no longer matches this tab.");
       }
+      const state = await chrome.storage.local.get([EBAY_TRACKING_PREPARED_KEY, EBAY_TRACKING_SUBMITTED_KEY]);
+      const fingerprint = `${supplierOrderId}:${String(candidate.tracking_number).replace(/[^A-Z0-9]/gi, "").toUpperCase()}`;
+      candidate.verification_only = state[EBAY_TRACKING_PREPARED_KEY]?.[String(supplierOrderId)] === fingerprint
+        || state[EBAY_TRACKING_SUBMITTED_KEY]?.[String(supplierOrderId)] === fingerprint;
       sendResponse({ ok: true, candidate });
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
@@ -2107,6 +2229,7 @@ if (chrome.downloads?.onDeterminingFilename && chrome.storage?.local) {
 
 const BACKUP_ALLOWED_ALARMS = new Set([PRODUCT_CAPTURE_ALARM, SOURCE_REFRESH_ALARM]);
 const AUTOZS_ALARM_SCHEDULE = [
+  ['autozs-ebay-allowance', 1, 60],
   [PRODUCT_CAPTURE_ALARM, 0.1, 0.5],
   [SOURCE_REFRESH_ALARM, 1, 2],
   [LISTING_JOB_ALARM, 1, 2],
@@ -2115,11 +2238,12 @@ const AUTOZS_ALARM_SCHEDULE = [
   [EBAY_REVISION_ALARM, 1, 2],
   [EBAY_REVISION_BATCH_ALARM, 1, 2],
   [EBAY_ACTIVE_LISTINGS_ALARM, 1, 2],
+  [DEPOP_METRICS_ALARM, 0.5, 5],
   [EBAY_TRAFFIC_ALARM, 1, 2],
   [EBAY_ORDER_ALARM, 1, 2],
   [EBAY_TRACKING_UPLOAD_ALARM, 1, 2],
   [SUPPLIER_ORDER_ALARM, 1, 2],
-  [SUPPLIER_TRACKING_ALARM, 5, 360],
+  [SUPPLIER_TRACKING_ALARM, 5, 5],
   [CUSTOMER_MESSAGE_ALARM, 0.1, 1],
 ];
 
@@ -2173,6 +2297,7 @@ if (chrome.alarms) {
     openNextListingJob().catch(() => {});
   });
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name === 'autozs-ebay-allowance') syncEbayListingAllowance().catch(() => {});
     if (isBackupCaptureExtension() && !BACKUP_ALLOWED_ALARMS.has(alarm?.name)) {
       Promise.resolve(chrome.alarms.clear(alarm?.name)).catch(() => {});
       closeUnsafeBackupEbayTabs().catch(() => {});
@@ -2192,6 +2317,7 @@ if (chrome.alarms) {
     if (alarm?.name === EBAY_REVISION_ALARM) openNextEbayRevisionJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_BATCH_ALARM) openNextEbayRevisionBatch().catch(() => {});
     if (alarm?.name === EBAY_ACTIVE_LISTINGS_ALARM) openNextEbayActiveListingsSync().catch(() => {});
+    if (alarm?.name === DEPOP_METRICS_ALARM) ensureDepopMetricsTab().catch(() => {});
     if (alarm?.name === EBAY_TRAFFIC_ALARM) openNextEbayTrafficSync().catch(() => {});
     if (alarm?.name === EBAY_ORDER_ALARM) openNextEbayOrderSync().catch(() => {});
     if (alarm?.name === EBAY_TRACKING_UPLOAD_ALARM) openNextEbayTrackingUpload().catch(() => {});
@@ -2201,6 +2327,46 @@ if (chrome.alarms) {
   });
   configureAutozsAlarms().catch(() => {});
   syncRequestedWorkerModeFromDashboardTabs().catch(() => {});
+  ensureDepopMetricsTab().catch(() => {});
   openNextListingJob().catch(() => {});
   closeUnsafeBackupEbayTabs().catch(() => {});
 }
+
+function parseEbayAllowanceText(text, periodStart, periodEnd) {
+  const offer = String(text).split(/List up to 250 Items for FREE Every Month!/i)[1];
+  if (!offer) return null;
+  const counter = offer.match(/Promotional offers,\s*([\d,]+) used,\s*([\d,]+) left\./i);
+  const range = offer.match(/Start:\s*([A-Za-z]+\s+1,\s*\d{4})\s+at\s+12:00am\s+P[DS]T\s*End:\s*([A-Za-z]+\s+1,\s*\d{4})\s+at\s+12:00am\s+P[DS]T/i);
+  const label = date => new Intl.DateTimeFormat('en-US', {timeZone:'America/Los_Angeles',month:'short',day:'numeric',year:'numeric'}).format(new Date(date));
+  if (!counter || !range || range[1].replace(/\s+/g,' ') !== label(periodStart) || range[2].replace(/\s+/g,' ') !== label(periodEnd)) return null;
+  const used = Number(counter[1].replace(/,/g,'')), left = Number(counter[2].replace(/,/g,''));
+  if (used + left !== 250) return null;
+  return {total:250,used,period_start:periodStart,period_end:periodEnd};
+}
+
+async function syncEbayListingAllowance() {
+  if (!(await canRunAutozsWorkerJobs()) || await hasRunningListingJob()) return {skipped:true};
+  const account = 'a.m.anim-59';
+  const budgetResponse = await fetch(`${LOCAL_API}/ebay/listing-budget/${account}`);
+  if (!budgetResponse.ok) throw Error('Budget endpoint unavailable');
+  const budget = await budgetResponse.json();
+  if (!budget.enabled) return {skipped:true};
+  const tab = await chrome.tabs.create({url:'https://www.ebay.com/sh/ovw?autozs_allowance_sync=1',active:false});
+  try {
+    for (let attempt=0;attempt<45;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const current = await chrome.tabs.get(tab.id);
+      if (current.status !== 'complete') continue;
+      const results = await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>({text:document.body?.innerText||'',url:location.href})});
+      const page = results[0]?.result;
+      if (!page || !page.text.includes(account)) continue;
+      const parsed = parseEbayAllowanceText(page.text,budget.period_start,budget.period_end);
+      if (!parsed) continue;
+      const response = await fetch(`${LOCAL_API}/ebay/listing-budget/${account}/snapshot`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...parsed,observed_at:new Date().toISOString(),source_url:page.url})});
+      if (!response.ok) throw Error('Allowance snapshot rejected');
+      return await response.json();
+    }
+    throw Error('No verified monthly free-listing offer was visible');
+  } finally { await chrome.tabs.remove(tab.id).catch(()=>{}); }
+}
+

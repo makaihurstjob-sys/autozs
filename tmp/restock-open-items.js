@@ -1,0 +1,1 @@
+(async()=>{const out=[];for(const id of ['800599885097','800440160281','800367161756']){const t=await chrome.tabs.create({url:'https://www.ebay.com/itm/'+id,active:false});out.push({id:t.id,item:id});}return out;})()

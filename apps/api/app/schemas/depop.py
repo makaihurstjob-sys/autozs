@@ -35,6 +35,7 @@ class DepopVariantCreate(BaseModel):
 
 
 class DepopVariantUpdate(BaseModel):
+    account_key: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{1,127}$")
     title: str | None = Field(default=None, min_length=1, max_length=512)
     description: str | None = None
     price: float | None = Field(default=None, gt=0)
@@ -45,6 +46,14 @@ class DepopVariantUpdate(BaseModel):
     condition: str | None = None
     color: str | None = None
     status: str | None = None
+    depop_listing_id: str | None = None
+    published_at: datetime | None = None
+    views_count: int | None = Field(default=None, ge=0)
+    clicks_count: int | None = Field(default=None, ge=0)
+    likes_count: int | None = Field(default=None, ge=0)
+    bags_count: int | None = Field(default=None, ge=0)
+    offers_count: int | None = Field(default=None, ge=0)
+    metrics_synced_at: datetime | None = None
 
 
 class DepopVariantRead(BaseModel):
@@ -64,6 +73,12 @@ class DepopVariantRead(BaseModel):
     status: str
     depop_listing_id: str | None = None
     published_at: datetime | None = None
+    views_count: int = 0
+    clicks_count: int = 0
+    likes_count: int = 0
+    bags_count: int = 0
+    offers_count: int = 0
+    metrics_synced_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -91,6 +106,7 @@ class AmazonCaptureImport(BaseModel):
     parent_asin: str = Field(default="", max_length=32)
     price: float = 0.0
     title: str = ""
+    source_brand: str = Field(default="", max_length=128)
     variations: list[AmazonVariationIn] = Field(default_factory=list)
     review_photos: list[AmazonReviewPhotoIn] = Field(default_factory=list)
     # reviewId -> colour, scraped from whatever review bodies the page rendered.
@@ -111,6 +127,10 @@ class DepopSourcePhotoRead(BaseModel):
     width: int
     height: int
     sort_order: int
+    crop_x: float = 0.0
+    crop_y: float = 0.0
+    crop_zoom: float = 1.0
+    background_mode: str = "crop"
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -136,6 +156,10 @@ class DepopPhotoReviewRead(BaseModel):
 class DepopPhotoDecision(BaseModel):
     status: str = Field(pattern=r"^(pending|approved|rejected)$")
     variant_id: int | None = None
+    crop_x: float = Field(default=0.0, ge=-1.0, le=1.0)
+    crop_y: float = Field(default=0.0, ge=-1.0, le=1.0)
+    crop_zoom: float = Field(default=1.0, ge=1.0, le=4.0)
+    background_mode: str = Field(default="crop", pattern=r"^(crop|blur)$")
 
 
 class DepopImportResult(BaseModel):
@@ -163,6 +187,12 @@ class DepopJobUpdate(BaseModel):
     runner_url: str | None = None
 
 
+class DepopPublicationConfirm(BaseModel):
+    depop_listing_id: str = Field(min_length=1, max_length=128)
+    listing_url: str = Field(default="", max_length=2048)
+    published_at: datetime | None = None
+
+
 class DepopJobRead(BaseModel):
     id: int
     variant_id: int
@@ -176,4 +206,62 @@ class DepopJobRead(BaseModel):
     runner_url: str
     created_at: datetime
     updated_at: datetime
+    # Embedded straight from the variant/product so depop-fill.js can fetch
+    # everything it needs to fill a listing with a single GET, the same way
+    # ListingJobRead embeds the eBay package.
+    product_id: int | None = None
+    sku: str = ""
+    title: str = ""
+    description: str = ""
+    price: float | None = None
+    image_urls: list[str] = Field(default_factory=list)
+    local_image_paths: list[str] = Field(default_factory=list)
+    size: str = ""
+    brand: str = ""
+    category: str = ""
+    condition: str = ""
+    color: str = ""
+    shipping_method: str = ""
+    depop_listing_id: str | None = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class DepopListingPackage(BaseModel):
+    """What the depop-fill.js content script needs to fill one listing."""
+
+    job_id: int
+    variant_id: int
+    product_id: int
+    account_key: str
+    sku: str
+    title: str
+    description: str = ""
+    price: float
+    image_urls: list[str] = Field(default_factory=list)
+    local_image_paths: list[str] = Field(default_factory=list)
+    size: str = ""
+    brand: str = ""
+    category: str = ""
+    condition: str = ""
+    color: str = ""
+    shipping_method: str = ""
+
+
+class DepopJobRunResult(BaseModel):
+    job: DepopJobRead
+    package: DepopListingPackage | None = None
+
+
+class DepopApprovedBatchScheduleRequest(BaseModel):
+    account_key: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,127}$")
+    timezone: str = "America/Chicago"
+    daily_hours: list[int] = Field(default_factory=lambda: [12, 20], min_length=1, max_length=8)
+    photos_per_listing: int = Field(default=4, ge=4, le=4)
+
+
+class DepopApprovedBatchScheduleResult(BaseModel):
+    jobs: list[DepopJobRead] = Field(default_factory=list)
+    variants_created: int = 0
+    listings_scheduled: int = 0
+    approved_photos_used: int = 0
+    approved_photos_remaining: int = 0

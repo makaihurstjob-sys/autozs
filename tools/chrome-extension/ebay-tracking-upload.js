@@ -31,7 +31,18 @@
       && text.includes(candidate.ebay_order_id)
       && trackingNumber.length >= 8
       && compactText.includes(trackingNumber)
+      && (!candidate.carrier || compactText.includes(String(candidate.carrier).replace(/[^A-Z0-9]/gi, "").toUpperCase()))
       && /tracking (?:was )?(?:successfully )?(?:added|saved)|marked as shipped|shipment updated/i.test(text));
+  }
+
+  function trackingRecordPresent(bodyText, candidate) {
+    const text = String(bodyText || "");
+    const compact = text.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const number = String(candidate?.tracking_number || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    return Boolean(candidate?.ebay_order_id && candidate?.carrier && number.length >= 8
+      && text.includes(candidate.ebay_order_id) && compact.includes(number)
+      && compact.includes(String(candidate.carrier).replace(/[^A-Z0-9]/gi, "").toUpperCase())
+      && /tracking|shipped/i.test(text));
   }
 
   function visible(element) {
@@ -78,7 +89,19 @@
   async function openTrackingForm(candidate) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const body = String(document.body?.innerText || "");
-      if (!body.includes(candidate.ebay_order_id)) throw new Error("The visible eBay order does not match the tracking handoff.");
+      if (!body.includes(candidate.ebay_order_id)) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
+      }
+      if (trackingRecordPresent(body, candidate)) {
+        await reportSubmission(candidate);
+        statusBanner("eBay already shows the exact carrier and tracking number. Order sync queued.", "ready");
+        return true;
+      }
+      if (candidate.verification_only) {
+        statusBanner("Checking a previous tracking attempt. No second submission will be made until its result is resolved.", "error");
+        return false;
+      }
       const button = [...document.querySelectorAll("button,[role='button']")].find((element) => {
         const text = normalize(element.textContent || element.innerText);
         return visible(element) && (text === "add tracking" || text.startsWith("add tracking number") || text.includes("add tracking"));
@@ -96,6 +119,20 @@
 
   async function fillTrackingForm(candidate) {
     if (!location.pathname.includes("/ship/trk/trackings")) return false;
+    const guardedUrl = new URL(location.href);
+    guardedUrl.searchParams.set("autozs_workflow", "tracking_upload");
+    guardedUrl.searchParams.set("autozs_supplier_order_id", String(candidate.supplier_order_id));
+    guardedUrl.searchParams.set("q", candidate.ebay_order_id);
+    guardedUrl.searchParams.set("autozs_worker_opened_at", String(Date.now()));
+    history.replaceState(history.state, "", guardedUrl.href);
+    if (candidate.submission_attempted || candidate.verification_only) {
+      statusBanner("Previous tracking submission needs verification. Checking the order again.", "working");
+      location.assign(`https://www.ebay.com/sh/ord?q=${encodeURIComponent(candidate.ebay_order_id)}&autozs_workflow=tracking_upload&autozs_supplier_order_id=${candidate.supplier_order_id}`);
+      return false;
+    }
+    if (!String(document.body?.innerText || "").includes(candidate.ebay_order_id)) {
+      throw new Error("Tracking form does not show the exact eBay order ID; automatic submission held.");
+    }
     const inputs = [...document.querySelectorAll('input[type="text"]')].filter(visible);
     if (inputs.length < 2) throw new Error("eBay tracking fields were not found.");
     const trackingNumber = String(candidate.tracking_number).replace(/[^A-Z0-9]/gi, "").toUpperCase();
@@ -129,8 +166,11 @@
         else resolve();
       });
     });
-    statusBanner("Tracking verified and ready. AUTOZS did not press Save and Continue.", "ready");
+    candidate.submission_attempted = true;
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(candidate));
     watchForSubmission(candidate);
+    save.click();
+    statusBanner("Tracking submitted once. Waiting for eBay confirmation.", "working");
     return true;
   }
 
@@ -151,11 +191,14 @@
 
   function watchForSubmission(candidate) {
     let completed = false;
+    let reporting = false;
     const check = async () => {
-      if (completed || !trackingSubmissionConfirmed(document.body?.innerText || "", candidate)) return;
+      if (completed || reporting || !trackingSubmissionConfirmed(document.body?.innerText || "", candidate)) return;
+      reporting = true;
+      try { await reportSubmission(candidate); }
+      finally { reporting = false; }
       completed = true;
       observer.disconnect();
-      await reportSubmission(candidate);
       sessionStorage.removeItem(SESSION_KEY);
       statusBanner("eBay confirmed tracking. AUTOZS queued an authoritative order re-sync.", "ready");
     };
@@ -187,5 +230,5 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run, { once: true });
   else run();
 
-  globalThis.autozsEbayTrackingUploadTest = { trackingRunnerIdentity, trackingPayloadIsSafe, trackingSubmissionConfirmed };
+  globalThis.autozsEbayTrackingUploadTest = { trackingRunnerIdentity, trackingPayloadIsSafe, trackingSubmissionConfirmed, trackingRecordPresent, fillTrackingForm };
 })();

@@ -1,0 +1,1 @@
+(async()=>{if(await hasRunningListingJob())return {blocked:'Listing job is running'};const prior=await readAutozsWorkerMode();await chrome.storage.local.set({[AUTOZS_WORKER_MODE_KEY]:'checkout'});await openNextSupplierOrder();return {prior,mode:await readAutozsWorkerMode()};})()

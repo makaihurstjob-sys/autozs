@@ -1,0 +1,1 @@
+(async()=>{const tabs=await chrome.tabs.query({url:'https://www.homedepot.com/*'});const tab=tabs.find(t=>t.url.includes('/auth/view/signin')&&t.url.includes('WK37553521'));if(tab){await chrome.tabs.update(tab.id,{active:true});await chrome.windows.update(tab.windowId,{focused:true});}return {signInTabShown:Boolean(tab)};})()

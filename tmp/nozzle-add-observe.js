@@ -1,0 +1,1 @@
+(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.offsetParent!==null&&/^add to cart$/i.test(b.innerText.trim()));if(!b)throw Error('Add to Cart unavailable');b.click();return {clicked:true};})()

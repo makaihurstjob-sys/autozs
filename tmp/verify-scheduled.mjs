@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+const target = '7E8D2BD407B06AF3781F7F2BCA00230E';
+const tabs = await (await fetch('http://127.0.0.1:9225/json/list')).json();
+const tab = tabs.find(t=>t.id === target);
+if (!tab) throw Error('Target missing');
+const ws = new WebSocket(tab.webSocketDebuggerUrl);
+await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j});
+const expr = `(() => {
+  const ids = ['800626887390','800626904466'];
+  const bodyText = document.body.innerText;
+  return ids.map(id => ({ id, found: bodyText.includes(id) }));
+})()`;
+const timer=setTimeout(()=>{ws.close();process.exit(2)},20000);
+ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id===1){console.log(JSON.stringify(m.result?.exceptionDetails ? m.result : (m.result?.result ?? m)));clearTimeout(timer);ws.close();}};
+ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:expr,returnByValue:true,awaitPromise:true}}));

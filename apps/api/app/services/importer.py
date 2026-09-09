@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import PROJECT_ROOT
 from app.models.domain import EbayListing, ListingDraft, PriceSnapshot, Product, ProductImage, ProductStatus, SnapshotSource, SupplierProduct
 from app.services.settings import read_pricing_settings
+from app.services.listing_exclusions import listing_exclusion_reason
 from app.services.suppliers import supplier_from_url
 
 
@@ -1200,7 +1201,8 @@ def _local_image_dimensions(local_path: str) -> tuple[int, int] | None:
     if not path.exists():
         return None
     try:
-        data = path.read_bytes()[:4096]
+        with path.open("rb") as image_file:
+            data = image_file.read(4096)
     except OSError:
         return None
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
@@ -1239,8 +1241,8 @@ def _jpeg_dimensions(path: Path) -> tuple[int, int] | None:
     return None
 
 
-def build_ebay_api_payload(db: Session, product_id: int) -> dict | None:
-    package = build_ebay_listing_package(db, product_id)
+def build_ebay_api_payload(db: Session, product_id: int, *, package: dict | None = None) -> dict | None:
+    package = package if package is not None else build_ebay_listing_package(db, product_id)
     if package is None:
         return None
     settings = read_pricing_settings(db)
@@ -1324,11 +1326,11 @@ def build_ebay_manual_macro(db: Session, product_id: int) -> dict | None:
     }
 
 
-def build_listing_readiness(db: Session, product_id: int) -> dict | None:
-    package = build_ebay_listing_package(db, product_id)
+def build_listing_readiness(db: Session, product_id: int, *, package: dict | None = None) -> dict | None:
+    package = package if package is not None else build_ebay_listing_package(db, product_id)
     if package is None:
         return None
-    api_payload = build_ebay_api_payload(db, product_id)
+    api_payload = build_ebay_api_payload(db, product_id, package=package)
     if api_payload is None:
         return None
 
@@ -1366,6 +1368,9 @@ def build_listing_readiness(db: Session, product_id: int) -> dict | None:
         "source_shipping": "supplier/source shipping",
     }
     missing_manual = [label for key, label in manual_labels.items() if not checks[key]]
+    exclusion = listing_exclusion_reason(db, product_id)
+    if exclusion:
+        missing_manual.append(exclusion)
     missing_api = list(missing_manual) + api_payload["missing_publish_requirements"]
 
     warnings: list[str] = []
@@ -1427,6 +1432,7 @@ def _infer_brand(title: str) -> str | None:
     if not clean_title:
         return None
     known_prefixes = [
+        "Back to the Roots",
         "Columbia Forest Products",
         "Ornamental Mouldings",
         "True Blue",
@@ -1674,6 +1680,16 @@ def _apply_description_template(
     content: str,
     settings: dict[str, float | bool | str] | None,
 ) -> str:
+    # Older captures already contain our wrapper, so they bypassed the capture
+    # cleaner forever. Remove supplier navigation bullets before that fast path.
+    content = re.sub(
+        r"<li\b[^>]*>[\s\S]*?</li>",
+        lambda match: "" if NOISY_DESCRIPTION_PATTERNS.search(
+            html.unescape(re.sub(r"<[^>]+>", " ", match.group(0)))
+        ) else match.group(0),
+        content,
+        flags=re.I,
+    )
     if not settings or not bool(settings.get("description_template_enabled", True)):
         return content
     if "data-autozs-template" in content:

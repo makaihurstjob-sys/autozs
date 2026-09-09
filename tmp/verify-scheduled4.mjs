@@ -1,0 +1,16 @@
+const target = '7E8D2BD407B06AF3781F7F2BCA00230E';
+const tabs = await (await fetch('http://127.0.0.1:9225/json/list')).json();
+const tab = tabs.find(t=>t.id === target);
+if (!tab) throw Error('Target missing');
+const ws = new WebSocket(tab.webSocketDebuggerUrl);
+await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j});
+const expr = `({
+  url: location.href,
+  iframes: Array.from(document.querySelectorAll('iframe')).map(f=>f.src),
+  len: document.body.innerText.length,
+  hasTable: !!document.querySelector('table, [role=table]'),
+  fullText: document.body.innerText.slice(0,3000)
+})`;
+const timer=setTimeout(()=>{ws.close();process.exit(2)},20000);
+ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id===1){console.log(JSON.stringify(m.result?.exceptionDetails ? m.result : (m.result?.result ?? m)));clearTimeout(timer);ws.close();}};
+ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:expr,returnByValue:true,awaitPromise:true}}));

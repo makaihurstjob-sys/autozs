@@ -322,12 +322,17 @@ def complete_source_refresh_job(db: Session, job_id: int, product_id: int) -> So
     )
     supplier = product.supplier_products[0] if product and product.supplier_products else None
     captured = supplier.last_price if supplier else None
+    # A capture can legitimately finish with no visible price (Home Depot hides
+    # it until the item is in the cart). That is not a confirmation of anything
+    # -- reporting it as "confirmed" would hide a product stuck needing a manual
+    # cart-price check behind a success-looking message.
+    price_unavailable = bool(supplier and supplier.price_unavailable)
     job.captured_price = captured
     job.price_changed = captured is not None and job.baseline_price is not None and abs(captured - job.baseline_price) >= 0.01
     job.status = SourceRefreshJobStatus.completed.value
     job.completed_at = datetime.utcnow()
     job.lease_expires_at = None
-    job.message = "Price changed" if job.price_changed else "Price confirmed"
+    job.message = "Price unavailable" if price_unavailable else ("Price changed" if job.price_changed else "Price confirmed")
     db.commit()
     # A capture can correct shipping while leaving the item price unchanged.
     # Always recalculate and reconcile revisions so a stale proposal created by
@@ -335,7 +340,9 @@ def complete_source_refresh_job(db: Session, job_id: int, product_id: int) -> So
     recalculate_all_draft_prices(db, product_ids=[product_id])
     queued, updated = enqueue_ebay_price_revisions(db, product_ids=[product_id])
     job.revision_queued = bool(queued or updated)
-    if job.price_changed:
+    if price_unavailable:
+        job.message = "Price unavailable on supplier page; needs a manual cart price check before it can list"
+    elif job.price_changed:
         job.message = f"Price changed; {queued + updated} eBay revision job(s) queued"
     elif queued or updated:
         job.message = f"Price confirmed; {queued + updated} eBay revision job(s) reconciled"

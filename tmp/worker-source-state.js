@@ -1,0 +1,1 @@
+(async()=>({tabs:(await chrome.tabs.query({})).map(t=>({id:t.id,url:t.url})),storage:await chrome.storage.local.get(['autozsSourceRefreshLastOpened','autozsWorkerMode','autozsHomeDepotBatchKey']),canRun:await canRunAutozsSourceJobs(),openFunction:openNextSourceRefreshJob.toString()}))()

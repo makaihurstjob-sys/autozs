@@ -6,8 +6,9 @@ from urllib.parse import urlencode
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.domain import AppSetting, EbayListing, ListingJob, ListingJobStatus, Product, ProductStatus, SupplierProduct
+from app.models.domain import AppSetting, EbayListing, ListingDraft, ListingJob, ListingJobStatus, Product, ProductStatus, SupplierProduct
 from app.services.ebay_browser_account import assert_ebay_browser_account_can_list
+from app.services.listing_exclusions import listing_exclusion_reason
 from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing
 from app.services.importer import build_ebay_listing_package, build_listing_readiness
 from app.services.settings import read_pricing_settings
@@ -107,7 +108,7 @@ def enqueue_listing_jobs(
         # re-offend. This sits in enqueue_listing_jobs because every path -- the
         # automation loop and the dashboard's manual "list it" -- comes through
         # here, so a block here really is a block.
-        if _relist_is_blocked(db, product_id):
+        if listing_exclusion_reason(db, product_id):
             continue
         product_listing_schedule_at = (
             requested_listing_schedule_at
@@ -154,6 +155,9 @@ def queue_zero_view_listing_rotations(
     """Queue fresh, profitable replacements first; retirement is deferred until each replacement is live."""
     checked_at = _naive_utc(now) or _now_utc_naive()
     settings = read_pricing_settings(db)
+    from app.services.ebay_listing_policy import enabled, queue_pruning
+    if enabled(db):
+        return queue_pruning(db, ebay_account_key, limit, checked_at)
     if not settings.get("auto_delist_zero_view_enabled"):
         return {"eligible": 0, "replacements_ready": 0, "queued": 0, "pairs": []}
     age_cutoff = checked_at - timedelta(days=float(settings.get("auto_delist_zero_view_days") or 29))
@@ -301,6 +305,9 @@ def queue_listing_expansion(
         )
     ) or 0)
     headroom = max(0, cap - active_count)
+    from app.services.ebay_listing_policy import enabled, budget_status
+    if enabled(db):
+        headroom = min(headroom, budget_status(db, ebay_account_key, checked_at)['available'])
     if headroom <= 0:
         return {"cap": cap, "active_count": active_count, "headroom": 0, "eligible": 0, "queued": 0, "product_ids": []}
 
@@ -314,6 +321,16 @@ def queue_listing_expansion(
     ).all())
     unavailable_product_ids |= set(db.scalars(
         select(ListingJob.product_id).where(ListingJob.status.not_in(TERMINAL_STATUSES))
+    ).all())
+    # A tombstoned local draft represents an explicit decision that this product
+    # must not be listed automatically (for example, missing regulatory data).
+    # Keep manual enqueue available for deliberate re-imports, but never let the
+    # headroom filler recreate the same rejected product on every automation pass.
+    unavailable_product_ids |= set(db.scalars(
+        select(ListingDraft.product_id).where(
+            ListingDraft.marketplace == "ebay",
+            ListingDraft.status == "tombstoned",
+        )
     ).all())
 
     products = db.scalars(
@@ -332,7 +349,7 @@ def queue_listing_expansion(
 
     scored: list[tuple[float, int]] = []
     for product in products:
-        if product.id in unavailable_product_ids or _relist_is_blocked(db, product.id):
+        if product.id in unavailable_product_ids or listing_exclusion_reason(db, product.id):
             continue
         readiness = build_listing_readiness(db, product.id)
         package = build_ebay_listing_package(db, product.id)
@@ -368,6 +385,9 @@ def queue_listing_expansion(
 
 
 def _complete_zero_view_rotation(db: Session, job: ListingJob, listing_id: str | None) -> None:
+    from app.services.ebay_listing_policy import enabled
+    if enabled(db):
+        return
     if job.status != ListingJobStatus.completed.value or not listing_id:
         return
     setting = db.scalar(select(AppSetting).where(AppSetting.key == ROTATION_PENDING_KEY))
@@ -464,6 +484,15 @@ def read_listing_job(db: Session, job_id: int) -> ListingJob | None:
 
 
 def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
+    from app.services.ebay_listing_policy import publish_block_reason
+    budget_block = publish_block_reason(db, job)
+    if budget_block:
+        job.message = f"Publishing held: {budget_block}"
+        db.commit()
+        db.refresh(job)
+        return job
+    previous_status = job.status
+    previous_message = str(job.message or "")
     product = db.get(Product, job.product_id)
     if product is None:
         job.status = ListingJobStatus.failed.value
@@ -497,6 +526,26 @@ def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
         job.status = ListingJobStatus.needs_review.value
         job.message = f"Needs review before draft: {', '.join(readiness['missing_manual'])}"
     else:
+        # A draft that reached the final click but was never confirmed can no
+        # longer be trusted on retry. eBay has reused one such draft ID for a
+        # different product, causing the wrong scheduled listing to open. Force
+        # a clean prelist flow for these retries; description-only repairs may
+        # still reuse their stabilized draft.
+        if (
+            previous_status == ListingJobStatus.needs_review.value
+            and job.ebay_draft_id
+            and (
+                "never confirmed" in previous_message.lower()
+                or "already-published listing" in previous_message.lower()
+                or "belongs to product" in previous_message.lower()
+            )
+        ):
+            job.ebay_draft_id = None
+        if job.action == "publish" and job.listing_schedule_at is not None:
+            minimum_start = _now_eastern_naive() + EBAY_SCHEDULE_MINIMUM_LEAD
+            if job.listing_schedule_at < minimum_start:
+                job.listing_schedule_at = minimum_start.replace(second=0, microsecond=0)
+                product.listing_schedule_at = job.listing_schedule_at
         job.status = ListingJobStatus.running.value
         job.started_at = _now_utc_naive()
         job.completed_at = None
@@ -568,6 +617,8 @@ def update_listing_job(
     message: str | None = None,
 ) -> ListingJob:
     scheduled_for = _naive_utc(scheduled_for)
+    if status in {"queued", "running"} and listing_exclusion_reason(db, job.product_id):
+        return job
     listing_schedule_at = _naive_utc(listing_schedule_at)
     conflicting_job = _conflicting_draft_job(db, job, ebay_draft_id)
     if conflicting_job is not None:
@@ -599,8 +650,17 @@ def update_listing_job(
             # automation reports it as "never confirmed", which reads like a fill
             # bug but is really just a schedule that expired while the job sat
             # unprocessed or got retried later. Requeuing must push it forward.
-            if job.listing_schedule_at is not None and job.listing_schedule_at <= _now_utc_naive():
-                job.listing_schedule_at = _now_utc_naive() + timedelta(minutes=30)
+            # listing_schedule_at is an Eastern wall-clock value because it is
+            # typed into eBay's editor verbatim. Comparing or replacing it with
+            # a naive UTC clock shifts the time four/five hours backward in the
+            # editor and eBay rejects the final click as occurring in the past.
+            eastern_now = _now_eastern_naive()
+            minimum_start = eastern_now + EBAY_SCHEDULE_MINIMUM_LEAD
+            if job.listing_schedule_at is not None and job.listing_schedule_at < minimum_start:
+                job.listing_schedule_at = minimum_start.replace(second=0, microsecond=0)
+                product = db.get(Product, job.product_id)
+                if product is not None:
+                    product.listing_schedule_at = job.listing_schedule_at
         if status == ListingJobStatus.tombstoned.value:
             job.listing_schedule_at = None
             _tombstone_missing_draft_records(db, job)
@@ -666,7 +726,7 @@ def verify_listing_job_draft(
 
 def serialize_listing_job(db: Session, job: ListingJob) -> dict:
     package = build_ebay_listing_package(db, job.product_id)
-    readiness = build_listing_readiness(db, job.product_id)
+    readiness = build_listing_readiness(db, job.product_id, package=package)
     if package is None or readiness is None:
         return {
             "id": job.id,
@@ -809,6 +869,10 @@ def _naive_utc(value: datetime | None) -> datetime | None:
 
 def _now_utc_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _now_eastern_naive() -> datetime:
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
 
 
 def _supplier_delivery_unavailable(product: Product) -> bool:

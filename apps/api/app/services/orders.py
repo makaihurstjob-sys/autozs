@@ -255,7 +255,7 @@ def _queue_automatic_restock(
                 EbayListing.product_id == product.id,
             )
         )
-    if listing is None:
+    if listing is None and not item_number:
         listing = db.scalar(
             select(EbayListing)
             .where(
@@ -270,6 +270,8 @@ def _queue_automatic_restock(
 
     listing.quantity = max(0, int(listing.quantity or 0) - max(1, int(quantity or 1)))
     if listing.quantity > 0:
+        return
+    if listing.status not in ("scheduled", "listed", "live", "active", "ended"):
         return
     listing.status = "ended"
 
@@ -379,6 +381,10 @@ def _queue_replacement_publish(
     require_confirmed_stock: bool = False,
     excluded_listing_id: int | None = None,
 ) -> bool:
+    from app.services.listing_exclusions import listing_exclusion_reason
+
+    if product.status == ProductStatus.deleted.value or listing_exclusion_reason(db, product.id):
+        return False
     checked_at = now or datetime.utcnow()
     supplier = product.supplier_products[0] if product.supplier_products else None
     if (

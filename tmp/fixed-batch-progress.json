@@ -1,0 +1,71 @@
+{
+  "at": "2026-09-08T04:43:10.922Z",
+  "jobs": [
+    {
+      "id": 278,
+      "product": 182,
+      "status": "completed",
+      "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800629130759."
+    },
+    {
+      "id": 288,
+      "product": 176,
+      "status": "completed",
+      "message": "Scheduled on eBay as item 800629132141."
+    },
+    {
+      "id": 285,
+      "product": 172,
+      "status": "completed",
+      "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800629076412."
+    },
+    {
+      "id": 290,
+      "product": 158,
+      "status": "completed",
+      "message": "Scheduled on eBay as item 800629137636."
+    },
+    {
+      "id": 303,
+      "product": 139,
+      "status": "queued",
+      "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+    },
+    {
+      "id": 299,
+      "product": 138,
+      "status": "queued",
+      "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+    },
+    {
+      "id": 297,
+      "product": 127,
+      "status": "needs_review",
+      "message": "Auto workflow filled 10/14 field group(s); replaced 8 existing image(s); uploaded 8/8 image(s). Review: item specifics. Item specifics diagnostic: empty required: Type."
+    },
+    {
+      "id": 305,
+      "product": 124,
+      "status": "queued",
+      "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+    },
+    {
+      "id": 306,
+      "product": 123,
+      "status": "queued",
+      "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+    },
+    {
+      "id": 311,
+      "product": 120,
+      "status": "queued",
+      "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+    },
+    {
+      "id": 313,
+      "product": 107,
+      "status": "queued",
+      "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+    }
+  ]
+}

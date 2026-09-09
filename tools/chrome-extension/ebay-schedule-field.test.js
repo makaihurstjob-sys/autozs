@@ -1,0 +1,12 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(`${__dirname}/ebay-fill.js`,'utf8');
+const suggestion={name:'extracted-attribute-selector',id:'extracted-attribute-selector-Watering Frequency',value:'Watering Frequency',getAttribute:()=>''};
+const date={name:'scheduleStartDate',id:'scheduleStartDate',value:'9/7/2026',getAttribute:()=>''};
+let fields=[suggestion,date];
+const ctx={conditionQueryAll:()=>fields,isVisible:()=>true,labelText:e=>e===suggestion?'Watering Frequency: Every 7th Day':'Day',nearbyText:()=>'',normalizeText:s=>s.toLowerCase().replace(/[^a-z0-9]+/g,'')};
+vm.createContext(ctx);
+const start=source.indexOf('function findScheduleDayField(');
+vm.runInContext(source.slice(start,source.indexOf('\n}',start)+2),ctx);
+assert.equal(ctx.findScheduleDayField(),date,'Irrigation frequency suggestions must not be mistaken for the schedule date');
+fields=[suggestion];assert.equal(ctx.findScheduleDayField(),undefined);
+console.log('schedule field tests passed');

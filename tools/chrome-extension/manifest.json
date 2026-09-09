@@ -126,7 +126,8 @@
         "https://www.depop.com/*"
       ],
       "js": [
-        "depop-profile.js"
+        "depop-profile.js",
+        "depop-fill.js"
       ],
       "run_at": "document_idle"
     }

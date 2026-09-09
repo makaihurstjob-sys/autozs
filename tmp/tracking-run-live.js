@@ -1,0 +1,1 @@
+(async()=>{await openNextSupplierTrackingCheck();return {tabs:(await chrome.tabs.query({url:'https://www.homedepot.com/*'})).filter(t=>isSupplierTrackingRunnerUrl(t.url)).map(t=>({id:t.id,url:t.url})),state:await chrome.storage.local.get('autozsSupplierTrackingChecks')};})()

@@ -735,6 +735,17 @@ function captureAmazonProductFromPage(cleanSourceUrl, clean) {
   const unavailable = /currently unavailable|out of stock/i.test(document.body?.innerText || "");
   const variations = amazonVariations();
   const reviewPhotos = amazonReviewPhotos();
+  const brandText = clean(
+    document.querySelector("#bylineInfo")?.innerText ||
+      document.querySelector("#brand")?.innerText ||
+      document.querySelector(".po-brand .po-break-word")?.innerText || ""
+  );
+  const sourceBrand = brandText
+    .replace(/^visit\s+the\s+/i, "")
+    .replace(/^shop\s+the\s+/i, "")
+    .replace(/^brand\s*:\s*/i, "")
+    .replace(/\s+store$/i, "")
+    .trim();
   return {
     source_url: cleanSourceUrl(),
     title,
@@ -743,6 +754,7 @@ function captureAmazonProductFromPage(cleanSourceUrl, clean) {
     depop_amazon: {
       parent_asin: String(amazonImageBlockData()?.parentAsin || "").toUpperCase(),
       title,
+      source_brand: sourceBrand,
       price: amazonSourcePrice() || 0,
       variations,
       review_photos: reviewPhotos,

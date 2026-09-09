@@ -1,0 +1,1 @@
+({links:[...document.querySelectorAll('a')].filter(a=>/order|track/i.test(a.innerText)).map(a=>({text:a.innerText,url:a.href})),error:/pardon our dust|internal homedepot.com error/i.test(document.body.innerText)})

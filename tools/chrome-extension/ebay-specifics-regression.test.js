@@ -1,0 +1,30 @@
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync(`${__dirname}/ebay-fill.js`, 'utf8');
+const ctx = { document: { querySelectorAll: () => [] }, isVisible: () => true, labelText: () => '', stripListingHtml: x => x };
+vm.createContext(ctx);
+for (const name of ['normalizeText', 'normalizeComparableValue', 'itemSpecificMatches', 'ebayItemSpecificRowValue', 'inferredItemSpecifics', 'fillRequiredEbayItemSpecifics']) {
+ let start = source.indexOf(`function ${name}(`);
+ if (source.slice(start-6,start)==='async ') start-=6;
+ vm.runInContext(source.slice(start,source.indexOf('\n}',start)+2),ctx);
+}
+const control = { id:'', value:'', innerText:'', textContent:'', getAttribute: k => k==='name'?'attributes.Type':'' };
+ctx.document.querySelectorAll = () => [control];
+assert.equal(ctx.itemSpecificMatches('Type','Standard Garden Hose'), false);
+control.innerText='Standard Garden Hose';
+assert.equal(ctx.itemSpecificMatches('Type','Standard Garden Hose'), true);
+assert.equal(ctx.itemSpecificMatches('Type','Hose'), false);
+const searchInput = {value:'Standard Garden Hose',getAttribute:()=> 'search-box'};
+assert.equal(ctx.ebayItemSpecificRowValue({valueHost:{querySelectorAll:()=>[],querySelector:()=>searchInput}}),'');
+assert.equal(ctx.ebayItemSpecificRowValue({valueHost:{querySelectorAll:()=>[{innerText:'Standard Garden Hose'}],querySelector:()=>searchInput}}),'Standard Garden Hose');
+const suggestedRow = {valueHost:{querySelectorAll:selector=>selector==='button[name^="attributes."]'?[{innerText:''}]:[{innerText:''},{innerText:'Adapter'}],querySelector:()=>null}};
+assert.equal(ctx.ebayItemSpecificRowValue(suggestedRow),'','Suggested values are not committed selections');
+control.getAttribute = k => k === 'name' ? 'search-box' : k === 'aria-label' ? 'Type' : '';
+assert.equal(ctx.itemSpecificMatches('Type','Standard Garden Hose'), false);
+assert.equal(ctx.inferredItemSpecifics({title:'Husky 5/8 in. x 50 ft. Heavy-Duty Hose'}).Type,'Standard Garden Hose');
+assert.equal(ctx.inferredItemSpecifics({title:'Garden Hose Repair Kit'}).Type,undefined);
+ctx.ebayItemSpecificRows=()=>[{key:'Type',required:true}];
+ctx.ebayItemSpecificRowValue=()=>'';
+ctx.chooseEbayItemSpecificOption=async (row,preferred)=>{assert.ok(preferred.includes('adapter'));return true;};
+(async()=>{assert.deepEqual(Array.from(await ctx.fillRequiredEbayItemSpecifics({title:'Melnor Faucet Adapter'})),['Type']);console.log('specifics regression tests passed');})().catch(e=>{console.error(e);process.exitCode=1});

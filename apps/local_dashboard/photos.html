@@ -74,10 +74,10 @@
       }
       #deck {
         position: relative;
-        width: min(420px, 92vw);
-        aspect-ratio: 3 / 4;
-        max-height: 64vh;
-        flex: 0 1 auto;
+        width: min(420px, 92vw, 58vh);
+        height: min(420px, 92vw, 58vh);
+        aspect-ratio: 1 / 1;
+        flex: 0 0 auto;
         min-height: 0;
       }
       .card {
@@ -95,14 +95,23 @@
       .card.behind { transform: scale(0.94) translateY(14px); opacity: 0.55; }
       .card.animate { transition: transform 0.32s ease, opacity 0.32s ease; }
       .card img {
-        width: 100%;
-        flex: 1 1 auto;
-        object-fit: contain;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        max-width: none;
+        max-height: none;
         background: #0b100e;
-        min-height: 0;
-        pointer-events: none;
+        touch-action: none;
+        cursor: grab;
       }
+      .card img.adjusting { cursor: grabbing; }
       .card .meta {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 3;
+        background: rgba(14, 21, 18, .9);
         flex: 0 0 auto;
         padding: 9px 12px;
         font-size: 12px;
@@ -181,6 +190,30 @@
         75% { transform: translateX(7px); }
       }
       .actions { display: flex; gap: 12px; align-items: center; flex: 0 0 auto; }
+      .crop-controls { display: none; align-items: center; gap: 10px; width: min(420px, 92vw); }
+      .crop-controls.visible { display: flex; }
+      .crop-controls input { flex: 1; accent-color: var(--accent); }
+      #crop-toggle.active { color: var(--accent); border-color: var(--accent); }
+      #expand-toggle.active { color: var(--accent); border-color: var(--accent); }
+      #ai-expand { font-size: 11px; }
+      #ai-expand:disabled { opacity: 0.4; }
+      .card img.blur-backdrop {
+        inset: -8%;
+        left: -8%;
+        top: -8%;
+        width: 116%;
+        height: 116%;
+        transform: none;
+        object-fit: cover;
+        filter: blur(18px) brightness(.72);
+        display: none;
+      }
+      .card img.photo.expand {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        transform: translate(-50%, -50%);
+      }
       .round {
         width: 58px;
         height: 58px;
@@ -223,6 +256,20 @@
       .badge.todo { color: var(--accent); border-color: var(--accent); }
       .badge.done { color: var(--muted); }
       a { color: var(--accent); }
+      html[data-embedded="true"] {
+        --bg: #11080a;
+        --panel: #1d0d11;
+        --panel-2: #2a1117;
+        --line: #51202b;
+        --text: #fff1f3;
+        --muted: #d5aab3;
+        --accent: #e85c72;
+      }
+      html[data-embedded="true"],
+      html[data-embedded="true"] body { background: var(--bg); color-scheme: dark; }
+      html[data-embedded="true"] header { padding: 9px 12px; }
+      html[data-embedded="true"] main { padding: 10px; gap: 10px; overflow-y: auto; justify-content: flex-start; }
+      html[data-embedded="true"] #deck { width: min(420px, 94vw, 46vh); height: min(420px, 94vw, 46vh); }
       @media (prefers-color-scheme: light) {
         :root {
           --bg: #f2f6f4; --panel: #ffffff; --panel-2: #eef3f1; --line: #d5e2dc;
@@ -248,14 +295,20 @@
       <div id="variants"></div>
       <div class="actions">
         <button class="round no" id="btn-no" title="Reject (left arrow)">&#10005;</button>
+        <button id="crop-toggle" type="button">Adjust crop</button>
+        <button id="expand-toggle" type="button">Expand background</button>
+        <button id="ai-expand" type="button" disabled title="Experimental: blocked until OAuth generation supports pixel-locked masking">AI Expand · experimental</button>
         <button class="round yes" id="btn-yes" title="Approve (right arrow)">&#10003;</button>
+      </div>
+      <div class="crop-controls" id="crop-controls">
+        <span>−</span><input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-label="Crop zoom" /><span>+</span>
       </div>
       <div id="hint"></div>
       <div id="empty">
         <h2>All caught up</h2>
         <p>Every photo for this product has been reviewed.</p>
         <p id="empty-detail"></p>
-        <p><a href="photos.html">Back to all products</a></p>
+        <p><a href="photos.html" id="back-to-products">Back to all products</a></p>
       </div>
       <div id="picker"></div>
     </main>
@@ -263,6 +316,10 @@
     <script>
       const API_STORAGE_KEY = "ebayAutomationApiBaseUrl";
       const params = new URLSearchParams(location.search);
+      const embedded = params.get("embedded") === "1";
+      if (embedded) document.documentElement.dataset.embedded = "true";
+      if (embedded) document.getElementById("back-to-products").href = "photos.html?embedded=1" +
+        (params.get("api") ? `&api=${encodeURIComponent(params.get("api"))}` : "");
       const normalizeApiBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
       function defaultApiBaseUrl() {
         if (["localhost", "127.0.0.1", ""].includes(location.hostname)) {
@@ -289,6 +346,8 @@
       let done = 0;
       let history = [];
       let busy = false;
+      let cropMode = false;
+      const cropStates = new Map();
 
       const api = async (path, options) => {
         const response = await fetch(API + path, options);
@@ -319,7 +378,11 @@
         for (const item of queue) {
           const row = document.createElement("a");
           row.className = "queue-row";
-          row.href = `photos.html?product_id=${item.product_id}${params.get("api") ? `&api=${encodeURIComponent(params.get("api"))}` : ""}`;
+          const rowUrl = new URL("photos.html", location.href);
+          rowUrl.searchParams.set("product_id", item.product_id);
+          if (params.get("api")) rowUrl.searchParams.set("api", params.get("api"));
+          if (embedded) rowUrl.searchParams.set("embedded", "1");
+          row.href = rowUrl.href;
           const img = document.createElement("img");
           img.src = amazonSized(item.cover_image, 120);
           img.alt = "";
@@ -395,6 +458,10 @@
 
       function updateHint() {
         if (!queue.length) return;
+        if (cropMode) {
+          hintEl.textContent = "Drag to reposition. Pinch or use the slider to zoom, then tap Done.";
+          return;
+        }
         const variant = variants.find((v) => v.id === selectedVariantId);
         if (!variant) {
           hintEl.textContent = "Pick a variation below, then swipe right to approve";
@@ -426,6 +493,9 @@
         const next = queue[1];
         if (next) deck.append(makeCard(next, true));
         deck.append(makeCard(queue[0], false));
+        const currentMode = cropState(queue[0]).mode;
+        document.getElementById("expand-toggle").classList.toggle("active", currentMode === "blur");
+        document.getElementById("expand-toggle").textContent = currentMode === "blur" ? "Use square crop" : "Expand background";
         // A pending photo that already carries a variant was matched through its
         // review id; pre-select it so the swipe is a confirmation, not a lookup.
         selectedVariantId = queue[0].variant_id || null;
@@ -436,13 +506,20 @@
       function makeCard(photo, behind) {
         const card = document.createElement("div");
         card.className = "card" + (behind ? " behind" : "");
+        const backdrop = document.createElement("img");
+        backdrop.className = "blur-backdrop";
+        backdrop.src = photo.image_url;
+        backdrop.alt = "";
         const img = document.createElement("img");
+        img.className = "photo";
         img.src = photo.image_url;
         img.alt = "";
         img.loading = "eager";
+        img.draggable = false;
         img.addEventListener("error", () => {
           img.src = photo.thumb_url || "";
         });
+        img.addEventListener("load", () => applyCrop(img, photo));
         const meta = document.createElement("div");
         meta.className = "meta";
         const tag = document.createElement("span");
@@ -457,9 +534,95 @@
         const no = document.createElement("div");
         no.className = "stamp no";
         no.textContent = "NOPE";
-        card.append(img, meta, yes, no);
-        if (!behind) attachDrag(card);
+        card.append(backdrop, img, meta, yes, no);
+        if (!behind) {
+          attachDrag(card);
+          attachCropGestures(img, photo);
+        }
         return card;
+      }
+
+      function cropState(photo) {
+        if (!cropStates.has(photo.id)) cropStates.set(photo.id, {
+          x: Number(photo.crop_x || 0), y: Number(photo.crop_y || 0), zoom: Number(photo.crop_zoom || 1),
+          mode: photo.background_mode === "blur" ? "blur" : "crop",
+        });
+        return cropStates.get(photo.id);
+      }
+
+      function cropGeometry(img, state) {
+        const box = deck.getBoundingClientRect();
+        const ratio = Math.max(box.width / (img.naturalWidth || 1), box.height / (img.naturalHeight || 1));
+        const width = (img.naturalWidth || 1) * ratio;
+        const height = (img.naturalHeight || 1) * ratio;
+        return { width, height, maxX: Math.max(0, (width * state.zoom - box.width) / 2), maxY: Math.max(0, (height * state.zoom - box.height) / 2) };
+      }
+
+      function applyCrop(img, photo) {
+        if (!img.naturalWidth) return;
+        const state = cropState(photo);
+        const backdrop = img.parentElement?.querySelector(".blur-backdrop");
+        if (state.mode === "blur") {
+          img.classList.add("expand");
+          if (backdrop) backdrop.style.display = "block";
+          img.style.width = "100%";
+          img.style.height = "100%";
+          img.style.transform = "translate(-50%, -50%)";
+          document.getElementById("crop-zoom").value = 1;
+          return;
+        }
+        img.classList.remove("expand");
+        if (backdrop) backdrop.style.display = "none";
+        const geometry = cropGeometry(img, state);
+        img.style.width = `${geometry.width}px`;
+        img.style.height = `${geometry.height}px`;
+        img.style.transform = `translate(-50%, -50%) translate(${state.x * geometry.maxX}px, ${state.y * geometry.maxY}px) scale(${state.zoom})`;
+        document.getElementById("crop-zoom").value = state.zoom;
+      }
+
+      function attachCropGestures(img, photo) {
+        let pointers = new Map();
+        let start = null;
+        const begin = (event) => {
+          if (!cropMode) return;
+          if (cropState(photo).mode === "blur") return;
+          event.preventDefault();
+          try { img.setPointerCapture?.(event.pointerId); } catch {}
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          const state = cropState(photo);
+          start = { x: state.x, y: state.y, zoom: state.zoom, points: [...pointers.values()] };
+          img.classList.add("adjusting");
+        };
+        const move = (event) => {
+          if (!cropMode || !pointers.has(event.pointerId)) return;
+          event.preventDefault();
+          pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          const points = [...pointers.values()];
+          const state = cropState(photo);
+          if (points.length > 1 && start?.points.length > 1) {
+            const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+            const initial = Math.hypot(start.points[0].x - start.points[1].x, start.points[0].y - start.points[1].y) || 1;
+            state.zoom = Math.max(1, Math.min(4, start.zoom * distance / initial));
+          } else if (points.length === 1 && start) {
+            const geometry = cropGeometry(img, state);
+            state.x = geometry.maxX ? Math.max(-1, Math.min(1, start.x + (points[0].x - start.points[0].x) / geometry.maxX)) : 0;
+            state.y = geometry.maxY ? Math.max(-1, Math.min(1, start.y + (points[0].y - start.points[0].y) / geometry.maxY)) : 0;
+          }
+          applyCrop(img, photo);
+        };
+        const end = (event) => { pointers.delete(event.pointerId); start = null; img.classList.remove("adjusting"); };
+        img.addEventListener("pointerdown", begin);
+        img.addEventListener("pointermove", move);
+        img.addEventListener("pointerup", end);
+        img.addEventListener("pointercancel", end);
+        img.addEventListener("wheel", (event) => {
+          if (!cropMode) return;
+          if (cropState(photo).mode === "blur") return;
+          event.preventDefault();
+          const state = cropState(photo);
+          state.zoom = Math.max(1, Math.min(4, state.zoom - event.deltaY * 0.002));
+          applyCrop(img, photo);
+        }, { passive: false });
       }
 
       function attachDrag(card) {
@@ -471,7 +634,7 @@
         const no = card.querySelector(".stamp.no");
 
         const down = (event) => {
-          if (busy) return;
+          if (busy || cropMode) return;
           dragging = true;
           card.classList.remove("animate");
           const point = event.touches ? event.touches[0] : event;
@@ -536,15 +699,20 @@
         }
         busy = true;
         const photo = queue[0];
+        const crop = cropState(photo);
         const variantId = status === "approved" ? selectedVariantId : null;
         flyOut(status === "approved" ? 1 : -1);
         try {
           await api(`/depop/source-photos/${photo.id}/decision`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status, variant_id: variantId }),
+            body: JSON.stringify({
+              status, variant_id: variantId,
+              crop_x: crop.x, crop_y: crop.y, crop_zoom: crop.zoom,
+              background_mode: crop.mode,
+            }),
           });
-          history.push({ photo, status, variantId });
+          history.push({ photo, status, variantId, crop: { ...crop } });
           queue.shift();
           done += 1;
         } catch (error) {
@@ -565,7 +733,11 @@
           await api(`/depop/source-photos/${last.photo.id}/decision`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "pending", variant_id: null }),
+            body: JSON.stringify({
+              status: "pending", variant_id: null,
+              crop_x: last.crop?.x || 0, crop_y: last.crop?.y || 0, crop_zoom: last.crop?.zoom || 1,
+              background_mode: last.crop?.mode || "crop",
+            }),
           });
           queue.unshift(last.photo);
           done = Math.max(0, done - 1);
@@ -579,6 +751,41 @@
 
       document.getElementById("btn-yes").addEventListener("click", () => decide("approved"));
       document.getElementById("btn-no").addEventListener("click", () => decide("rejected"));
+      document.getElementById("crop-toggle").addEventListener("click", () => {
+        cropMode = !cropMode;
+        document.getElementById("crop-toggle").classList.toggle("active", cropMode);
+        document.getElementById("crop-toggle").textContent = cropMode ? "Done" : "Adjust crop";
+        document.getElementById("crop-controls").classList.toggle("visible", cropMode);
+        updateHint();
+      });
+      document.getElementById("expand-toggle").addEventListener("click", () => {
+        if (!queue.length) return;
+        const state = cropState(queue[0]);
+        state.mode = state.mode === "blur" ? "crop" : "blur";
+        state.x = 0;
+        state.y = 0;
+        state.zoom = 1;
+        cropMode = false;
+        document.getElementById("crop-toggle").classList.remove("active");
+        document.getElementById("crop-toggle").textContent = "Adjust crop";
+        document.getElementById("crop-controls").classList.remove("visible");
+        document.getElementById("expand-toggle").classList.toggle("active", state.mode === "blur");
+        document.getElementById("expand-toggle").textContent = state.mode === "blur" ? "Use square crop" : "Expand background";
+        const img = deck.lastElementChild?.querySelector("img.photo");
+        if (img) applyCrop(img, queue[0]);
+        hintEl.textContent = state.mode === "blur"
+          ? "Full photo preserved over a softly blurred square background."
+          : "Square crop restored.";
+      });
+      document.getElementById("ai-expand").addEventListener("click", () => {
+        hintEl.textContent = "AI Expand is experimental and blocked here because pixel-locked OAuth masking is not available.";
+      });
+      document.getElementById("crop-zoom").addEventListener("input", (event) => {
+        if (!queue.length) return;
+        cropState(queue[0]).zoom = Number(event.target.value);
+        const img = deck.lastElementChild?.querySelector("img.photo");
+        if (img) applyCrop(img, queue[0]);
+      });
       undoBtn.addEventListener("click", undo);
       window.addEventListener("keydown", (event) => {
         if (event.key === "ArrowRight") decide("approved");

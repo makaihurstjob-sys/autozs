@@ -1,0 +1,1 @@
+({fixLoaded:typeof closeCompletedForeignListingRunner === "function",recoveryUsesFix:reopenOrphanedListingJob.toString().includes("closeCompletedForeignListingRunner"),version:chrome.runtime.getManifest().version})

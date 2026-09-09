@@ -11,6 +11,21 @@ const context = {
 vm.createContext(context);
 vm.runInContext(source, context);
 
+require('node:test')('checkout waits for delayed cart confirmation and does not retry an uncertain add', async () => {
+  const assert = require('node:assert/strict');
+  let polls = 0;
+  context.setTimeout = resolve => { polls += 1; resolve(); };
+  context.document = { querySelector: () => ({ textContent: polls >= 8 ? '1' : '0' }) };
+  await context.autozsWaitForCartAddition(0, 1);
+  assert.equal(polls, 8);
+  polls = 0;
+  context.document = { querySelector: () => ({ textContent: '1' }) };
+  await assert.rejects(context.autozsWaitForCartAddition(1, 1), /Check the cart before retrying/);
+  assert.equal(polls, 40);
+  assert.equal(context.autozsHomeDepotCheckoutSignIn('/auth/view/checkout/signin'), true);
+  assert.equal(context.autozsHomeDepotCheckoutSignIn('/checkout'), false);
+});
+
 const expected = context.autozsExpectedSupplierSubtotal({
   items: [{ unit_price: 12.5, quantity: 2 }, { unit_price: 4.99, quantity: 1 }],
 });
@@ -126,6 +141,10 @@ if (!context.autozsCheckoutTotalsAreSafe(totals, 19.97, 21.57)) {
   throw new Error("Expected a recomposed final total at the approved ceiling to be safe.");
 }
 const liveTotals = context.autozsCheckoutTotals("Your Order\nSubtotal\n$19.97\nDelivery\nFREE\nEstimated Sales Tax*\n$1.37\nTotal\n$21.34");
+const nozzleTotals = context.autozsCheckoutTotals("Tax Details\nSubtotal\n$4.88\nDelivery\nFREE\nEstimated Sales Tax*\n$0.40\nApply Tax Exempt ID\nTotal\n$5.28");
+if (nozzleTotals.tax !== 0.40 || !context.autozsCheckoutTotalsAreSafe(nozzleTotals, 4.88, 5.28)) {
+  throw new Error("Tax Details must not consume the subtotal as the tax amount.");
+}
 if (liveTotals.subtotal !== 19.97 || liveTotals.shipping !== 0 || liveTotals.tax !== 1.37 || liveTotals.total !== 21.34) {
   throw new Error(`Expected the live Home Depot order-summary labels to parse, got ${JSON.stringify(liveTotals)}`);
 }
@@ -197,3 +216,25 @@ if (!source.includes('"pointer-events:none"')) {
 }
 
 console.log("guarded Home Depot checkout tests ok");
+require('node:test')('account order details require the exact order identity', () => {
+ const assert = require('node:assert/strict');
+ const url = 'https://www.homedepot.com/myaccount/order-details?orderNumber=WK37553521';
+ const body = 'WK37553521 Shipped UPS Tracking number: 1Z999AA10123456784';
+ assert.equal(context.autozsHomeDepotTrackingObservation(url, body).trackingNumber, '1Z999AA10123456784');
+ assert.equal(context.autozsHomeDepotTrackingObservation(url, body.replace('WK37553521','WK00000000')), null);
+});
+require('node:test')('future delivery milestone does not mark a shipment delivered', () => {
+ const assert = require('node:assert/strict');
+ const url = 'https://www.homedepot.com/myaccount/order-details?orderNumber=WK37553521';
+ const body = 'WK37553521 UPS Tracking number: 1Z999AA10123456784 Processed Shipped Out For Delivery Delivered';
+ assert.equal(context.autozsHomeDepotTrackingObservation(url, body).status, 'shipped');
+ assert.equal(context.autozsHomeDepotTrackingObservation(url, body + ' Delivered on September 10').status, 'delivered');
+});
+require('node:test')('waiting result requires the exact order details heading',()=>{
+ const assert=require('node:assert/strict');
+ const url='https://www.homedepot.com/myaccount/order-details?orderNumber=WK37553521';
+ assert.equal(context.autozsTrackingOrderVerified(url,'ORDER # WK37553521'),true);
+ assert.equal(context.autozsTrackingOrderVerified(url,'ORDER # WK37553522'),false);
+ assert.equal(context.autozsTrackingOrderVerified(url,'Enter Your Email Address'),false);
+ assert.equal(context.autozsTrackingOrderVerified(url.replace('order-details','purchase-history'),'ORDER # WK37553521'),false);
+});

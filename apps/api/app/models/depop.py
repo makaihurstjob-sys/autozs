@@ -39,6 +39,12 @@ class DepopListingVariant(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
     depop_listing_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    views_count: Mapped[int] = mapped_column(Integer, default=0)
+    clicks_count: Mapped[int] = mapped_column(Integer, default=0)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0)
+    bags_count: Mapped[int] = mapped_column(Integer, default=0)
+    offers_count: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     jobs: Mapped[list["DepopListingJob"]] = relationship(back_populates="variant", cascade="all, delete-orphan")
 
 
@@ -79,6 +85,10 @@ class DepopSourcePhoto(Base, TimestampMixin):
     width: Mapped[int] = mapped_column(Integer, default=0)
     height: Mapped[int] = mapped_column(Integer, default=0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    crop_x: Mapped[float] = mapped_column(Float, default=0.0)
+    crop_y: Mapped[float] = mapped_column(Float, default=0.0)
+    crop_zoom: Mapped[float] = mapped_column(Float, default=1.0)
+    background_mode: Mapped[str] = mapped_column(String(32), default="crop")
 
 
 class DepopListingJob(Base, TimestampMixin):

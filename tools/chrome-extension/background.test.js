@@ -201,31 +201,26 @@ async function runNativePcInputTest() {
   vm.runInContext(source, context);
   if (!listener) throw new Error("Expected background message listener to be registered.");
   const cleanup = await context.clearHomeDepotBatchState();
-  if (cleanup.cleared !== 5 || removedCookies.length !== 5) {
-    throw new Error(`Expected every Home Depot cookie to be removed, got ${JSON.stringify({ cleanup, removedCookies })}`);
+  if (cleanup.cleared !== 0 || removedCookies.length !== 0 || !cleanup.sessionPreserved) {
+    throw new Error("Source cleanup must preserve all Home Depot cookies.");
   }
-  if (!removedCookies.some((cookie) => cookie.name === "THD_SESSION")) {
-    throw new Error("Expected the Home Depot session cookie to be cleared with the blocked site state.");
-  }
-  if (
-    browsingDataRemovals.length !== 1 ||
-    !browsingDataRemovals[0].dataToRemove.cache ||
-    !browsingDataRemovals[0].dataToRemove.cookies ||
-    !browsingDataRemovals[0].dataToRemove.localStorage ||
-    !browsingDataRemovals[0].dataToRemove.indexedDB
-  ) {
-    throw new Error(`Expected Home Depot cache cleanup, got ${JSON.stringify(browsingDataRemovals)}`);
-  }
-  const removalsBeforeBatchGuard = removedCookies.length;
+  const assertCacheOnly = () => {
+    for (const removal of browsingDataRemovals) {
+      const flags = removal.dataToRemove;
+      if (!flags.cache || !flags.cacheStorage || Object.keys(flags).some(key => !["cache", "cacheStorage"].includes(key))) {
+        throw new Error("Cleanup must preserve cookies, local storage, IndexedDB and service workers.");
+      }
+    }
+    if (removedCookies.length) throw new Error("Batch cleanup removed account cookies.");
+  };
+  assertCacheOnly();
+  const before = browsingDataRemovals.length;
   await context.ensureHomeDepotBatchState("refresh-batch-one");
   await context.ensureHomeDepotBatchState("refresh-batch-one");
-  if (removedCookies.length !== removalsBeforeBatchGuard + 5) {
-    throw new Error("Expected Home Depot cleanup exactly once for the same refresh batch.");
-  }
+  if (browsingDataRemovals.length !== before + 1) throw new Error("Expected one cleanup per batch.");
   await context.ensureHomeDepotBatchState("refresh-batch-two");
-  if (removedCookies.length !== removalsBeforeBatchGuard + 10) {
-    throw new Error("Expected a fresh Home Depot cleanup when the refresh batch changes.");
-  }
+  if (browsingDataRemovals.length !== before + 2) throw new Error("Expected cleanup for the next batch.");
+  assertCacheOnly();
   const reportFilename = context.reportDownloadFilename(
     { runId: 42, accountKey: "a.m.anim-59", reportType: "active_listings" },
     "eBay-all-active-listings-report.csv"
@@ -478,6 +473,30 @@ async function runNativePcInputTest() {
   }
 
   // ...but a runner that has genuinely gone quiet must still be recovered.
+  const originalFetch = context.fetch;
+  const foreignTab = { id: 91, url: "https://www.ebay.com/lstng?draftId=completed-draft" };
+  context.fetch = async (url, options) => url.endsWith("/listing-jobs?lite=true&limit=250")
+    ? { ok: true, json: async () => [{ id: 273, ebay_draft_id: "completed-draft", status: "completed" }] }
+    : originalFetch(url, options);
+  createdTabs.length = 0;
+  closedTabs.length = 0;
+  storage.autozsListingJobLastOpened = 0;
+  storage.autozsListingJobRunnerTabs = {};
+  tabQueryResults = [foreignTab];
+  await context.openNextListingJob();
+  if (!closedTabs.includes(91) || createdTabs.length !== 1) {
+    throw new Error("A previous job's completed confirmation must not block the reserved job.");
+  }
+  closedTabs.length = 0;
+  if (await context.closeCompletedForeignListingRunner(foreignTab, { id: 273 })) {
+    throw new Error("Never close the current job's own confirmation.");
+  }
+  context.fetch = async () => ({ ok: false });
+  if (await context.closeCompletedForeignListingRunner(foreignTab, { id: 77 })) {
+    throw new Error("Unknown ownership must retain the tab and prevent a duplicate runner.");
+  }
+  context.fetch = originalFetch;
+
   createdTabs.length = 0;
   storage.autozsListingJobLastOpened = 0;
   storage.autozsListingJobReopens = {};
@@ -685,14 +704,14 @@ if (!source.includes('message?.type === "autozs-supplier-tracking-observation"')
 if (!source.includes('message?.type === "autozs-supplier-tracking-blocked"')) {
   throw new Error("Expected rendered Home Depot error pages to trigger tracking cooldown through the trusted broker.");
 }
-if (!source.includes('parsed.searchParams.get("orderId") === String(externalOrderId || "")')) {
+if (!source.includes('(parsed.searchParams.get("orderNumber") || parsed.searchParams.get("orderId")) === String(externalOrderId || "")')) {
   throw new Error("Expected shipment reconciliation to require an exact Home Depot order ID in the page URL.");
 }
 if (!source.includes('matches.length !== 1')) {
   throw new Error("Expected shipment reconciliation to require exactly one matching AUTOZS supplier order.");
 }
-if (!source.includes('[SUPPLIER_TRACKING_ALARM, 5, 360]')) {
-  throw new Error("Expected Home Depot tracking checks to run no more than once every six hours.");
+if (!source.includes('[SUPPLIER_TRACKING_ALARM, 5, 5]')) {
+  throw new Error("Expected five-minute polling with per-order check intervals.");
 }
 if (!source.includes('SUPPLIER_TRACKING_ERROR_COOLDOWN_MS = 24 * 60 * 60 * 1000')) {
   throw new Error("Expected Home Depot anti-automation responses to pause tracking checks for 24 hours.");
@@ -715,7 +734,7 @@ if (!source.includes('message?.type === "autozs-ebay-tracking-submitted"')) {
 if (!source.includes('/orders/sync?account_key=${encodeURIComponent(accountKey)}')) {
   throw new Error("Expected tracking confirmation to force an eBay order re-sync for the exact account.");
 }
-if (!source.includes('prepared[String(candidate.supplier_order_id)] === fingerprint')) {
+if (!source.includes('candidate.verification_only =')) {
   throw new Error("Expected an unchanged prepared tracking form not to reopen repeatedly.");
 }
 if (!source.includes('candidate.ebay_order_id !== page.searchParams.get("q")')) {

@@ -127,7 +127,7 @@ def next_ebay_tracking_upload(db: Session) -> dict[str, Any] | None:
         select(SupplierOrder)
         .join(Order, Order.id == SupplierOrder.order_id)
         .where(
-            SupplierOrder.status == SupplierOrderStatus.shipped.value,
+            SupplierOrder.status.in_([SupplierOrderStatus.shipped.value, SupplierOrderStatus.delivered.value]),
             SupplierOrder.tracking_number != "",
             SupplierOrder.carrier != "",
             SupplierOrder.external_order_id != "",

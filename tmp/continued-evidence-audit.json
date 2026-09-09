@@ -1,0 +1,993 @@
+[
+  {
+    "product": 286,
+    "status": "completed",
+    "job": 244,
+    "message": "Scheduled on eBay as item 800626911567.",
+    "item": "800626911567",
+    "evidence": {
+      "title": "8-Pattern Multifunction Heavy-Duty High Pressure Metal Garden | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 285,
+    "status": "completed",
+    "job": 243,
+    "message": "Scheduled on eBay as item 800626909277.",
+    "item": "800626909277",
+    "evidence": {
+      "title": "High Pressure Hose Nozzle Sprayer, Heavy Duty Brass Head, 4 | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 284,
+    "status": "completed",
+    "job": 242,
+    "message": "Scheduled on eBay as item 800626904466.",
+    "item": "800626904466",
+    "evidence": {
+      "title": "4697: Industrial High Flow Firefighter Style Garden Hose | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 276,
+    "status": "completed",
+    "job": 241,
+    "message": "Scheduled on eBay as item 800626887390.",
+    "item": "800626887390",
+    "evidence": {
+      "title": "Micro-Sprinkler Stake with F, H, Q, Nozzle (5-Pack) | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 261,
+    "status": "cancelled",
+    "job": 168,
+    "message": "Cancelled: pallet-scale mulch listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 260,
+    "status": "cancelled",
+    "job": 167,
+    "message": "Cancelled: pallet-scale soil listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 259,
+    "status": "cancelled",
+    "job": 166,
+    "message": "Cancelled: pallet-scale soil listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 257,
+    "status": "completed",
+    "job": 246,
+    "message": "Scheduled on eBay as item 800626916228.",
+    "item": "800626916228",
+    "evidence": {
+      "title": "4qt. Succulent and Cactus Potting Soil Mix (2-Pack) | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 256,
+    "status": "completed",
+    "job": 245,
+    "message": "Scheduled on eBay as item 800626913645.",
+    "item": "800626913645",
+    "evidence": {
+      "title": "5720 Garden Magic General Purpose Potting Soil Mix, 20 Pound Bag | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 255,
+    "status": "completed",
+    "job": 250,
+    "message": "Scheduled on eBay as item 800626963919.",
+    "item": "800626963919",
+    "evidence": {
+      "title": "Organic Soil & Root Food, 4oz | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 254,
+    "status": "completed",
+    "job": 249,
+    "message": "Scheduled on eBay as item 800626961890.",
+    "item": "800626961890",
+    "evidence": {
+      "title": "Organic Diatomaceous Earth Food Grade, Half Pound with Easy | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 253,
+    "status": "no_job"
+  },
+  {
+    "product": 252,
+    "status": "completed",
+    "job": 247,
+    "message": "Scheduled on eBay as item 800626938683.",
+    "item": "800626938683",
+    "evidence": {
+      "title": "6 cu. ft. Soil Galvanized Raised Garden Bed Outdoor with Legs | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 251,
+    "status": "completed",
+    "job": 248,
+    "message": "Scheduled on eBay as item 800626958506.",
+    "item": "800626958506",
+    "evidence": {
+      "title": "9.09 cu. ft. Soil Raised Garden Bed Planter Box Outdoor Metal | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 250,
+    "status": "completed",
+    "job": 251,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800626965971.",
+    "item": "800626965971",
+    "evidence": {
+      "title": "Organics Reclamation Soil 2.8 cu. ft. Organic Raised Bed | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 249,
+    "status": "completed",
+    "job": 252,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800626970460.",
+    "item": "800626970460",
+    "evidence": {
+      "title": "48 cu. ft. Soil Galvanized Raised Garden Bed Outdoor Garden | FREE SHIPPING",
+      "file": "continued-active.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 247,
+    "status": "cancelled",
+    "job": 163,
+    "message": "Cancelled: pallet-scale soil listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 246,
+    "status": "completed",
+    "job": 254,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800626974574.",
+    "item": "800626974574",
+    "evidence": {
+      "title": "Organics Reclamation Soil 2.0 cu. ft. Raised Bed Recharge | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 245,
+    "status": "no_job"
+  },
+  {
+    "product": 244,
+    "status": "no_job"
+  },
+  {
+    "product": 243,
+    "status": "completed",
+    "job": 253,
+    "message": "Scheduled on eBay as item 800626972842.",
+    "item": "800626972842",
+    "evidence": {
+      "title": "Organic Raised Bed and Garden Soil 1.5 cu. ft. with Quick | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 242,
+    "status": "completed",
+    "job": 259,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627035337.",
+    "item": "800627035337",
+    "evidence": {
+      "title": "Garden Organics Organic Raised Bed and Potting Mix, All | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 241,
+    "status": "completed",
+    "job": 258,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627028434.",
+    "item": "800627028434",
+    "evidence": {
+      "title": "2 cu. ft. Premium Brown Wood Shredded Bagged Mulch | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 240,
+    "status": "completed",
+    "job": 262,
+    "message": "Scheduled on eBay as item 800627051801.",
+    "item": "800627051801",
+    "evidence": {
+      "title": "Premium Topsoil 0.75 cu. ft., Lawn and Garden Top Soil, Soil | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 239,
+    "status": "completed",
+    "job": 257,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627013746.",
+    "item": "800627013746",
+    "evidence": {
+      "title": "Earthworm Castings Plant Food | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 220,
+    "status": "completed",
+    "job": 261,
+    "message": "Scheduled on eBay as item 800627040993.",
+    "item": "800627040993",
+    "evidence": {
+      "title": "to the Roots 6 qt. Organic Succulent and Cacti Mix Soil (1-Pack) | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 215,
+    "status": "completed",
+    "job": 256,
+    "message": "Scheduled on eBay as item 800627011541.",
+    "item": "800627011541",
+    "evidence": {
+      "title": "to the Roots Organic Sweet Basil Seed (1-Pack) | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 213,
+    "status": "completed",
+    "job": 255,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627009383.",
+    "item": "800627009383",
+    "evidence": {
+      "title": "8 Qt. Phalaenopsis Mix Twin Pack | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 211,
+    "status": "completed",
+    "job": 260,
+    "message": "Scheduled on eBay as item 800627039271.",
+    "item": "800627039271",
+    "evidence": {
+      "title": "Lee 250 cu. in. Spanish Moss Soil Cover ML0560 8 | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 210,
+    "status": "no_job"
+  },
+  {
+    "product": 209,
+    "status": "completed",
+    "job": 267,
+    "message": "Scheduled on eBay as item 800628706842.",
+    "item": "800628706842",
+    "evidence": {
+      "title": "to the Roots 12 qt. Organic Indoor Potting Mix Soil (1-Pack) | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": false,
+    "identity_matches": true,
+    "title_note": "Existing eBay title retains the legacy partial brand prefix to the Roots; remaining product title matches exactly."
+  },
+  {
+    "product": 208,
+    "status": "completed",
+    "job": 265,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627078893.",
+    "item": "800627078893",
+    "evidence": {
+      "title": "SOIL Organic 4 qt. Living Soil Succulent Potting Mix for | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 206,
+    "status": "completed",
+    "job": 266,
+    "message": "Scheduled on eBay as item 800627083102.",
+    "item": "800627083102",
+    "evidence": {
+      "title": "to the Roots (1-Pack) 6 qt. Organic Indoor Potting Mix Soil | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 205,
+    "status": "no_job"
+  },
+  {
+    "product": 204,
+    "status": "completed",
+    "job": 264,
+    "message": "Scheduled on eBay as item 800627076449.",
+    "item": "800627076449",
+    "evidence": {
+      "title": "Lee 432 cu. in. Sphagnum Moss 110 | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 203,
+    "status": "completed",
+    "job": 263,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627071021.",
+    "item": "800627071021",
+    "evidence": {
+      "title": "8 qt. Organic All Purpose Potting Mix | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 202,
+    "status": "no_job"
+  },
+  {
+    "product": 201,
+    "status": "completed",
+    "job": 273,
+    "message": "Scheduled on eBay as item 800627149155.",
+    "item": "800627149155",
+    "evidence": {
+      "title": "Garden Organics Organic Indoor Potting Mix, All Natural | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 199,
+    "status": "completed",
+    "job": 271,
+    "message": "Scheduled on eBay as item 800627141632.",
+    "item": "800627141632",
+    "evidence": {
+      "title": "Organic Outdoor Potting Mix 25 qt. Soil for Container Plants | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 196,
+    "status": "completed",
+    "job": 272,
+    "message": "Scheduled on eBay as item 800627147176.",
+    "item": "800627147176",
+    "evidence": {
+      "title": "GOLD 8 qt. Natural and Organic Succulent and Cactus Potting Soil | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 194,
+    "status": "cancelled",
+    "job": 165,
+    "message": "Cancelled: pallet-scale soil listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 195,
+    "status": "completed",
+    "job": 274,
+    "message": "Scheduled on eBay as item 800627246587.",
+    "item": "800627246587",
+    "evidence": {
+      "title": "Organics Reclamation Soil 10 Qt. Organic Growers Potting Mix | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 192,
+    "status": "completed",
+    "job": 270,
+    "message": "Scheduled on eBay as item 800627120663.",
+    "item": "800627120663",
+    "evidence": {
+      "title": "Kow 1 cu. ft. Manure | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 191,
+    "status": "completed",
+    "job": 268,
+    "message": "Scheduled on eBay as item 800627101063.",
+    "item": "800627101063",
+    "evidence": {
+      "title": "to the Roots Organic Bulk Raised Bed Soil Pallet (60 1 cu. ft. | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 190,
+    "status": "completed",
+    "job": 269,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627103790.",
+    "item": "800627103790",
+    "evidence": {
+      "title": "to the Roots Organic Bulk Potting Mix Soil (30 1 cu. ft. Bags) | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 189,
+    "status": "completed",
+    "job": 280,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627279730.",
+    "item": "800627279730",
+    "evidence": {
+      "title": "8 qt. Perlite Soil | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 188,
+    "status": "completed",
+    "job": 279,
+    "message": "Scheduled on eBay as item 800627276000.",
+    "item": "800627276000",
+    "evidence": {
+      "title": "to the Roots Organic Bulk Raised Bed Soil (30 1 cu. ft. Bags) | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 186,
+    "status": "cancelled",
+    "job": 164,
+    "message": "Cancelled: pallet-scale soil listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 185,
+    "status": "cancelled",
+    "job": 162,
+    "message": "Cancelled: pallet-scale soil listing has high freight, damage, return, and capital risk; not a quality replacement candidate."
+  },
+  {
+    "product": 182,
+    "status": "completed",
+    "job": 278,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800629130759.",
+    "item": "800629130759",
+    "evidence": {
+      "title": "In-Ground 1/2-Inch Sprinkler System with Hose Faucet Timer | FREE SHIPPING",
+      "file": "confirmed-800629130759.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 179,
+    "status": "completed",
+    "job": 277,
+    "message": "Scheduled on eBay as item 800627270071.",
+    "item": "800627270071",
+    "evidence": {
+      "title": "1/2 in. Drip-Lock Hose Faucet Adapter | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 178,
+    "status": "completed",
+    "job": 276,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800627267536.",
+    "item": "800627267536",
+    "evidence": {
+      "title": "Heavy-Duty Brass Angled Shut-Off Hose Faucet Adapter | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 177,
+    "status": "completed",
+    "job": 275,
+    "message": "Scheduled on eBay as item 800627264556.",
+    "item": "800627264556",
+    "evidence": {
+      "title": "12 ft. Portable Mist Cooling Kit | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 176,
+    "status": "completed",
+    "job": 288,
+    "message": "Scheduled on eBay as item 800629132141.",
+    "item": "800629132141",
+    "evidence": {
+      "title": "B-Hyve Gen 2 Smart Hose Faucet Irrigation Controller/Wi-Fi Hub | FREE SHIPPING",
+      "file": "confirmed-800629132141.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 175,
+    "status": "completed",
+    "job": 287,
+    "message": "Scheduled on eBay as item 800628752653.",
+    "item": "800628752653",
+    "evidence": {
+      "title": "Gardener's Choice 8-Pattern Metal Sprinkler with Swivel | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 174,
+    "status": "completed",
+    "job": 286,
+    "message": "Scheduled on eBay as item 800628749082.",
+    "item": "800628749082",
+    "evidence": {
+      "title": "H2O-Six Rotating 6-Pattern Gear-Drive Sprinkler on Zinc Spike | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 172,
+    "status": "completed",
+    "job": 285,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800629076412.",
+    "item": "800629076412",
+    "evidence": {
+      "title": "2 Way Garden Hose Splitter with Shut Off Valve, Water Spigot | FREE SHIPPING",
+      "file": "confirmed-800629076412.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 171,
+    "status": "completed",
+    "job": 284,
+    "message": "Scheduled on eBay as item 800628712259.",
+    "item": "800628712259",
+    "evidence": {
+      "title": "3 Way Brass Garden Hose Splitter | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 170,
+    "status": "completed",
+    "job": 283,
+    "message": "Scheduled on eBay as item 800627293068.",
+    "item": "800627293068",
+    "evidence": {
+      "title": "3-Way Garden Hose Splitter, 3/4 in. Rust and Freeze Resistant | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 169,
+    "status": "completed",
+    "job": 282,
+    "message": "Scheduled on eBay as item 800627288724.",
+    "item": "800627288724",
+    "evidence": {
+      "title": "2 Way Heavy Duty Garden Hose Splitter, Highly Durable Dual | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 168,
+    "status": "completed",
+    "job": 281,
+    "message": "Scheduled on eBay as item 800627284086.",
+    "item": "800627284086",
+    "evidence": {
+      "title": "Bird 32HE (4) 4 in. Pop-Up Rotor Sprinkler System with | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 167,
+    "status": "completed",
+    "job": 294,
+    "message": "Scheduled on eBay as item 800628791474.",
+    "item": "800628791474",
+    "evidence": {
+      "title": "2 Way Heavy Duty Brass Garden Hose Splitter 1-Pack | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 166,
+    "status": "completed",
+    "job": 295,
+    "message": "Scheduled on eBay as item 800629073900.",
+    "item": "800629073900",
+    "evidence": {
+      "title": "Faucet Adapter 2MQC | FREE SHIPPING",
+      "file": "melnor-final-attempt.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 164,
+    "status": "completed",
+    "job": 293,
+    "message": "Scheduled on eBay as item 800628787311.",
+    "item": "800628787311",
+    "evidence": {
+      "title": "2-Way Y-Valve 3/4 in. GHT Threads Brass Garden Hose Splitter | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 163,
+    "status": "completed",
+    "job": 292,
+    "message": "Scheduled on eBay as item 800628783158.",
+    "item": "800628783158",
+    "evidence": {
+      "title": "Brass Garden Hose Splitter Set, 4 Way Hose Splitter with 4Pcs | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 162,
+    "status": "completed",
+    "job": 291,
+    "message": "Scheduled on eBay as item 800628773292.",
+    "item": "800628773292",
+    "evidence": {
+      "title": "Hose Splitter 2 Way, 3/4 in. Ght Inlet Brass Heavy Duty Hose | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 158,
+    "status": "completed",
+    "job": 290,
+    "message": "Scheduled on eBay as item 800629137636.",
+    "item": "800629137636",
+    "evidence": null
+  },
+  {
+    "product": 142,
+    "status": "needs_review",
+    "job": 289,
+    "message": "Held after batch audit: supplier package Brand is .N/A, a placeholder. Verify actual manufacturer or confirmed unbranded status before publishing. Prior Type draft validation also failed."
+  },
+  {
+    "product": 139,
+    "status": "queued",
+    "job": 303,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 138,
+    "status": "queued",
+    "job": 299,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 135,
+    "status": "completed",
+    "job": 302,
+    "message": "Scheduled on eBay as item 800628872910.",
+    "item": "800628872910",
+    "evidence": {
+      "title": "5/8 in. Metal Hose Repair Mender with Stainless Steel Clamp | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 133,
+    "status": "completed",
+    "job": 298,
+    "message": "Scheduled on eBay as item 800628838444.",
+    "item": "800628838444",
+    "evidence": {
+      "title": "5/8 in. Metal Female Hose-Coupling Repair Mender with | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 131,
+    "status": "completed",
+    "job": 300,
+    "message": "Scheduled on eBay as item 800628866048.",
+    "item": "800628866048",
+    "evidence": {
+      "title": "Online Ashman Watering Can, Indoor and Outdoor Use, Red | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 127,
+    "status": "queued",
+    "job": 297,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 126,
+    "status": "completed",
+    "job": 301,
+    "message": "Scheduled on eBay as item 800628869752.",
+    "item": "800628869752",
+    "evidence": {
+      "title": "3-Piece Wood Handle Garden Tool Set (Trowel, Transplanter and | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 125,
+    "status": "completed",
+    "job": 296,
+    "message": "Scheduled on eBay as item 800628799226.",
+    "item": "800628799226",
+    "evidence": {
+      "title": "Stainless Steel Bristles Stripping Brush | FREE SHIPPING",
+      "file": "continued-active-page2.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 124,
+    "status": "queued",
+    "job": 305,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 123,
+    "status": "queued",
+    "job": 306,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 122,
+    "status": "completed",
+    "job": 304,
+    "message": "Scheduled on eBay as item 800628883203.",
+    "item": "800628883203",
+    "evidence": {
+      "title": "3000 sq. ft. Oscillating Sprinkler | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 121,
+    "status": "no_job"
+  },
+  {
+    "product": 120,
+    "status": "queued",
+    "job": 311,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 119,
+    "status": "completed",
+    "job": 308,
+    "message": "Scheduled on eBay as item 800628920629.",
+    "item": "800628920629",
+    "evidence": {
+      "title": "36 in. x 5 in. Fresno Round End Finishing Trowel | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 118,
+    "status": "completed",
+    "job": 310,
+    "message": "Scheduled on eBay as item 800628932079.",
+    "item": "800628932079",
+    "evidence": {
+      "title": "All Aluminum Placer | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 117,
+    "status": "completed",
+    "job": 309,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800628926638.",
+    "item": "800628926638",
+    "evidence": {
+      "title": "Chain Bull Float Bracket | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 115,
+    "status": "completed",
+    "job": 307,
+    "message": "Scheduled on eBay as item 800628915744.",
+    "item": "800628915744",
+    "evidence": {
+      "title": "2 in. Disposable Plastic Putty Knife | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 114,
+    "status": "completed",
+    "job": 315,
+    "message": "Recovered from matching eBay draft confirmation: Scheduled on eBay as item 800628959135.",
+    "item": "800628959135",
+    "evidence": {
+      "title": "5/8 in. Dia x 100 ft. Standard Duty Green Garden Hose | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 109,
+    "status": "completed",
+    "job": 314,
+    "message": "Scheduled on eBay as item 800628943433.",
+    "item": "800628943433",
+    "evidence": {
+      "title": "PRO Thumb Control Adjustable Tip Nozzle | FREE SHIPPING",
+      "file": "continued-scheduled-after-hose.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 107,
+    "status": "queued",
+    "job": 313,
+    "message": "Fixed-batch retry after eBay-confirmed Melnor canary 800629073900: scoped picker, actual selected-value checks, virtualized required-field repair, and supplied-brand preservation."
+  },
+  {
+    "product": 104,
+    "status": "completed",
+    "job": 312,
+    "message": "Scheduled on eBay as item 800629014040.",
+    "item": "800629014040",
+    "evidence": {
+      "title": "5/8 in. x 50 ft. Heavy-Duty Hose | FREE SHIPPING",
+      "file": "hose-revised-confirmation.json"
+    },
+    "title_matches": true,
+    "identity_matches": true
+  },
+  {
+    "product": 54,
+    "status": "tombstoned",
+    "job": 233,
+    "message": "Scheduled listing was missing from the active Seller Hub report after its start time, so AutoZS tombstoned it."
+  }
+]

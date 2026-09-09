@@ -6270,6 +6270,12 @@
       }
 
       function productWorkflowState(product) {
+        const latestJob = (state.listingJobs || []).find((job) => job.product_id === product.id);
+        const excludedDraft = (product.listing_drafts || []).some((draft) => draft.marketplace === "ebay" && draft.status === "tombstoned");
+        const blockedListing = (state.ebayListings || []).some((listing) => listing.product_id === product.id && listing.relist_blocked);
+        if (excludedDraft || blockedListing || latestJob?.status === "cancelled") {
+          return { key: "unavailable", label: "Excluded", className: "ship-unavailable", summary: latestJob?.message || "Intentionally excluded from listing automation" };
+        }
         const currentSupplier = supplier(product);
         const hasSourceUrl = Boolean(currentSupplier?.source_url);
         const hasSourcePrice = sourcePrice(product) !== null && sourcePrice(product) !== undefined;

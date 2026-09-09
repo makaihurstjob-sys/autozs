@@ -237,6 +237,27 @@ def test_completed_source_refresh_recalculates_before_queuing_revision() -> None
     assert revision.target_price == draft.calculated_price
 
 
+def test_completed_source_refresh_reports_price_unavailable_not_confirmed() -> None:
+    db = make_session()
+    product = add_source_product(db, updated_at=datetime.utcnow() - timedelta(hours=7))
+    supplier = product.supplier_products[0]
+    add_listing_draft(db, product, calculated_price=30.0)
+    add_ebay_listing(db, product, status="live")
+    _batch_key, _due_available, jobs = create_source_refresh_batch(db, limit=1, interval_hours=6, force=False)
+
+    # Home Depot hid the price until the item is placed in the cart; the
+    # capture leaves last_price stale and flags price_unavailable instead of
+    # inventing a number.
+    supplier.price_unavailable = True
+    db.commit()
+    completed = complete_source_refresh_job(db, jobs[0].id, product.id)
+
+    assert completed is not None
+    assert completed.price_changed is False
+    assert "unavailable" in completed.message.lower()
+    assert "confirmed" not in completed.message.lower()
+
+
 def test_shipping_only_source_correction_cancels_stale_revision() -> None:
     db = make_session()
     product = add_source_product(db, updated_at=datetime.utcnow() - timedelta(hours=7))

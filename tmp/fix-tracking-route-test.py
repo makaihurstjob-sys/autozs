@@ -1,0 +1,3 @@
+from pathlib import Path
+p=Path('tools/chrome-extension/background.js');s=p.read_text();start=s.index('function isSupplierTrackingRunnerUrl');a=s[:start];b=s[start:].replace('parsed.pathname === "/myaccount/order-details")','["/myaccount/order-details", "/myaccount/purchase-history"].includes(parsed.pathname))',1);p.write_text(a+b)
+p=Path('tools/chrome-extension/background.test.js');s=p.read_text().replace('parsed.searchParams.get("orderId") === String(externalOrderId || "")','(parsed.searchParams.get("orderNumber") || parsed.searchParams.get("orderId")) === String(externalOrderId || "")');p.write_text(s)

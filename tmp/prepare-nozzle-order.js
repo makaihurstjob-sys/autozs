@@ -1,0 +1,1 @@
+(async()=>{const s=await localApiJson('/orders/4/supplier-orders/prepare',{method:'POST',body:'{}'});const t=await chrome.tabs.create({url:s.items[0].source_url,active:false});return {supplier_order_id:s.id,status:s.status,total:s.total,failure_reason:s.failure_reason,items:s.items.map(i=>({title:i.title,quantity:i.quantity,unit_price:i.unit_price})),tabId:t.id};})()

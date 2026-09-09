@@ -1215,6 +1215,33 @@ async function runAssistantTest() {
     throw new Error("Expected eBay's shadow-root condition radio to be selected automatically.");
   }
 
+  const conditionSummary = new FakeButton("Item condition New");
+  context.document.querySelectorAll = (selector) => {
+    if (selector === "[data-testid*='condition' i], button, [role='button'], section, div") return [conditionSummary];
+    return [];
+  };
+  context.document.querySelector = () => null;
+  if (!vm.runInContext(`conditionSelectionMatches("New")`, context)) {
+    throw new Error("Expected eBay's compact Item condition New summary to count as selected.");
+  }
+
+  const conditionDescription = new FakeField({
+    name: "itemConditionDescription",
+    tagName: "TEXTAREA",
+    parentText: "Condition description",
+  });
+  context.document.querySelectorAll = (selector) => {
+    if (selector === 'textarea[name="itemConditionDescription"], .summary__condition-description') return [conditionDescription];
+    return [];
+  };
+  context.document.querySelector = () => null;
+  context.location.hostname = "www.ebay.com";
+  context.location.pathname = "/lstng";
+  context.location.href = "https://www.ebay.com/lstng?draftId=123&mode=AddItem";
+  if (!vm.runInContext(`conditionSelectionMatches("New")`, context)) {
+    throw new Error("Expected a category with only eBay's Condition description field to use its fixed condition.");
+  }
+
   const customBrandOption = new FakeButton("PLUMBFLEX");
   customBrandOption.getAttribute = (key) => key === "aria-label" ? "Add custom value PLUMBFLEX" : "";
   context.__customBrandOption = customBrandOption;
@@ -1293,12 +1320,17 @@ async function runAssistantTest() {
   if (!source.includes("repairResult = await repairCriticalListingFields(pkg)")) {
     throw new Error("Expected the automatic workflow to repair fields after eBay's post-upload render.");
   }
-  if (!source.includes('fillEbayItemSpecific("Brand", "Unbranded")')) {
-    throw new Error("Expected the repair pass to fall back to Unbranded.");
-  }
-  if (!source.includes('itemSpecificMatches(key, "Unbranded")')) {
-    throw new Error("Expected final checks to accept the required Unbranded fallback.");
-  }
+  const brandRepairs = [];
+  const savedBrandGlobals = {};
+  for (const key of ['descriptionSourceMatches', 'itemSpecificMatches', 'itemSpecificHasAnyValue', 'fillEbayItemSpecific']) savedBrandGlobals[key] = context[key];
+  context.descriptionSourceMatches = () => true;
+  context.itemSpecificMatches = () => false;
+  context.itemSpecificHasAnyValue = () => true;
+  context.fillEbayItemSpecific = async (key, value) => { brandRepairs.push([key, value]); return true; };
+  await vm.runInContext('repairCriticalListingFields({item_specifics:{Brand:"Husky"}})', context);
+  await vm.runInContext('repairCriticalListingFields({})', context);
+  if (JSON.stringify(brandRepairs) !== JSON.stringify([['Brand','Husky'],['Brand','Unbranded']])) throw new Error('Brand repair must preserve the supplied brand and only default when absent.');
+  Object.assign(context, savedBrandGlobals);
   if (!source.includes("const finalRepairResult = await repairCriticalListingFields(pkg)")) {
     throw new Error("Expected a second repair pass after eBay's final editor render.");
   }

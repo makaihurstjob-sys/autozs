@@ -1,0 +1,1 @@
+(async()=>{const s=await localApiJson('/supplier-orders');return {listingRunning:await hasRunningListingJob(),checkoutRunning:s.some(o=>o.status==='placing'),mode:await readAutozsWorkerMode(),sourceHasTrackingFix:(await(await fetch(chrome.runtime.getURL('background.js'))).text()).includes('autozsSupplierTrackingChecks')};})()

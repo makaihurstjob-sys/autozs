@@ -1,0 +1,1 @@
+({url:location.href,text:document.body?.innerText?.slice(0,14000)||'Loading',buttons:[...document.querySelectorAll('button')].filter(b=>b.offsetParent!==null).map(b=>({text:b.innerText,name:b.name})).slice(0,35)})

@@ -26,7 +26,7 @@ function autozsHomeDepotConfirmation(urlValue, bodyText = "") {
   let url;
   try { url = new URL(String(urlValue || "")); } catch { return null; }
   if (!/^\/order-confirmation\/?$/i.test(url.pathname)) return null;
-  const externalOrderId = String(url.searchParams.get("orderId") || "").trim();
+  const externalOrderId = String(url.searchParams.get("orderNumber") || url.searchParams.get("orderId") || "").trim();
   if (!/^[A-Z0-9-]{6,128}$/i.test(externalOrderId)) return null;
   return { externalOrderId, bodyText: String(bodyText || "") };
 }
@@ -44,18 +44,18 @@ function autozsConfirmationTotal(bodyText, approvedTotal) {
 function autozsHomeDepotTrackingObservation(urlValue, bodyText = "") {
   let url;
   try { url = new URL(String(urlValue || "")); } catch { return null; }
-  if (url.hostname !== "www.homedepot.com" || !/\/order\//i.test(url.pathname)) return null;
-  const externalOrderId = String(url.searchParams.get("orderId") || "").trim();
+  if (url.hostname !== "www.homedepot.com" || !(/\/order\//i.test(url.pathname) || url.pathname === "/myaccount/order-details")) return null;
+  const externalOrderId = String(url.searchParams.get("orderNumber") || url.searchParams.get("orderId") || "").trim();
   const text = String(bodyText || "").replace(/\s+/g, " ");
   if (!/^[A-Z0-9-]{6,128}$/i.test(externalOrderId) || !text.includes(externalOrderId)) return null;
   if (/pardon our dust|internal homedepot\.com error|page you are looking for no longer exists/i.test(text)) return null;
   const carrierMatch = text.match(/\b(UPS|FedEx|USPS|OnTrac|LaserShip|LSO)\b/i);
-  const trackingMatch = text.match(/tracking\s*(?:number|no\.?|#)?\s*[:#]?\s*([A-Z0-9][A-Z0-9 -]{7,38}[A-Z0-9])/i);
+  const trackingMatch = text.match(/tracking\s*(?:number|no\.?|#)?\s*[:#]?\s*(1Z(?:[ -]?[A-Z0-9]){16}|[A-Z]?\d(?:[ -]?\d){7,33}|[A-Z0-9]{8,40})\b/i);
   if (!carrierMatch || !trackingMatch) return null;
   const trackingNumber = trackingMatch[1].replace(/[\s-]+/g, "").toUpperCase();
-  if (!/^[A-Z0-9]{8,40}$/.test(trackingNumber)) return null;
+  if (!/^[A-Z0-9]{8,40}$/.test(trackingNumber) || !/\d/.test(trackingNumber)) return null;
   const carrier = carrierMatch[1].toUpperCase() === "FEDEX" ? "FedEx" : carrierMatch[1].toUpperCase();
-  const status = /\bdelivered\b/i.test(text)
+  const status = /\b(?:delivered (?:on|at)|successfully delivered|package (?:was |has been )delivered)\b/i.test(text)
     ? "delivered"
     : /\b(?:shipped|in transit|on (?:its|the) way)\b/i.test(text) ? "shipped" : null;
   return status ? { externalOrderId, carrier, trackingNumber, status } : null;
@@ -89,13 +89,45 @@ async function autozsObserveHomeDepotTracking() {
   });
 }
 
+function autozsTrackingOrderVerified(urlValue, bodyText) {
+  const url = new URL(urlValue);
+  const orderId = url.searchParams.get("orderNumber") || url.searchParams.get("orderId");
+  return url.hostname === "www.homedepot.com" && url.pathname === "/myaccount/order-details"
+    && /^[A-Z0-9-]{6,128}$/i.test(orderId || "")
+    && new RegExp(`ORDER\\s*#\\s*${orderId}\\b`, "i").test(bodyText || "")
+    && !/pardon our dust|page you are looking for no longer exists/i.test(bodyText || "");
+}
+
 async function autozsObserveHomeDepotTrackingBounded() {
   const params = new URLSearchParams(location.search);
   const markedPoll = params.get("autozs_tracking_poll") === "1";
+  if (markedPoll && location.pathname === "/myaccount/purchase-history") {
+    const orderId = params.get("orderId");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const link = [...document.querySelectorAll("a[href]")].find(element => {
+        const url = new URL(element.href, location.href);
+        return url.hostname === "www.homedepot.com" && url.pathname === "/myaccount/order-details"
+          && url.searchParams.get("orderNumber") === orderId;
+      });
+      if (link) {
+        const target = new URL(link.href);
+        target.searchParams.set("orderId", orderId);
+        target.searchParams.set("autozs_tracking_poll", "1");
+        target.searchParams.set("autozs_worker_opened_at", String(Date.now()));
+        location.assign(target.href);
+        return true;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
   const attempts = markedPoll ? 20 : 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (await autozsObserveHomeDepotTracking().catch(() => false)) return true;
     if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (markedPoll && typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    chrome.runtime.sendMessage({ type: "autozs-supplier-tracking-waiting", orderVerified: autozsTrackingOrderVerified(location.href, document.body?.innerText) }, () => { void chrome.runtime.lastError; });
+    return true;
   }
   return false;
 }
@@ -158,7 +190,8 @@ function autozsCheckoutOverlay() {
     "display:flex", "align-items:center", "justify-content:center", "font-family:Arial,sans-serif", "pointer-events:none",
   ].join(";");
   host.innerHTML = `
-    <div style="width:min(440px,calc(100vw - 32px));background:#0c1c16;color:#f3faf7;border:1px solid #28463a;border-radius:12px;padding:24px;box-shadow:0 18px 55px rgba(0,0,0,.5)">
+    <div style="position:relative;pointer-events:auto;width:min(440px,calc(100vw - 32px));background:#0c1c16;color:#f3faf7;border:1px solid #28463a;border-radius:12px;padding:24px;box-shadow:0 18px 55px rgba(0,0,0,.5)">
+      <button type="button" data-autozs-checkout-dismiss aria-label="Close checkout status" style="float:right;margin:0 0 8px 12px;background:transparent;color:#f3faf7;border:1px solid #82958d;border-radius:4px;padding:6px 10px;cursor:pointer">Close</button>
       <div style="font-size:12px;color:#63d9b2;font-weight:700;letter-spacing:.08em;text-transform:uppercase">Home Depot checkout canary</div>
       <h2 style="font-size:24px;margin:10px 0 8px">AutoZS is verifying this order</h2>
       <p data-autozs-checkout-message style="font-size:14px;line-height:1.5;color:#b8c8c1;margin:0 0 16px">Loading the approved supplier order…</p>
@@ -166,6 +199,9 @@ function autozsCheckoutOverlay() {
       <div data-autozs-checkout-percent style="text-align:center;font-size:12px;font-weight:700;margin-top:10px">10%</div>
       <div style="font-size:11px;color:#82958d;margin-top:14px">AutoZS will not submit payment from this canary.</div>
     </div>`;
+  host.querySelector("[data-autozs-checkout-dismiss]").addEventListener("click", () => {
+    host.style.display = "none";
+  });
   document.documentElement.append(host);
   return host;
 }
@@ -293,7 +329,7 @@ function autozsSplitCheckoutName(name) {
 
 function autozsCheckoutTotals(text) {
   const read = (label) => {
-    const match = String(text || "").match(new RegExp(`\\b${label}\\b[\\s\\S]{0,80}?(\\$\\s*[0-9,]+(?:\\.[0-9]{2})?)`, "i"));
+    const match = String(text || "").match(new RegExp(`\\b${label}\\b\\s*[:*]?\\s*(\\$\\s*[0-9,]+(?:\\.[0-9]{2})?)`, "i"));
     return autozsCheckoutMoney(match?.[1]);
   };
   const body = String(text || "");
@@ -422,12 +458,33 @@ async function autozsRunProductCheckoutCanary(supplierOrderId, supplierOrder) {
   }
   autozsCheckoutProgress(68, "Adding the verified item to the cart…");
   sessionStorage.setItem(AUTOZS_CHECKOUT_SESSION_KEY, String(supplierOrderId));
+  const cartCountBefore = autozsHomeDepotCartCount();
   await autozsNativeCheckoutClick(supplierOrderId, "add_to_cart");
-  await new Promise((resolve) => setTimeout(resolve, 2500));
+  await autozsWaitForCartAddition(cartCountBefore, requestedQuantity);
   const cartUrl = new URL("https://www.homedepot.com/mycart/home");
   cartUrl.searchParams.set("autozs_supplier_order", String(supplierOrderId));
   cartUrl.searchParams.set("autozs_checkout_canary", "1");
   location.assign(cartUrl.href);
+}
+
+function autozsHomeDepotCartCount() {
+  const badge = document.querySelector('[data-testid="header-cart-count"]');
+  if (!badge) return 0;
+  const text = String(badge.textContent || "").trim();
+  return /^\d+$/.test(text) ? Number(text) : null;
+}
+
+async function autozsWaitForCartAddition(before, quantity) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const count = autozsHomeDepotCartCount();
+    if (before !== null && count !== null && count >= before + quantity) return;
+  }
+  throw new Error("Home Depot did not confirm Add to Cart. Check the cart before retrying; the item may still have been added.");
+}
+
+function autozsHomeDepotCheckoutSignIn(pathname) {
+  return /^\/auth\/view\/checkout(?:\/|$)/i.test(String(pathname || ""));
 }
 
 async function autozsRunCartCheckoutCanary(supplierOrderId, supplierOrder) {
@@ -663,7 +720,20 @@ async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
       }
       await autozsNativeCheckoutFill(supplierOrderId, "expiration", `${String(credential.expiration_month).padStart(2, "0")}/${String(credential.expiration_year).slice(-2)}`);
       await autozsNativeCheckoutFill(supplierOrderId, "security_code", credential.security_code);
+      // The secure card-number frame can remount while expiration/CVV initialize.
+      // Recommit it after those fields settle before checking the submit control.
       await new Promise((resolve) => setTimeout(resolve, 800));
+      await autozsNativeCheckoutFill(supplierOrderId, "card_number", credential.card_number);
+      let cardFormReady = false;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const useCard = document.querySelector('button[data-testid="use-this-card-button"]');
+        if (useCard && !useCard.disabled && useCard.offsetParent !== null) {
+          cardFormReady = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!cardFormReady) throw new Error("Home Depot has not accepted all secure card fields; its Add New Card button remains disabled.");
       await autozsNativeCheckoutClick(supplierOrderId, "use_new_card");
       for (let attempt = 0; attempt < 20 && !String(document.body?.innerText || "").includes(`****${lastFour}`); attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
@@ -736,6 +806,9 @@ async function autozsStartSupplierCheckout() {
       await autozsMarkCheckoutReview(supplierOrderId, reason);
       autozsCheckoutProgress(100, reason, "error");
       return;
+    }
+    if (autozsHomeDepotCheckoutSignIn(location.pathname)) {
+      throw new Error("Home Depot requires the seller email or sign-in before checkout. Complete that step in this tab, then resume the existing cart.");
     }
     if (/^\/p\//i.test(location.pathname)) {
       await autozsRunProductCheckoutCanary(supplierOrderId, supplierOrder);

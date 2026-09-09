@@ -1,0 +1,1 @@
+({url:location.href,hasOrder:document.body.innerText.includes('WK37553521'),signIn:document.body.innerText.includes('Sign In'),links:[...document.querySelectorAll('a')].filter(a=>a.textContent.includes('WK37553521')).map(a=>({text:a.textContent,url:a.href}))})

@@ -1,0 +1,38 @@
+
+function parseEbayAllowanceText(text, periodStart, periodEnd) {
+  const offer = String(text).split(/List up to 250 Items for FREE Every Month!/i)[1];
+  if (!offer) return null;
+  const counter = offer.match(/Promotional offers,\s*([\d,]+) used,\s*([\d,]+) left\./i);
+  const range = offer.match(/Start:\s*([A-Za-z]+\s+1,\s*\d{4})\s+at\s+12:00am\s+P[DS]T\s*End:\s*([A-Za-z]+\s+1,\s*\d{4})\s+at\s+12:00am\s+P[DS]T/i);
+  const label = date => new Intl.DateTimeFormat('en-US', {timeZone:'America/Los_Angeles',month:'short',day:'numeric',year:'numeric'}).format(new Date(date));
+  if (!counter || !range || range[1].replace(/\s+/g,' ') !== label(periodStart) || range[2].replace(/\s+/g,' ') !== label(periodEnd)) return null;
+  const used = Number(counter[1].replace(/,/g,'')), left = Number(counter[2].replace(/,/g,''));
+  if (used + left !== 250) return null;
+  return {total:250,used,period_start:periodStart,period_end:periodEnd};
+}
+
+async function syncEbayListingAllowance() {
+  if (!(await canRunAutozsWorkerJobs()) || await hasRunningListingJob()) return {skipped:true};
+  const account = 'a.m.anim-59';
+  const budgetResponse = await fetch(`${LOCAL_API}/ebay/listing-budget/${account}`);
+  if (!budgetResponse.ok) throw Error('Budget endpoint unavailable');
+  const budget = await budgetResponse.json();
+  if (!budget.enabled) return {skipped:true};
+  const tab = await chrome.tabs.create({url:'https://www.ebay.com/sh/ovw?autozs_allowance_sync=1',active:false});
+  try {
+    for (let attempt=0;attempt<45;attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const current = await chrome.tabs.get(tab.id);
+      if (current.status !== 'complete') continue;
+      const results = await chrome.scripting.executeScript({target:{tabId:tab.id},func:()=>({text:document.body?.innerText||'',url:location.href})});
+      const page = results[0]?.result;
+      if (!page || !page.text.includes(account)) continue;
+      const parsed = parseEbayAllowanceText(page.text,budget.period_start,budget.period_end);
+      if (!parsed) continue;
+      const response = await fetch(`${LOCAL_API}/ebay/listing-budget/${account}/snapshot`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...parsed,observed_at:new Date().toISOString(),source_url:page.url})});
+      if (!response.ok) throw Error('Allowance snapshot rejected');
+      return await response.json();
+    }
+    throw Error('No verified monthly free-listing offer was visible');
+  } finally { await chrome.tabs.remove(tab.id).catch(()=>{}); }
+}

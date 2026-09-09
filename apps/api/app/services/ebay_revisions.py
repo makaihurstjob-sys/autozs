@@ -626,6 +626,7 @@ def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
     running = db.scalar(
         select(EbayRevisionJob)
         .where(
+            EbayRevisionJob.action != 'end_zero_view',
             EbayRevisionJob.status == EbayRevisionJobStatus.running.value,
             EbayRevisionJob.guard_passed.is_(True),
             EbayRevisionJob.approval_required.is_(False),
@@ -638,6 +639,7 @@ def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
     job = db.scalar(
         select(EbayRevisionJob)
         .where(
+            EbayRevisionJob.action != 'end_zero_view',
             EbayRevisionJob.status == EbayRevisionJobStatus.queued.value,
             EbayRevisionJob.guard_passed.is_(True),
             EbayRevisionJob.approval_required.is_(False),
@@ -695,6 +697,13 @@ def update_ebay_revision_job(
             job.lease_expires_at = None
         if status == EbayRevisionJobStatus.completed.value:
             listing = db.get(EbayListing, job.ebay_listing_id)
+            if listing is not None and job.action == 'end_zero_view':
+                listing.quantity = 0
+                listing.status = 'ended'
+                listing.relist_blocked = True
+                listing.removal_reason = 'zero_views_before_renewal'
+                listing.removal_detail = job.guard_reason
+                listing.removed_at = _now()
             if listing is not None:
                 if job.action in STOCK_ACTION_QUANTITY:
                     listing.quantity = STOCK_ACTION_QUANTITY[job.action]

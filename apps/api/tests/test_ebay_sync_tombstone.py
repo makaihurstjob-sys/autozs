@@ -1,6 +1,8 @@
 from datetime import datetime
 
 from app.services.ebay_sync import _scheduled_start_passed
+from app.services.ebay_sync import _missing_active_report_row_should_tombstone
+from app.models.domain import EbayListing
 
 
 def test_eastern_wall_time_not_started_when_utc_clock_passes_naive_value() -> None:
@@ -31,3 +33,10 @@ def test_utc_stored_value_never_reports_started_early() -> None:
     now_utc = datetime(2026, 7, 31, 0, 30, 0)
     assert _scheduled_start_passed(schedule, now_utc) is False
     assert _scheduled_start_passed(schedule, datetime(2026, 7, 31, 5, 0, 0)) is True
+
+
+def test_active_only_report_cannot_remove_a_reconciled_scheduled_item() -> None:
+    listing = EbayListing(status="scheduled")
+    # No lookup of a stale local schedule can establish eBay's current state.
+    for checked_at in [datetime(2026, 8, 1), datetime(2026, 9, 7)]:
+        assert not _missing_active_report_row_should_tombstone(None, listing, checked_at)

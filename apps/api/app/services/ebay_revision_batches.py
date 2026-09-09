@@ -78,6 +78,21 @@ def prepare_next_ebay_revision_batch(
     )
     if not jobs:
         return None
+    from app.services.ebay_listing_policy import END_ACTION, pruning_reason
+    valid_jobs = []
+    for job in jobs:
+        if job.action == END_ACTION:
+            listing = db.get(EbayListing, job.ebay_listing_id)
+            if not listing or not pruning_reason(listing, datetime.utcnow()):
+                if listing and listing.views > 0:
+                    job.status = EbayRevisionJobStatus.cancelled.value
+                    job.message = 'Pruning cancelled: listing now has views.'
+                continue
+        valid_jobs.append(job)
+    db.commit()
+    jobs = valid_jobs
+    if not jobs:
+        return None
     csv_content, job_ids = build_ebay_price_revision_csv(
         db,
         account_key=account_key,
@@ -170,12 +185,18 @@ def import_ebay_revision_result(
         success = not error and (
             not status or any(token in status.lower() for token in ("success", "complete", "uploaded", "warning"))
         )
+        if job.action == 'end_zero_view':
+            success = not error and status.strip().lower() in {'success', 'completed', 'complete'}
+            reported_action = _row_value(row, 'action')
+            if reported_action and reported_action.lower() != 'end':
+                success = False
         if success:
             update_ebay_revision_job(
                 db,
                 job,
                 status=EbayRevisionJobStatus.completed.value,
-                message=f"eBay bulk upload confirmed the price revision to ${job.target_price:.2f}.",
+                message=(f"eBay End action confirmed for item {item_number}." if job.action == 'end_zero_view'
+                         else f"eBay bulk upload confirmed the price revision to ${job.target_price:.2f}."),
             )
             succeeded += 1
         else:

@@ -1,0 +1,1 @@
+(async()=>{const capture=await localApiJson('/ebay/sync-runs/listing-views',{method:'POST',body:JSON.stringify({account_key:'a.m.anim-59',rows:[{listing_id:'800456008929',views:0}]})});return {capture,queued:await queueZeroViewListingRotations(),batch:await openNextEbayRevisionBatch()};})()

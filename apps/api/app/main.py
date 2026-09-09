@@ -75,6 +75,20 @@ def _ensure_lightweight_columns() -> None:
             "relist_blocked": "BOOLEAN DEFAULT 0 NOT NULL",
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME"},
+        "depop_listing_variants": {
+            "views_count": "INTEGER DEFAULT 0 NOT NULL",
+            "clicks_count": "INTEGER DEFAULT 0 NOT NULL",
+            "likes_count": "INTEGER DEFAULT 0 NOT NULL",
+            "bags_count": "INTEGER DEFAULT 0 NOT NULL",
+            "offers_count": "INTEGER DEFAULT 0 NOT NULL",
+            "metrics_synced_at": "DATETIME",
+        },
+        "depop_source_photos": {
+            "crop_x": "FLOAT DEFAULT 0 NOT NULL",
+            "crop_y": "FLOAT DEFAULT 0 NOT NULL",
+            "crop_zoom": "FLOAT DEFAULT 1 NOT NULL",
+            "background_mode": "VARCHAR(32) DEFAULT 'crop' NOT NULL",
+        },
         "operational_alerts": {"last_notified_at": "DATETIME"},
         "push_subscriptions": {
             "vapid_public_key": "TEXT DEFAULT '' NOT NULL",

@@ -1,0 +1,1 @@
+(async()=>{const ds=await chrome.downloads.search({query:['batch-230'],limit:1});if(!ds.length)throw Error('Missing report');const r=await fetch(ds[0].finalUrl||ds[0].url,{credentials:'include',cache:'no-store'});if(!r.ok)throw Error('Report unavailable '+r.status);return {status:r.status,report:await r.text()};})()

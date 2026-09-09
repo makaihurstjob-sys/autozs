@@ -1,0 +1,1 @@
+(async()=>{const rows=await localApiJson('/ebay/listings');return rows.filter(l=>[112,95,9].includes(l.product_id)&&l.status==='active'&&l.quantity>0).map(l=>({product_id:l.product_id,listing_id:l.listing_id,quantity:l.quantity}));})()

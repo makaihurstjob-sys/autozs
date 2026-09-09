@@ -519,7 +519,7 @@
             if (cleanup?.ok) {
               const retryUrl = new URL(location.href);
               retryUrl.searchParams.set("autozs_error_retry", "1");
-              setStatus(`Home Depot error detected. Cleared ${Number(cleanup.cleared || 0)} Home Depot cookie(s), cache, and site data; retrying once...`);
+              setStatus(`Home Depot error detected. Cleared Home Depot cache while preserving sign-in; retrying once...`);
               progress(12, "Home Depot was blocked. Site data cleared; retrying once...");
               setTimeout(() => location.replace(retryUrl.href), 1200);
               return;

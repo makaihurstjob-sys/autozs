@@ -1,0 +1,1 @@
+openNextListingJob().then(()=>({pollCompleted:true}))

@@ -1,0 +1,1 @@
+(async()=>{const tabs=await chrome.tabs.query({url:'https://www.homedepot.com/*'});const t=tabs.find(t=>new URL(t.url).searchParams.get('autozs_supplier_order')==='4');if(!t)return {found:false};await chrome.tabs.update(t.id,{active:true});await chrome.windows.update(t.windowId,{focused:true});return {found:true,url:t.url};})()

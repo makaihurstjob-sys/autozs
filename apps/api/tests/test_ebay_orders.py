@@ -170,3 +170,53 @@ def test_order_report_import_rejects_reports_without_order_numbers(client) -> No
     )
     assert response.status_code == 422
     assert "Order Number" in response.json()["detail"]
+
+import pytest
+from app.models.domain import Product
+from app.services.orders import _queue_automatic_restock, _queue_replacement_publish
+
+
+@pytest.mark.parametrize('exclusion', ['pruned', 'paused', 'cancelled', 'deleted'])
+def test_restock_respects_product_exclusions_on_sale_and_retry(client, exclusion):
+    test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        job = db.query(ListingJob).one()
+        job.status = 'cancelled' if exclusion == 'cancelled' else 'failed'
+        product = db.get(Product, job.product_id)
+        listing = db.query(EbayListing).one()
+        supplier = db.query(SupplierProduct).one()
+        supplier.in_stock = True
+        supplier.updated_at = datetime.utcnow()
+        if exclusion == 'pruned':
+            listing.relist_blocked = True
+        if exclusion in ('paused', 'deleted'):
+            product.status = exclusion
+        db.commit()
+        assert not _queue_replacement_publish(db, product=product, account_key=job.ebay_account_key)
+        _queue_automatic_restock(db, product=product, account_key=job.ebay_account_key,
+                                 item_number=listing.listing_id, quantity=1)
+        db.commit()
+        assert reconcile_sold_listing_replacements(db)['queued'] == 0
+        assert db.query(ListingJob).count() == 1
+    finally:
+        db.close()
+
+
+def test_unmatched_sale_item_does_not_decrement_another_listing(client):
+    product_data = _captured_product(client)
+    client.post(f"/products/{product_data['id']}/mark-listed", json={
+        'listing_id': '800123456789', 'account_id': 'a.m.anim-59',
+        'environment': 'manual', 'quantity': 1, 'status': 'active'})
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        product = db.get(Product, product_data['id'])
+        _queue_automatic_restock(db, product=product, account_key='a.m.anim-59',
+                                 item_number='800999999999', quantity=1)
+        db.commit()
+        listing = db.query(EbayListing).one()
+        assert listing.quantity == 1
+        assert listing.status == 'active'
+        assert db.query(ListingJob).count() == 0
+    finally:
+        db.close()

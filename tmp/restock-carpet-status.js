@@ -1,0 +1,1 @@
+(async()=>{const p=(await localApiJson('/products')).find(p=>p.id===43);return p?{id:p.id,status:p.status,suppliers:p.supplier_products?.map(s=>({in_stock:s.in_stock,last_price:s.last_price,last_shipping:s.last_shipping,updated_at:s.updated_at,price_unavailable:s.price_unavailable}))}:null;})()

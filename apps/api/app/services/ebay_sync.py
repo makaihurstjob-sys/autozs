@@ -762,18 +762,11 @@ def _missing_active_report_row_should_tombstone(db: Session, listing: EbayListin
     status = str(listing.status or "").lower()
     if status in ACTIVE_REPORT_STATUSES:
         return True
-    if status != "scheduled":
-        return False
-    job = db.scalar(
-        select(ListingJob)
-        .where(ListingJob.product_id == listing.product_id)
-        .where(ListingJob.ebay_account_key == listing.account_id)
-        .where(ListingJob.listing_schedule_at.is_not(None))
-        .order_by(ListingJob.listing_schedule_at.desc(), ListingJob.created_at.desc(), ListingJob.id.desc())
-    )
-    if job is None or job.listing_schedule_at is None:
-        return False
-    return _scheduled_start_passed(job.listing_schedule_at, now)
+    # An active-only report cannot establish that a scheduled item was removed.
+    # The saved eBay start can differ from the local job's intended schedule.
+    # Require item-specific evidence (or an explicit removal report) instead of
+    # repeatedly destroying a reconciled schedule when its local time passes.
+    return False
 
 
 _LISTING_SCHEDULE_ZONE = ZoneInfo("America/New_York")

@@ -1,0 +1,1 @@
+(()=>{const bs=[...document.querySelectorAll('button')].filter(b=>b.offsetParent!==null&&b.innerText.trim()==='Save for Later');if(bs.length!==2)throw Error('Unexpected cart controls');bs[1].click();return {savedForLaterClicked:true};})()

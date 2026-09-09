@@ -1,0 +1,1 @@
+(async()=>({downloads:(await chrome.downloads.search({query:['batch-230'],limit:3})).map(x=>({filename:x.filename,state:x.state})),tabs:(await chrome.tabs.query({url:'https://www.ebay.com/sh/reports/uploads*'})).map(t=>({id:t.id,url:t.url})),alarms:(await chrome.alarms.getAll()).filter(a=>/rotation|allowance|active-listings/.test(a.name))}))()

@@ -1,0 +1,1 @@
+(async()=>{if(await hasRunningListingJob())throw Error('Listing job running');const t=(await chrome.tabs.query({url:'https://www.ebay.com/sh/lst/*'}))[0];if(!t)throw Error('Seller Hub tab unavailable');await chrome.tabs.update(t.id,{url:'https://www.ebay.com/sh/ovw',active:true});return {opened:true};})()

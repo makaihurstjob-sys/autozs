@@ -1,0 +1,1 @@
+(async()=>{const orders=await localApiJson('/orders');const jobs=await localApiJson('/listing-jobs');return {orders:orders.map(o=>({id:o.id,status:o.status,items:o.items.map(i=>({product_id:i.product_id,title:i.title}))})),restockJobs:jobs.filter(j=>/restock/i.test(j.message||'')).map(j=>({id:j.id,product_id:j.product_id,status:j.status,message:j.message}))};})()

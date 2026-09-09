@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from PIL import Image
+from app.core.config import PROJECT_ROOT
 
 
 PNG_DATA_URL = (
@@ -105,6 +106,26 @@ def test_existing_draft_assistant_url_reopens_that_draft(client) -> None:
     )
     assert "autozs_fill=1" in updated["assistant_url"]
     assert f"autozs_job_id={job['id']}" in updated["assistant_url"]
+
+
+def test_retry_after_unconfirmed_submit_forces_a_fresh_draft(client) -> None:
+    product = create_ready_product(client, "Unconfirmed Draft Retry")
+    job = client.post("/listing-jobs", json={"product_ids": [product["id"]]}).json()[0]
+    failed = client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "needs_review",
+            "ebay_draft_id": "5150498730503",
+            "message": "eBay never confirmed the scheduled listing after the final click.",
+        },
+    ).json()
+    assert "draftId=5150498730503" in failed["assistant_url"]
+
+    retried = client.post(f"/listing-jobs/{job['id']}/run").json()["job"]
+
+    assert retried["status"] == "running"
+    assert retried["ebay_draft_id"] is None
+    assert retried["assistant_url"].startswith("https://www.ebay.com/sl/prelist/home?")
 
 
 def test_listing_job_rejects_draft_id_owned_by_another_product(client) -> None:
@@ -434,7 +455,7 @@ def test_prepare_images_creates_ebay_ready_square_uploads(client) -> None:
     assert prepared["size"] == 1000
     edited_paths = [image["local_path"] for image in prepared["images"] if image["local_path"]]
     assert any("/edited/" in path for path in edited_paths)
-    with Image.open(edited_paths[0]) as image:
+    with Image.open(PROJECT_ROOT / edited_paths[0]) as image:
         assert image.size == (1000, 1000)
 
     package = client.get(f"/products/{product['id']}/ebay-package").json()
@@ -1110,7 +1131,11 @@ def test_requeuing_a_job_with_a_stale_schedule_pushes_it_into_the_future(client)
 
     requeued = client.patch(f"/listing-jobs/{job['id']}", json={"status": "queued"}).json()
     refreshed = datetime.fromisoformat(requeued["listing_schedule_at"])
-    assert refreshed > datetime.utcnow()
+    eastern_now = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).replace(tzinfo=None)
+    assert refreshed >= eastern_now + timedelta(minutes=44)
+    assert refreshed <= eastern_now + timedelta(minutes=46)
+    saved_product = next(item for item in client.get("/products").json() if item["id"] == product["id"])
+    assert saved_product["listing_schedule_at"] == requeued["listing_schedule_at"]
 
 
 def test_requeuing_a_job_with_a_future_schedule_leaves_it_untouched(client) -> None:
@@ -1169,6 +1194,54 @@ def test_listing_expansion_fills_headroom_with_the_most_profitable_candidate_fir
     queued_product_ids = {job["product_id"] for job in jobs if job["action"] == "publish"}
     assert high_profit["id"] in queued_product_ids
     assert low_profit["id"] not in queued_product_ids
+
+
+def test_listing_expansion_skips_products_with_tombstoned_ebay_drafts(client) -> None:
+    blocked = create_ready_product(
+        client, "Expansion Tombstoned Regulatory Product", "expansion-tombstoned", source_price=5.0, competitor_price=40.0
+    )
+    client.post(f"/products/{blocked['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+    job = client.post(
+        "/listing-jobs",
+        json={"product_ids": [blocked["id"]], "ebay_account_key": "a.m.anim-59", "action": "publish"},
+    ).json()[0]
+    client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={"status": "tombstoned", "message": "Missing required regulatory data."},
+    ).raise_for_status()
+
+    candidate = create_ready_product(
+        client, "Expansion Allowed Product", "expansion-allowed", source_price=8.0, competitor_price=30.0
+    )
+    client.post(f"/products/{candidate['id']}/draft-price", json={"mode": "competitor"}).raise_for_status()
+    client.patch(
+        "/settings/pricing",
+        json={"active_listing_target_enabled": True, "active_listing_cap": 2},
+    ).raise_for_status()
+
+    payload = client.post("/listing-expansion/auto-queue?ebay_account_key=a.m.anim-59&limit=5").json()
+
+    assert blocked["id"] not in payload["product_ids"]
+    assert candidate["id"] in payload["product_ids"]
+
+
+def test_cancelled_product_stays_excluded_from_readiness_and_reenqueue(client) -> None:
+    product = create_ready_product(client, "Excluded freight product", "excluded-freight")
+    job = client.post("/listing-jobs", json={
+        "product_ids": [product["id"]], "ebay_account_key": "a.m.anim-59", "action": "publish"
+    }).json()[0]
+    client.patch(f"/listing-jobs/{job['id']}", json={
+        "status": "cancelled", "message": "Cancelled: freight product intentionally excluded"
+    }).raise_for_status()
+    readiness = client.get(f"/products/{product['id']}/listing-readiness").json()
+    assert readiness["manual_ready"] is False
+    assert any("intentionally excluded" in reason for reason in readiness["missing_manual"])
+    rejected = client.post("/listing-jobs", json={
+        "product_ids": [product["id"]], "ebay_account_key": "a.m.anim-59", "action": "publish"
+    })
+    assert rejected.status_code == 409
+    retry = client.patch(f"/listing-jobs/{job['id']}", json={"status": "queued"}).json()
+    assert retry["status"] == "cancelled"
 
 
 def test_listing_expansion_respects_existing_active_listings_against_the_cap(client) -> None:

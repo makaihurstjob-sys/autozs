@@ -1,0 +1,1 @@
+(async()=>{if(await hasRunningListingJob())throw Error('Listing job running');const t=(await chrome.tabs.query({url:'https://www.ebay.com/sh/lst/active*'}))[0];await chrome.tabs.update(t.id,{url:'https://www.ebay.com/sh/lst/scheduled'});return {tab:t.id}})()

@@ -1,0 +1,1 @@
+(async()=>({manifest:chrome.runtime.getManifest().name,version:chrome.runtime.getManifest().version,alarms:await chrome.alarms.getAll(),tabs:(await chrome.tabs.query({})).map(t=>({id:t.id,url:t.url})),poll:typeof openNextSourceRefreshJob}))()

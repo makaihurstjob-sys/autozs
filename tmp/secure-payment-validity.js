@@ -1,0 +1,1 @@
+({fields:[...document.querySelectorAll('input')].map(i=>({id:i.id,name:i.name,filled:!!i.value,length:i.value.length,valid:i.validity.valid,invalid:i.getAttribute('aria-invalid')})),errors:[...document.querySelectorAll('[role="alert"],[class*="error"]')].map(e=>e.innerText).filter(Boolean).slice(0,5)})

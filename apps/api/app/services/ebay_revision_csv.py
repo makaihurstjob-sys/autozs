@@ -64,6 +64,12 @@ def build_ebay_price_revision_csv(
         quantity_column = len(header)
         header.append("Available quantity")
     output_rows = [*prefix, header]
+    from app.services.ebay_listing_policy import END_ACTION, pruning_reason
+    from datetime import datetime, timezone
+    end_column = next((i for i, value in enumerate(header) if value.strip().lower() == 'endcode'), None)
+    if any(getattr(db.get(EbayRevisionJob, job_id), 'action', '') == END_ACTION for job_id in job_ids) and end_column is None:
+        end_column = len(header)
+        header.append('EndCode')
     prepared_ids: list[int] = []
 
     for job_id in dict.fromkeys(job_ids):
@@ -79,14 +85,19 @@ def build_ebay_price_revision_csv(
         row = [""] * len(header)
         row[columns["action"]] = "Revise"
         row[columns["item_number"]] = listing_id
-        if job.action in STOCK_ACTION_QUANTITY:
+        if job.action == END_ACTION:
+            if not listing or not pruning_reason(listing, datetime.now(timezone.utc)):
+                raise ValueError(f'End-listing job {job.id} needs fresh zero-view and renewal evidence')
+            row[columns['action']] = 'End'
+            row[end_column] = 'NotAvailable'
+        elif job.action in STOCK_ACTION_QUANTITY:
             # Quantity-only revision. Start price is left blank on purpose: eBay changes
             # only the fields a row populates, so re-asserting a price here could push a
             # stale value at a listing we only meant to take out of stock.
             row[quantity_column] = str(STOCK_ACTION_QUANTITY[job.action])
         else:
             row[columns["start_price"]] = f"{job.target_price:.2f}"
-        if title_column is not None and job.id in pack_job_ids:
+        if job.action != END_ACTION and title_column is not None and job.id in pack_job_ids:
             draft = db.scalar(
                 select(ListingDraft)
                 .where(ListingDraft.product_id == job.product_id, ListingDraft.marketplace == "ebay")

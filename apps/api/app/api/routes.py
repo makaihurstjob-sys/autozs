@@ -1,11 +1,15 @@
 from datetime import date, datetime, timedelta, timezone
 import base64
 import hmac
+import io
 import json
 from pathlib import Path
 import re
 import shutil
 import subprocess
+
+import httpx
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
@@ -14,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.config import get_settings
+from app.core.config import PROJECT_ROOT
 from app.core.store_keys import DEFAULT_EBAY_STORE_KEY
 from app.models.domain import (
     AutomationRun,
@@ -32,6 +37,7 @@ from app.models.domain import (
     FulfillmentTask,
     GiftCard,
     ListingDraft,
+    ListingJob,
     Order,
     PriceSnapshot,
     Product,
@@ -54,10 +60,15 @@ from app.schemas.depop import (
     AmazonCaptureImport,
     DepopAccountRead,
     DepopAccountUpsert,
+    DepopApprovedBatchScheduleRequest,
+    DepopApprovedBatchScheduleResult,
     DepopImportResult,
     DepopJobCreate,
     DepopJobRead,
+    DepopJobRunResult,
     DepopJobUpdate,
+    DepopPublicationConfirm,
+    DepopListingPackage,
     DepopPhotoDecision,
     DepopPhotoQueueItem,
     DepopPhotoReviewRead,
@@ -65,6 +76,12 @@ from app.schemas.depop import (
     DepopVariantCreate,
     DepopVariantRead,
     DepopVariantUpdate,
+)
+from app.services.depop_jobs import (
+    build_depop_listing_package,
+    schedule_approved_photo_batches,
+    serialize_depop_job,
+    start_next_depop_job,
 )
 from app.schemas.z_finance import ZFinanceSyncRequest
 from app.schemas.domain import (
@@ -230,6 +247,7 @@ from app.services.importer import (
     split_urls,
     update_product_from_capture,
 )
+from app.services.listing_exclusions import listing_exclusion_reason
 from app.services.listing_jobs import (
     relist_blocked_product_ids,
     enqueue_listing_jobs,
@@ -876,6 +894,12 @@ def _depop_variant_read(variant: DepopListingVariant) -> DepopVariantRead:
         status=variant.status,
         depop_listing_id=variant.depop_listing_id,
         published_at=variant.published_at,
+        views_count=variant.views_count,
+        clicks_count=variant.clicks_count,
+        likes_count=variant.likes_count,
+        bags_count=variant.bags_count,
+        offers_count=variant.offers_count,
+        metrics_synced_at=variant.metrics_synced_at,
         created_at=variant.created_at,
         updated_at=variant.updated_at,
     )
@@ -917,6 +941,16 @@ def _resolve_depop_account_key(db: Session, requested: str) -> str:
     return account.key if account is not None else ""
 
 
+def _depop_title_without_source_brand(title: str, source_brand: str) -> str:
+    """Strip only Amazon's explicit brand/byline value from a Depop title."""
+    clean = re.sub(r"\s+", " ", title or "").strip()
+    brand = re.sub(r"\s+", " ", source_brand or "").strip()
+    if not brand:
+        return clean
+    clean = re.sub(rf"^\s*{re.escape(brand)}(?=\s|[-:|,]|$)[\s\-:|,]*", "", clean, flags=re.I)
+    return clean.strip() or title.strip()
+
+
 @router.post("/depop/amazon-import", response_model=DepopImportResult)
 def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(get_db)) -> DepopImportResult:
     """Turn one scraped Amazon parent listing into Depop variants + swipe candidates.
@@ -929,8 +963,32 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
     if product is None or product.status == ProductStatus.deleted.value:
         raise HTTPException(status_code=404, detail="Product not found")
 
+    # A product routed into the Depop pipeline must never remain eligible for
+    # unattended eBay expansion/rotation.  Both eBay selectors require the
+    # monitoring status, so pausing here makes the channel assignment atomic
+    # with the Depop import (and makes repeat imports self-healing).
+    product.status = ProductStatus.paused.value
+
+    # Captured products begin life with an eBay draft. Moving one into the
+    # Depop pipeline must remove that placeholder or the same product appears
+    # in both marketplace dashboards. Preserve it if eBay work has actually
+    # started so a Depop import can never erase a scheduled or existing eBay
+    # listing.
+    has_ebay_work = db.scalar(
+        select(func.count()).select_from(EbayListing).where(EbayListing.product_id == product.id)
+    ) or db.scalar(
+        select(func.count()).select_from(ListingJob).where(ListingJob.product_id == product.id)
+    )
+    if not has_ebay_work:
+        for draft in list(product.listing_drafts):
+            if draft.marketplace == "ebay":
+                db.delete(draft)
+
     account_key = _resolve_depop_account_key(db, payload.account_key)
-    base_title = (payload.title or product.title or "").strip()
+    base_title = _depop_title_without_source_brand(
+        payload.title or product.title or "", payload.source_brand
+    )
+    depop_price = round(max(0.0, float(payload.price or 0.0)) * 2, 2)
 
     variants_created = 0
     variants_existing = 0
@@ -950,7 +1008,7 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
                 variant_key=variant_key,
                 title=f"{base_title} - {variation.label}".strip(" -")[:512] or variation.label,
                 description="",
-                price=0.0,
+                price=depop_price,
                 image_ids_json="[]",
                 color=variation.label[:64],
                 status="draft",
@@ -960,6 +1018,17 @@ def import_amazon_capture(payload: AmazonCaptureImport, db: Session = Depends(ge
             variants_created += 1
         else:
             variants_existing += 1
+            # Repair early drafts created before Depop pricing was wired in,
+            # while preserving any price the owner subsequently customized.
+            if variant.price <= 0 and depop_price > 0:
+                variant.price = depop_price
+            if not variant.account_key and account_key:
+                variant.account_key = account_key
+            cleaned_existing_title = _depop_title_without_source_brand(
+                variant.title, payload.source_brand
+            )
+            if cleaned_existing_title != variant.title:
+                variant.title = cleaned_existing_title[:512]
         variant_by_label[variation.label.strip().lower()] = variant
 
     # Resolve colours against every variant this product has, not just the ones
@@ -1115,7 +1184,10 @@ def list_depop_photo_queue(db: Session = Depends(get_db)) -> list[DepopPhotoQueu
             photo.product_id,
             {"pending": 0, "approved": 0, "rejected": 0, "cover": ""},
         )
-        if photo.status in ("pending", "approved", "rejected"):
+        # Only customer review photos participate in the swipe workflow.
+        # Variation photos remain pending as source/cover images and must not
+        # make the product card claim there is review work left to do.
+        if photo.kind == "review" and photo.status in ("pending", "approved", "rejected"):
             entry[photo.status] = int(entry[photo.status]) + 1
         if not entry["cover"] and photo.kind == "variation":
             entry["cover"] = photo.image_url
@@ -1206,6 +1278,10 @@ def decide_depop_source_photo(
 
     photo.status = payload.status
     photo.variant_id = variant.id if variant is not None else None
+    photo.crop_x = payload.crop_x
+    photo.crop_y = payload.crop_y
+    photo.crop_zoom = payload.crop_zoom
+    photo.background_mode = payload.background_mode
     if variant is not None:
         photo.variant_label = variant.color or photo.variant_label
 
@@ -1229,6 +1305,43 @@ def decide_depop_source_photo(
             )
             db.add(image)
             db.flush()
+        try:
+            response = httpx.get(photo.image_url, timeout=20, follow_redirects=True)
+            response.raise_for_status()
+            source = Image.open(io.BytesIO(response.content)).convert("RGB")
+            width, height = source.size
+            if photo.background_mode == "blur":
+                # Keep the entire source photo untouched in the foreground and
+                # derive a soft edge-to-edge backdrop from the same pixels. This
+                # gives portrait/landscape photos a square canvas without
+                # inventing or altering product details.
+                square = ImageOps.fit(
+                    source, (1200, 1200), method=Image.Resampling.LANCZOS
+                ).filter(ImageFilter.GaussianBlur(radius=36))
+                square = ImageEnhance.Brightness(square).enhance(0.72)
+                foreground = source.copy()
+                foreground.thumbnail((1120, 1120), Image.Resampling.LANCZOS)
+                paste_x = (1200 - foreground.width) // 2
+                paste_y = (1200 - foreground.height) // 2
+                square.paste(foreground, (paste_x, paste_y))
+            else:
+                zoom = max(1.0, min(4.0, float(photo.crop_zoom or 1.0)))
+                side = max(1.0, min(width, height) / zoom)
+                center_x = width / 2 - float(photo.crop_x or 0.0) * max(0.0, width - side) / 2
+                center_y = height / 2 - float(photo.crop_y or 0.0) * max(0.0, height - side) / 2
+                left = max(0.0, min(width - side, center_x - side / 2))
+                top = max(0.0, min(height - side, center_y - side / 2))
+                square = source.crop((round(left), round(top), round(left + side), round(top + side)))
+                square = square.resize((1200, 1200), Image.Resampling.LANCZOS)
+            relative = Path("downloads") / "product_images" / str(photo.product_id) / f"depop-{photo.id}.jpg"
+            destination = PROJECT_ROOT / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            square.save(destination, "JPEG", quality=92, optimize=True)
+            image.local_path = relative.as_posix()
+        except (httpx.HTTPError, OSError, ValueError):
+            # Keep the swipe decision even if Amazon temporarily refuses the
+            # image; the original URL remains available for a later retry.
+            pass
         try:
             image_ids = [int(value) for value in json.loads(variant.image_ids_json or "[]")]
         except (TypeError, ValueError, json.JSONDecodeError):
@@ -1322,6 +1435,16 @@ def update_depop_variant(
     if variant is None:
         raise HTTPException(status_code=404, detail="Depop variant not found")
     changes = payload.model_dump(exclude_unset=True)
+    account_key = changes.get("account_key")
+    if account_key is not None:
+        account = db.scalar(
+            select(DepopAccount).where(
+                DepopAccount.key == account_key,
+                DepopAccount.enabled.is_(True),
+            )
+        )
+        if account is None:
+            raise HTTPException(status_code=400, detail="Select an enabled Depop account")
     image_ids = changes.pop("image_ids", None)
     if image_ids is not None:
         image_ids = list(dict.fromkeys(image_ids))
@@ -1346,12 +1469,65 @@ def update_depop_variant(
 
 
 @router.get("/depop/jobs", response_model=list[DepopJobRead])
-def list_depop_jobs(db: Session = Depends(get_db)) -> list[DepopListingJob]:
-    return list(db.scalars(select(DepopListingJob).order_by(DepopListingJob.created_at.desc())).all())
+def list_depop_jobs(
+    status: str | None = None,
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+) -> list[DepopJobRead]:
+    stmt = select(DepopListingJob).order_by(DepopListingJob.created_at.desc())
+    if status:
+        stmt = stmt.where(DepopListingJob.status == status)
+    jobs = db.scalars(stmt.limit(limit)).all()
+    return [DepopJobRead(**serialize_depop_job(db, job)) for job in jobs]
+
+
+@router.post("/depop/jobs/schedule-approved", response_model=DepopApprovedBatchScheduleResult)
+def schedule_approved_depop_batches(
+    payload: DepopApprovedBatchScheduleRequest,
+    db: Session = Depends(get_db),
+) -> DepopApprovedBatchScheduleResult:
+    try:
+        jobs, created, used, remaining = schedule_approved_photo_batches(
+            db,
+            account_key=payload.account_key,
+            timezone_name=payload.timezone,
+            daily_hours=payload.daily_hours,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DepopApprovedBatchScheduleResult(
+        jobs=[DepopJobRead(**serialize_depop_job(db, job)) for job in jobs],
+        variants_created=created,
+        listings_scheduled=len(jobs),
+        approved_photos_used=used,
+        approved_photos_remaining=remaining,
+    )
+
+
+@router.get("/depop/jobs/{job_id}", response_model=DepopJobRead)
+def read_depop_job(job_id: int, db: Session = Depends(get_db)) -> DepopJobRead:
+    job = db.get(DepopListingJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Depop job not found")
+    return DepopJobRead(**serialize_depop_job(db, job))
+
+
+@router.post("/depop/jobs/next", response_model=DepopJobRunResult)
+def run_next_depop_job(db: Session = Depends(get_db)) -> DepopJobRunResult:
+    job = start_next_depop_job(db)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No queued Depop jobs are due")
+    package = None
+    if job.status == "running":
+        variant = db.get(DepopListingVariant, job.variant_id)
+        built = build_depop_listing_package(db, variant) if variant else None
+        if built:
+            package = DepopListingPackage(job_id=job.id, **built)
+    return DepopJobRunResult(job=DepopJobRead(**serialize_depop_job(db, job)), package=package)
 
 
 @router.post("/depop/jobs", response_model=DepopJobRead)
-def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) -> DepopListingJob:
+def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) -> DepopJobRead:
     variant = db.get(DepopListingVariant, payload.variant_id)
     if variant is None:
         raise HTTPException(status_code=404, detail="Depop variant not found")
@@ -1370,7 +1546,7 @@ def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) ->
         )
     )
     if existing is not None:
-        return existing
+        return DepopJobRead(**serialize_depop_job(db, existing))
     job = DepopListingJob(
         variant_id=variant.id,
         account_key=variant.account_key,
@@ -1383,13 +1559,13 @@ def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) ->
     db.add(job)
     db.commit()
     db.refresh(job)
-    return job
+    return DepopJobRead(**serialize_depop_job(db, job))
 
 
 @router.patch("/depop/jobs/{job_id}", response_model=DepopJobRead)
 def update_depop_job(
     job_id: int, payload: DepopJobUpdate, db: Session = Depends(get_db)
-) -> DepopListingJob:
+) -> DepopJobRead:
     job = db.get(DepopListingJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Depop job not found")
@@ -1397,7 +1573,31 @@ def update_depop_job(
         setattr(job, field, value)
     db.commit()
     db.refresh(job)
-    return job
+    return DepopJobRead(**serialize_depop_job(db, job))
+
+
+@router.post("/depop/jobs/{job_id}/published", response_model=DepopJobRead)
+def confirm_depop_publication(
+    job_id: int, payload: DepopPublicationConfirm, db: Session = Depends(get_db)
+) -> DepopJobRead:
+    """Atomically close a browser job and mark its variant as live."""
+    job = db.get(DepopListingJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Depop job not found")
+    variant = db.get(DepopListingVariant, job.variant_id)
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Depop variant not found")
+
+    published_at = payload.published_at or datetime.utcnow()
+    variant.status = "published"
+    variant.depop_listing_id = payload.depop_listing_id
+    variant.published_at = published_at
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Published on Depop: {payload.listing_url or payload.depop_listing_id}"
+    db.commit()
+    db.refresh(job)
+    return DepopJobRead(**serialize_depop_job(db, job))
 
 
 @router.get("/products", response_model=list[ProductRead])
@@ -2061,9 +2261,10 @@ def read_ebay_listing_views_summary(
         return EbayListingViewsSummary(account_key=account_key)
 
     cutoff = datetime.utcnow() - timedelta(days=7)
-    snapshots = list(
-        db.scalars(
-            select(EbayListingViewSnapshot)
+    # Read only the two values used below; constructing ORM objects for every
+    # historical observation stalls dashboard refreshes as history grows.
+    snapshots = db.execute(
+            select(EbayListingViewSnapshot.ebay_listing_id, EbayListingViewSnapshot.views)
             .where(
                 EbayListingViewSnapshot.ebay_listing_id.in_(listing_ids),
                 EbayListingViewSnapshot.captured_at >= cutoff,
@@ -2074,20 +2275,19 @@ def read_ebay_listing_views_summary(
                 EbayListingViewSnapshot.id,
             )
         ).all()
-    )
-    snapshots_by_listing: dict[int, list[EbayListingViewSnapshot]] = {}
+    snapshots_by_listing: dict[int, list[int]] = {}
     for snapshot in snapshots:
-        snapshots_by_listing.setdefault(snapshot.ebay_listing_id, []).append(snapshot)
+        snapshots_by_listing.setdefault(snapshot.ebay_listing_id, []).append(snapshot.views)
 
     views_7d = 0
     for listing in listings:
         history = snapshots_by_listing.get(listing.id, [])
         if len(history) > 1:
-            views_7d += sum(max(0, current.views - previous.views) for previous, current in zip(history, history[1:]))
+            views_7d += sum(max(0, current - previous) for previous, current in zip(history, history[1:]))
         elif history:
             tracking_start = listing.started_at or listing.created_at
             if tracking_start and tracking_start >= cutoff:
-                views_7d += max(0, history[0].views)
+                views_7d += max(0, history[0])
 
     measured = [listing for listing in listings if listing.views_measured_at is not None]
     measured_at = max((listing.views_measured_at for listing in measured), default=None)
@@ -2285,7 +2485,7 @@ def list_listing_queue(db: Session = Depends(get_db)) -> list[ListingQueueItem]:
     items: list[ListingQueueItem] = []
     for product_id in product_ids:
         package = build_ebay_listing_package(db, product_id)
-        readiness = build_listing_readiness(db, product_id) if package is not None else None
+        readiness = build_listing_readiness(db, product_id, package=package) if package is not None else None
         if package is None or readiness is None:
             continue
         listing = db.scalar(
@@ -2349,6 +2549,21 @@ def list_listing_job_queue(
 @router.get("/listing-jobs/automation-pause", response_model=ListingAutomationPauseStatus)
 def read_listing_automation_pause(db: Session = Depends(get_db)) -> ListingAutomationPauseStatus:
     return ListingAutomationPauseStatus(**read_automation_pause(db))
+
+
+@router.get('/ebay/listing-budget/{account_key}')
+def read_ebay_listing_budget(account_key: str, db: Session = Depends(get_db)) -> dict:
+    from app.services.ebay_listing_policy import budget_status
+    return budget_status(db, account_key)
+
+
+@router.post('/ebay/listing-budget/{account_key}/snapshot')
+def capture_ebay_listing_budget(account_key: str, payload: dict, db: Session = Depends(get_db)) -> dict:
+    from app.services.ebay_listing_policy import save_allowance_snapshot
+    try:
+        return save_allowance_snapshot(db, account_key, payload)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/listing-jobs/automation-pause", response_model=ListingAutomationPauseStatus)
@@ -2426,6 +2641,9 @@ def create_listing_jobs(payload: ListingJobCreate, db: Session = Depends(get_db)
                     "POST /ebay/listings/{id}/allow-relist."
                 ),
             )
+        exclusions = {pid: reason for pid in payload.product_ids if (reason := listing_exclusion_reason(db, pid))}
+        if exclusions:
+            raise HTTPException(status_code=409, detail=exclusions)
         raise HTTPException(status_code=404, detail="No matching products found")
     return [ListingJobRead(**serialize_listing_job(db, job)) for job in jobs]
 

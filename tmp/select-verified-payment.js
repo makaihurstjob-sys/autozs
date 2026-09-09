@@ -1,0 +1,1 @@
+(async()=>{const t=(await chrome.tabs.query({url:'https://www.homedepot.com/*'})).find(t=>new URL(t.url).searchParams.get('autozs_supplier_order')==='4');const r=await chrome.scripting.executeScript({target:{tabId:t.id},func:async()=>{await autozsNativeCheckoutClick(4,'use_new_card');return {paymentSelectionClicked:true};}});return r[0].result;})()

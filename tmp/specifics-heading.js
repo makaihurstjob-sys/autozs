@@ -1,0 +1,1 @@
+({headings:[...document.querySelectorAll('h1,h2,h3,[role="heading"]')].filter(e=>/item specifics/i.test(e.innerText)).map(e=>({tag:e.tagName,text:e.innerText,html:e.outerHTML,parent:e.parentElement.outerHTML.slice(0,1600)})),rows:document.querySelectorAll('button[id*="item-specific-dropdown-label"]').length})

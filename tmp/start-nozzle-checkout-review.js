@@ -1,0 +1,1 @@
+(async()=>{const s=await localApiJson('/supplier-orders/4/approve',{method:'POST'});await openNextSupplierOrder();return {id:s.id,status:s.status,reviewCeiling:s.approved_total,checkoutEnabled:await canRunAutozsCheckoutJobs()};})()
