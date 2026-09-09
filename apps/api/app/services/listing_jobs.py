@@ -491,7 +491,6 @@ def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
         db.commit()
         db.refresh(job)
         return job
-    previous_status = job.status
     previous_message = str(job.message or "")
     product = db.get(Product, job.product_id)
     if product is None:
@@ -530,10 +529,16 @@ def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
         # longer be trusted on retry. eBay has reused one such draft ID for a
         # different product, causing the wrong scheduled listing to open. Force
         # a clean prelist flow for these retries; description-only repairs may
-        # still reuse their stabilized draft.
+        # still reuse their stabilized draft. This must not gate on the job's
+        # status at claim time: the automated queue always claims from
+        # "queued" (a job is only reachable here after something -- a human
+        # or the scheduler -- already moved it out of needs_review), so
+        # checking for a prior needs_review status here never actually
+        # matched in production and silently let every unconfirmed draft get
+        # reused forever. previous_message is the real signal; it survives
+        # the needs_review -> queued transition even though status doesn't.
         if (
-            previous_status == ListingJobStatus.needs_review.value
-            and job.ebay_draft_id
+            job.ebay_draft_id
             and (
                 "never confirmed" in previous_message.lower()
                 or "already-published listing" in previous_message.lower()

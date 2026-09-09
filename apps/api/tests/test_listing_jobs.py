@@ -128,6 +128,40 @@ def test_retry_after_unconfirmed_submit_forces_a_fresh_draft(client) -> None:
     assert retried["assistant_url"].startswith("https://www.ebay.com/sl/prelist/home?")
 
 
+def test_requeued_job_forces_a_fresh_draft_through_the_automated_claim_path(client) -> None:
+    # The real automation never calls /run directly on a needs_review job --
+    # it (or a human) moves the job to "queued" first, and the scheduler
+    # claims it from there via /listing-jobs/next. By the time start_listing_job
+    # runs, the job's *current* status is always "queued": checking for a
+    # prior needs_review status at that point can never match, which silently
+    # let every unconfirmed draft get reused forever in production even
+    # though test_retry_after_unconfirmed_submit_forces_a_fresh_draft (using
+    # /run) looked green.
+    product = create_ready_product(client, "Unconfirmed Draft Requeue")
+    job = client.post("/listing-jobs", json={"product_ids": [product["id"]]}).json()[0]
+    client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={
+            "status": "needs_review",
+            "ebay_draft_id": "5150498730504",
+            "message": "eBay never confirmed the scheduled listing after the final click.",
+        },
+    )
+
+    requeued = client.patch(
+        f"/listing-jobs/{job['id']}",
+        json={"status": "queued", "scheduled_for": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()},
+    ).json()
+    assert requeued["status"] == "queued"
+    assert requeued["ebay_draft_id"] == "5150498730504"
+
+    claimed = client.post("/listing-jobs/next").json()["job"]
+    assert claimed["id"] == job["id"]
+    assert claimed["status"] == "running"
+    assert claimed["ebay_draft_id"] is None
+    assert claimed["assistant_url"].startswith("https://www.ebay.com/sl/prelist/home?")
+
+
 def test_listing_job_rejects_draft_id_owned_by_another_product(client) -> None:
     first_product = create_ready_product(client, "First Draft Owner", "draft-owner-1")
     second_product = create_ready_product(client, "Second Draft Owner", "draft-owner-2")
