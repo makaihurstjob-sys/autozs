@@ -7,8 +7,8 @@ async function check(wrongOrder=false){
  localApiJson:async(path,options)=>{if(path.endsWith('/next'))return {supplier_order_id:4,external_order_id:'WK37553521',url:'https://www.homedepot.com/myaccount/order-details?orderNumber=WK37553521'};writes.push(JSON.parse(options.body));},
  chrome:{tabs:{create:async()=>({id:42}),remove:async id=>closed.push(id)},scripting:{executeScript:async({func,args})=>{
  context.location={href:'https://www.homedepot.com/myaccount/order-details?orderNumber=WK37553521'};
- context.document={body:{innerText:`ORDER # ${wrongOrder?'WK00000000':'WK37553521'} Subtotal:\n$4.88\nDelivery:\nFREE\nSales Tax:\n$0.40\nTotal:\n$5.28\nView Charge History`}};
- context.args=args;return [{result:vm.runInContext(`(${func.toString()})(...args)`,context)}];}}}};
+ context.document={querySelectorAll:()=>[],body:{innerText:`ORDER # ${wrongOrder?'WK00000000':'WK37553521'} Subtotal:\n$4.88\nDelivery:\nFREE\nSales Tax:\n$0.40\nTotal:\n$5.28\nView Charge History`}};
+ context.args=args;return [{result:await vm.runInContext(`(${func.toString()})(...args)`,context)}];}}}};
  vm.createContext(context);await vm.runInContext(worker+'\nreconcileNextSupplierReceipt()',context);
  assert.deepEqual(closed,[42]);assert.equal(writes.length,1);
  if(wrongOrder)assert.match(writes[0].error,/could not be verified/);

@@ -1303,13 +1303,23 @@ async function reconcileNextSupplierReceipt() {
     for (let attempt=0; attempt<25; attempt++) {
       await new Promise(resolve=>setTimeout(resolve,1000));
       try {
-        observation = (await chrome.scripting.executeScript({target:{tabId},args:[candidate.external_order_id],func:(orderId)=>{
+        observation = (await chrome.scripting.executeScript({target:{tabId},args:[candidate.external_order_id],func:async(orderId)=>{
           const url=new URL(location.href), text=document.body?.innerText || '';
           if(url.hostname!=='www.homedepot.com' || url.pathname!=='/myaccount/order-details' || url.searchParams.get('orderNumber')!==orderId) return null;
           if(!/^[A-Z0-9-]{6,128}$/i.test(orderId) || !new RegExp(`ORDER\\s*#\\s*${orderId}\\b`,'i').test(text)) return null;
           const match=text.match(/Subtotal:\s*[\s\S]*?\bTotal:\s*\$[\d,]+\.\d{2}/i);
           if(!match) return null;
-          return {source_url:location.href,external_order_id:orderId,financial_text:match[0]};
+          const control=[...document.querySelectorAll('*')].filter(e=>e.textContent.trim()==='View Charge History').at(-1);
+          let chargeText='';
+          if(control) {
+            control.click();
+            for(let i=0;i<10;i++) {
+              await new Promise(resolve=>setTimeout(resolve,300));
+              const dialog=document.querySelector('[role="dialog"]');
+              if(dialog?.innerText?.includes('Adjusted Total')) {chargeText=dialog.innerText;break;}
+            }
+          }
+          return {source_url:location.href,external_order_id:orderId,financial_text:match[0],charge_history_text:chargeText};
         }}))[0]?.result;
         if(observation) break;
       } catch {}

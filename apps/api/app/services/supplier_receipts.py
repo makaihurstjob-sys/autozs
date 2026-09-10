@@ -65,17 +65,44 @@ def capture_receipt(db, order, payload):
         or order.status not in {"placed", "shipped", "delivered"}):
         raise ValueError("Supplier receipt does not match the purchased order.")
     values = parse_receipt(payload.get("financial_text", ""))
+    charge_text = str(payload.get("charge_history_text") or "")
+    charge_verified = False
+    if charge_text:
+        normalized = re.sub(r"\s+", " ", charge_text).strip()
+        money = r"\$([0-9,]+\.[0-9]{2})"
+        # Only a single observed Mastercard charge with no adjustments/refunds.
+        # Other tenders and split payments remain for review, never inferred.
+        match = re.fullmatch(r"Charge History CHARGE [A-Z][a-z]+ \d{1,2}, \d{4} \| MA - \d{4} " + money
+            + r" Subtotal " + money + r" Delivery FREE Pickup FREE ProXtra Savings FREE Sales Tax \([0-9.]+%\) " + money
+            + r" Refund Total " + money + r" Original Total " + money + r" Adjusted Total " + money, normalized)
+        if match:
+            charge, subtotal, tax, refund, original, adjusted = [Decimal(v.replace(",", "")) for v in match.groups()]
+            charge_verified = (charge == original == adjusted == Decimal(str(values["total"]))
+                and subtotal == Decimal(str(values["item_subtotal"])) and tax == Decimal(str(values["sales_tax"]))
+                and subtotal + tax == charge and refund == 0 and values["shipping_cost"] == 0)
+        if not charge_verified:
+            raise ValueError("Supplier charge history contains unsupported payments, refunds or adjustments; review required.")
     now = datetime.utcnow()
     evidence = {"supplier_order_id": order.id, "external_order_id": order.external_order_id,
                 "source_url": payload["source_url"], "financial_text": payload["financial_text"],
-                "values": values, "observed_at": now.isoformat()}
-    key = "supplier_receipt:" + hashlib.sha256(json.dumps({"id":order.id,"values":values},sort_keys=True).encode()).hexdigest()
+                "values": values, "observed_at": now.isoformat(), "charge_history_text": charge_text,
+                "previous_costs": {field: getattr(order, field) for field in values},
+                "previous_card_amount": order.card_amount}
+    key = "supplier_receipt:" + hashlib.sha256(json.dumps({"id":order.id,"values":values,"charge":charge_text},sort_keys=True).encode()).hexdigest()
     if db.scalar(select(AppSetting).where(AppSetting.key == key)) is None:
         db.add(AppSetting(key=key, value=json.dumps(evidence)))
     state = receipt_state(db, order.id)
     mismatch = any(abs(float(getattr(order, field) or 0) - value) > .001 for field,value in values.items())
+    corrected = False
+    if charge_verified and not order.gift_card_id and not order.gift_card_amount and order.payment_method == "credit_card":
+        corrected = mismatch or abs(float(order.card_amount or 0) - values["total"]) > .001
+        for field, value in values.items():
+            setattr(order, field, value)
+        order.card_amount = values["total"]
+        mismatch = False
     state.update(status="needs_review" if mismatch else "verified", evidence_ref=key,
-                 observed_values=values, last_observed_at=now.isoformat(),
+                 observed_values=values, last_observed_at=now.isoformat(), charge_verified=charge_verified,
+                 payment_corrected=corrected or state.get("payment_corrected", False),
                  error="Saved supplier costs differ from the actual receipt; payment reconciliation required." if mismatch else None,
                  next_check_at=(now + timedelta(hours=6)).isoformat())
     save_state(db, f"supplier:{order.id}", state)
