@@ -60,19 +60,20 @@ def parse_financial_text(text: str):
     normalized = re.sub(r"\s+", " ", text).strip()
     money = r"\$([0-9,]+\.[0-9]{2})"
     pattern = (r"What your buyer paid Subtotal " + money + r" Shipping " + money
-               + r" Sales tax\*? " + money + r" Order total\*\*? " + money
+               + r" Sales tax\*? " + money + r"(?: Retail delivery fees\*? " + money + r")? Order total\*\*? " + money
                + r" What you earned Order total " + money
-               + r" eBay collected from buyer Sales tax -" + money
+               + r" eBay collected from buyer Sales tax -" + money + r"(?: Retail delivery fees -" + money + r")?"
                + r" Selling costs Transaction fees -" + money
                + r" Order earnings " + money)
     match = re.fullmatch(pattern, normalized)
     if not match:
         raise ValueError("eBay financial breakdown is missing or contains unsupported costs/refunds; review required.")
-    subtotal, shipping, tax, total, earned_total, collected_tax, fees, earnings = [Decimal(v.replace(",", "")) for v in match.groups()]
-    if subtotal + shipping + tax != total or total != earned_total or tax != collected_tax or subtotal + shipping - fees != earnings:
+    subtotal, shipping, tax, retail, total, earned_total, collected_tax, collected_retail, fees, earnings = [Decimal(v.replace(",", "")) if v else Decimal(0) for v in match.groups()]
+    if subtotal + shipping + tax + retail != total or total != earned_total or tax != collected_tax or retail != collected_retail or subtotal + shipping - fees != earnings:
         raise ValueError("eBay revenue, tax, fees and earnings do not reconcile exactly.")
     return {"subtotal": float(subtotal), "shipping": float(shipping), "tax": float(tax),
-            "total": float(total), "fees": float(fees), "earnings": float(earnings)}
+            "total": float(total), "fees": float(fees), "earnings": float(earnings),
+            "marketplace_collected_retail_delivery_fee": float(retail)}
 
 
 def record_observation(db: Session, order_id: int, payload: dict):

@@ -23,6 +23,14 @@ def test_exact_financial_reconciliation():
         with pytest.raises(ValueError): parse_financial_text(bad)
 
 
+def test_marketplace_collected_delivery_fee_is_not_seller_cost():
+    text = TEXT.replace("Sales tax* $0.69", "Sales tax* $0.69 Retail delivery fees* $0.31").replace("$10.22", "$10.53").replace("Sales tax -$0.69", "Sales tax -$0.69 Retail delivery fees -$0.31")
+    assert parse_financial_text(text)["fees"] == 1.79
+    assert parse_financial_text(text)["marketplace_collected_retail_delivery_fee"] == .31
+    with pytest.raises(ValueError):
+        parse_financial_text(text.replace("fees -$0.31", "fees -$0.30"))
+
+
 def test_automatic_capture_idempotent_and_cooldown(client):
     db,order = setup_order(client)
     candidate = client.post("/finance/reconciliation/next?account_key=real").json()

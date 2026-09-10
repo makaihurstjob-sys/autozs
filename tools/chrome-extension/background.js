@@ -1329,7 +1329,8 @@ async function reconcileNextOrderProfit() {
     if (!observation) throw new Error("eBay order financial page could not be verified; automatic retry in six hours.");
     await localApiJson(`/finance/reconciliation/${candidate.order_id}`, {method: "POST", body: JSON.stringify(observation)});
   } catch (error) {
-    if (candidate) await localApiJson(`/finance/reconciliation/${candidate.order_id}`, {method: "POST", body: JSON.stringify({error: error.message || String(error)})}).catch(() => {});
+    // A rejected observation already saved its specific reconciliation error.
+    if (candidate && !String(error.message).includes("API returned 422")) await localApiJson(`/finance/reconciliation/${candidate.order_id}`, {method: "POST", body: JSON.stringify({error: error.message || String(error)})}).catch(() => {});
   } finally {
     if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
     profitReconciliationRunning = false;
