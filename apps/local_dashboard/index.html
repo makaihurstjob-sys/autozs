@@ -8419,12 +8419,13 @@
         return `<div class="report-grid">
           <div class="report-card wide">
             <h3>Order profit evidence</h3>
-            <p class="muted">eBay costs reconcile automatically every six hours per fulfilled order while the operations worker is online. Unsupported breakdowns pause verification for review.</p>
+            <p class="muted">eBay fees and Home Depot receipts are checked automatically every six hours per eligible order while the operations worker is online. Unsupported breakdowns or supplier-cost mismatches require review.</p>
             <p class="muted">${Number(finance.profitability?.complete_orders || 0)} of ${(finance.profitability?.orders || []).length} fulfilled orders have complete revenue, supplier-cost and eBay-fee evidence. Contribution is before overhead and refunds; missing costs never count as zero.</p>
-            ${table(["Order / item", "Merchandise", "Buyer shipping", "Supplier cost", "Actual eBay fees", "Contribution", "Evidence needed"], (finance.profitability?.orders || []).map(row => [
+            ${table(["Order / item", "Merchandise", "Buyer shipping", "Supplier cost", "Receipt check", "Actual eBay fees", "Contribution", "Evidence needed"], (finance.profitability?.orders || []).map(row => [
               `${esc(row.ebay_order_id)}<div class="muted">${esc(row.title)}</div>`, money(row.merchandise_revenue),
               row.buyer_shipping == null ? "Unknown" : money(row.buyer_shipping),
               row.supplier_cost == null ? "Unknown" : money(row.supplier_cost),
+              (row.supplier_receipts || []).map(receipt => esc(receipt.status === "verified" ? "Receipt matches" : receipt.status === "needs_review" ? "Review required" : "Pending")).join(", ") || "Pending",
               `${row.ebay_fees == null ? "Missing" : money(row.ebay_fees)} <button class="secondary" onclick="recordActualOrderFee(${Number(row.order_id)})">Record fee</button>`,
               row.contribution == null ? "Not verified" : money(row.contribution), esc(row.missing.join(", ")) || "Complete"
             ]))}

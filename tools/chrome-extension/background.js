@@ -639,7 +639,7 @@ async function reopenOrphanedListingJob(job) {
   if (listingJobRecentlyProgressed(job)) return true;
   // Background tabs (active:false) are throttled by Chrome and can go several
   // seconds without a committed URL, so chrome.tabs.query by URL pattern can
-  // miss a tab that is alive and loading fine — which made every reopen cycle
+  // miss a tab that is alive and loading fine â€” which made every reopen cycle
   // create ANOTHER duplicate tab instead of recognizing the one it just made.
   // Track the exact tab id we created for this job and trust chrome.tabs.get
   // (existence, not URL) before falling back to the looser URL-based search.
@@ -1288,6 +1288,40 @@ async function openNextEbayTrafficSync() {
     }
   }
   await chrome.storage.local.set({ [EBAY_TRAFFIC_LAST_OPENED_KEY]: Date.now() });
+}
+
+let supplierReceiptRunning = false;
+async function reconcileNextSupplierReceipt() {
+  if (supplierReceiptRunning || !(await canRunAutozsWorkerJobs())) return;
+  supplierReceiptRunning = true;
+  let candidate = null, tabId = null;
+  try {
+    candidate = await localApiJson('/finance/supplier-receipts/next', {method:'POST'});
+    if (!candidate) return;
+    tabId = (await chrome.tabs.create({url:candidate.url,active:false})).id;
+    let observation = null;
+    for (let attempt=0; attempt<25; attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      try {
+        observation = (await chrome.scripting.executeScript({target:{tabId},args:[candidate.external_order_id],func:(orderId)=>{
+          const url=new URL(location.href), text=document.body?.innerText || '';
+          if(url.hostname!=='www.homedepot.com' || url.pathname!=='/myaccount/order-details' || url.searchParams.get('orderNumber')!==orderId) return null;
+          if(!/^[A-Z0-9-]{6,128}$/i.test(orderId) || !new RegExp(`ORDER\\s*#\\s*${orderId}\\b`,'i').test(text)) return null;
+          const match=text.match(/Subtotal:\s*[\s\S]*?\bTotal:\s*\$[\d,]+\.\d{2}/i);
+          if(!match) return null;
+          return {source_url:location.href,external_order_id:orderId,financial_text:match[0]};
+        }}))[0]?.result;
+        if(observation) break;
+      } catch {}
+    }
+    if(!observation) throw Error('Home Depot receipt could not be verified; retry in six hours.');
+    await localApiJson(`/finance/supplier-receipts/${candidate.supplier_order_id}`,{method:'POST',body:JSON.stringify(observation)});
+  } catch(error) {
+    if(candidate && !String(error.message).includes('API returned 422')) await localApiJson(`/finance/supplier-receipts/${candidate.supplier_order_id}`,{method:'POST',body:JSON.stringify({error:error.message || String(error)})}).catch(()=>{});
+  } finally {
+    if(tabId) await chrome.tabs.remove(tabId).catch(()=>{});
+    supplierReceiptRunning=false;
+  }
 }
 
 let profitReconciliationRunning = false;
@@ -2345,6 +2379,7 @@ const AUTOZS_ALARM_SCHEDULE = [
   [EBAY_TRAFFIC_ALARM, 1, 2],
   [EBAY_ORDER_ALARM, 1, 2],
   ["autozs-profit-reconciliation", 1, 2],
+  ["autozs-supplier-receipts", 1, 2],
   [EBAY_TRACKING_UPLOAD_ALARM, 1, 2],
   [SUPPLIER_ORDER_ALARM, 1, 2],
   [SUPPLIER_TRACKING_ALARM, 5, 5],
@@ -2423,6 +2458,7 @@ if (chrome.alarms) {
     if (alarm?.name === EBAY_ACTIVE_LISTINGS_ALARM) openNextEbayActiveListingsSync().catch(() => {});
     if (alarm?.name === DEPOP_METRICS_ALARM) ensureDepopMetricsTab().catch(() => {});
     if (alarm?.name === EBAY_TRAFFIC_ALARM) openNextEbayTrafficSync().catch(() => {});
+    if (alarm?.name === "autozs-supplier-receipts") reconcileNextSupplierReceipt().catch(() => {});
     if (alarm?.name === "autozs-profit-reconciliation") reconcileNextOrderProfit().catch(() => {});
     if (alarm?.name === EBAY_ORDER_ALARM) openNextEbayOrderSync().catch(() => {});
     if (alarm?.name === EBAY_TRACKING_UPLOAD_ALARM) openNextEbayTrackingUpload().catch(() => {});

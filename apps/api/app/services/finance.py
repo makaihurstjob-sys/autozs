@@ -288,6 +288,11 @@ def profitability_report(orders, entries, subscriptions, db=None) -> dict:
         if shipping is None:
             missing.append("buyer shipping revenue")
         purchases = [s for s in order.supplier_orders if s.status in PLACED_SUPPLIER_ORDER_STATUSES]
+        from app.services.supplier_receipts import receipt_state
+        receipts = [{"supplier_order_id": s.id, **receipt_state(db, s.id)} for s in purchases] if db is not None else []
+        for receipt in receipts:
+            if receipt.get("error"):
+                missing.append("supplier receipt: " + receipt["error"])
         cost_valid = bool(purchases) and all(
             s.external_order_id and float(s.total or 0) > 0
             and abs(float(s.total) - float(s.card_amount or 0) - float(s.gift_card_amount or 0)) <= .01
@@ -306,7 +311,8 @@ def profitability_report(orders, entries, subscriptions, db=None) -> dict:
             "month": order.paid_at.strftime("%Y-%m") if order.paid_at else "Unknown payment month",
             "merchandise_revenue": merchandise, "buyer_shipping": shipping, "revenue": revenue,
             "supplier_cost": cost, "ebay_fees": fee, "fee_evidence": order.ebay_fee_evidence_ref,
-            "contribution": contribution, "missing": missing, "reconciliation": sync})
+            "contribution": contribution, "missing": missing, "reconciliation": sync,
+            "supplier_receipts": receipts})
     months = []
     month_keys = {r["month"] for r in rows} | {e.occurred_at.strftime("%Y-%m") for e in entries}
     for month in sorted(month_keys, reverse=True):

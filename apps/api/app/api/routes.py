@@ -3700,6 +3700,29 @@ def capture_profit_reconciliation(order_id: int, payload: dict, db: Session = De
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/finance/supplier-receipts/next")
+def next_supplier_receipt(db: Session = Depends(get_db)):
+    from app.services.supplier_receipts import next_receipt
+    return next_receipt(db)
+
+
+@router.post("/finance/supplier-receipts/{supplier_id}")
+def capture_supplier_receipt(supplier_id: int, payload: dict, db: Session = Depends(get_db)):
+    from app.services.supplier_receipts import capture_receipt, fail_receipt
+    order = db.get(SupplierOrder, supplier_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found.")
+    try:
+        if payload.get("error"):
+            fail_receipt(db, supplier_id, payload["error"])
+            return {"status": "needs_review"}
+        return capture_receipt(db, order, payload)
+    except ValueError as exc:
+        db.rollback()
+        fail_receipt(db, supplier_id, str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/finance/overview", response_model=FinanceOverviewRead)
 def read_finance_overview(db: Session = Depends(get_db)) -> FinanceOverviewRead:
     return FinanceOverviewRead(**finance_overview(db))
