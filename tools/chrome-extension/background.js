@@ -1290,6 +1290,52 @@ async function openNextEbayTrafficSync() {
   await chrome.storage.local.set({ [EBAY_TRAFFIC_LAST_OPENED_KEY]: Date.now() });
 }
 
+let profitReconciliationRunning = false;
+async function reconcileNextOrderProfit() {
+  if (profitReconciliationRunning || !(await canRunAutozsWorkerJobs())) return;
+  profitReconciliationRunning = true;
+  let tabId = null, candidate = null;
+  try {
+    const accountKey = await matchedEbayAccountKey();
+    if (!accountKey) return;
+    const identity = await localApiJson(`/ebay/browser-account?account_key=${encodeURIComponent(accountKey)}`);
+    if (!identity?.can_list || !identity.expected_username) return;
+    candidate = await localApiJson(`/finance/reconciliation/next?account_key=${encodeURIComponent(accountKey)}`, {method: "POST"});
+    if (!candidate) return;
+    const tab = await chrome.tabs.create({url: candidate.url, active: false});
+    tabId = tab.id;
+    let observation = null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      try {
+        const results = await chrome.scripting.executeScript({target: {tabId}, args: [candidate.ebay_order_id, accountKey, identity.expected_username], func: (orderId, account, username) => {
+          const text = document.body?.innerText || "";
+          const url = new URL(location.href);
+          if (url.hostname !== "www.ebay.com" || url.pathname !== "/mesh/ord/details" || url.searchParams.get("orderid") !== orderId) return null;
+          if (!text.includes(orderId) || !text.toLowerCase().includes(username.toLowerCase())) return null;
+          const start = text.indexOf("What your buyer paid");
+          if (start < 0) return null;
+          const section = text.slice(start);
+          const match = section.match(/^([\s\S]*?Order earnings\s+\$[\d,]+\.\d{2})/);
+          if (!match) return null;
+          const paid = text.match(/Buyer paid\s+([A-Z][a-z]{2} \d{1,2}, \d{4})/);
+          return {source_url: location.href, ebay_order_id: orderId, account_key: account,
+                  financial_text: match[1], paid_date: paid?.[1] || null};
+        }});
+        observation = results?.[0]?.result;
+        if (observation) break;
+      } catch {}
+    }
+    if (!observation) throw new Error("eBay order financial page could not be verified; automatic retry in six hours.");
+    await localApiJson(`/finance/reconciliation/${candidate.order_id}`, {method: "POST", body: JSON.stringify(observation)});
+  } catch (error) {
+    if (candidate) await localApiJson(`/finance/reconciliation/${candidate.order_id}`, {method: "POST", body: JSON.stringify({error: error.message || String(error)})}).catch(() => {});
+  } finally {
+    if (tabId) await chrome.tabs.remove(tabId).catch(() => {});
+    profitReconciliationRunning = false;
+  }
+}
+
 async function claimNextEbayOrderSync() {
   const accountKey = await matchedEbayAccountKey();
   if (!accountKey) return null;
@@ -2297,6 +2343,7 @@ const AUTOZS_ALARM_SCHEDULE = [
   [DEPOP_METRICS_ALARM, 0.5, 5],
   [EBAY_TRAFFIC_ALARM, 1, 2],
   [EBAY_ORDER_ALARM, 1, 2],
+  ["autozs-profit-reconciliation", 1, 2],
   [EBAY_TRACKING_UPLOAD_ALARM, 1, 2],
   [SUPPLIER_ORDER_ALARM, 1, 2],
   [SUPPLIER_TRACKING_ALARM, 5, 5],
@@ -2375,6 +2422,7 @@ if (chrome.alarms) {
     if (alarm?.name === EBAY_ACTIVE_LISTINGS_ALARM) openNextEbayActiveListingsSync().catch(() => {});
     if (alarm?.name === DEPOP_METRICS_ALARM) ensureDepopMetricsTab().catch(() => {});
     if (alarm?.name === EBAY_TRAFFIC_ALARM) openNextEbayTrafficSync().catch(() => {});
+    if (alarm?.name === "autozs-profit-reconciliation") reconcileNextOrderProfit().catch(() => {});
     if (alarm?.name === EBAY_ORDER_ALARM) openNextEbayOrderSync().catch(() => {});
     if (alarm?.name === EBAY_TRACKING_UPLOAD_ALARM) openNextEbayTrackingUpload().catch(() => {});
     if (alarm?.name === SUPPLIER_ORDER_ALARM) openNextSupplierOrder().catch(() => {});

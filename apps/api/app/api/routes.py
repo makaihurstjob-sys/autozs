@@ -3679,6 +3679,27 @@ def update_fulfillment_task(
     return task
 
 
+@router.post("/finance/reconciliation/next")
+def next_profit_reconciliation(account_key: str, db: Session = Depends(get_db)):
+    from app.services.profit_reconciliation import next_order
+    return next_order(db, account_key)
+
+
+@router.post("/finance/reconciliation/{order_id}")
+def capture_profit_reconciliation(order_id: int, payload: dict, db: Session = Depends(get_db)):
+    from app.services.profit_reconciliation import record_observation, record_failure
+    if db.get(Order, order_id) is None:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    try:
+        if payload.get("error"):
+            return record_failure(db, order_id, payload["error"])
+        return record_observation(db, order_id, payload)
+    except ValueError as exc:
+        db.rollback()
+        record_failure(db, order_id, str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/finance/overview", response_model=FinanceOverviewRead)
 def read_finance_overview(db: Session = Depends(get_db)) -> FinanceOverviewRead:
     return FinanceOverviewRead(**finance_overview(db))

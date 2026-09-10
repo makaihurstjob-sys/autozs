@@ -206,7 +206,7 @@ def finance_overview(db: Session) -> dict:
             }
         )
     return {
-        "profitability": profitability_report(orders, entries, subscriptions),
+        "profitability": profitability_report(orders, entries, subscriptions, db),
         "revenue": revenue,
         "supplier_cost": supplier_cost,
         "operating_expenses": operating_expenses,
@@ -266,7 +266,7 @@ def _periods(value: datetime | None) -> tuple[str, str]:
     return (f"Month {value:%Y-%m}", f"Week {iso.year}-W{iso.week:02d}")
 
 
-def profitability_report(orders, entries, subscriptions) -> dict:
+def profitability_report(orders, entries, subscriptions, db=None) -> dict:
     """Order contribution uses recorded receipts, not balances or pricing estimates.
 
     Subscription schedules are forecasts; only posted ledger expenses enter net.
@@ -277,6 +277,10 @@ def profitability_report(orders, entries, subscriptions) -> dict:
         if order.account_id == "sandbox" or not _is_realized_order(order):
             continue
         missing = []
+        from app.services.profit_reconciliation import state_for
+        sync = state_for(db, order.id) if db is not None else {}
+        if sync.get("status") == "needs_review":
+            missing.append("automatic reconciliation: " + str(sync.get("error") or "review required"))
         merchandise = round(sum(float(i.sale_price or 0) * int(i.quantity or 0) for i in order.items), 2)
         if not order.items or merchandise <= 0:
             missing.append("item revenue")
@@ -302,7 +306,7 @@ def profitability_report(orders, entries, subscriptions) -> dict:
             "month": order.paid_at.strftime("%Y-%m") if order.paid_at else "Unknown payment month",
             "merchandise_revenue": merchandise, "buyer_shipping": shipping, "revenue": revenue,
             "supplier_cost": cost, "ebay_fees": fee, "fee_evidence": order.ebay_fee_evidence_ref,
-            "contribution": contribution, "missing": missing})
+            "contribution": contribution, "missing": missing, "reconciliation": sync})
     months = []
     month_keys = {r["month"] for r in rows} | {e.occurred_at.strftime("%Y-%m") for e in entries}
     for month in sorted(month_keys, reverse=True):
