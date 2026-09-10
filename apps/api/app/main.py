@@ -48,6 +48,8 @@ def _ensure_lightweight_columns() -> None:
     existing_tables = set(inspector.get_table_names())
     migrations = {
         "orders": {
+            "buyer_shipping_revenue": "FLOAT",
+            "paid_at": "DATETIME",
             "account_id": "VARCHAR(128) DEFAULT 'sandbox' NOT NULL",
             "recipient_name": "VARCHAR(256) DEFAULT '' NOT NULL",
             "shipping_address_line1": "VARCHAR(256) DEFAULT '' NOT NULL",

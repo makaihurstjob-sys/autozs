@@ -1409,6 +1409,7 @@ class ProfitLossPeriodRead(BaseModel):
 
 
 class FinanceOverviewRead(BaseModel):
+    profitability: dict = Field(default_factory=dict)
     revenue: float
     supplier_cost: float
     operating_expenses: float

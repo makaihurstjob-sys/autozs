@@ -312,6 +312,8 @@ def test_new_sale_prepares_one_unapproved_draft_and_import_retry_preserves_it(cl
     assert draft.approved_at is None
     assert draft.attempts == 0
     draft_id = draft.id
+    assert draft.order.paid_at is not None
+    assert draft.order.buyer_shipping_revenue == 0
     assert client.post("/orders/import-file", json=payload).status_code == 200
     assert db.query(SupplierOrder).one().id == draft_id
     db.close()

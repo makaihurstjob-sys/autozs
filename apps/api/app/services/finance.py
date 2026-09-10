@@ -206,6 +206,7 @@ def finance_overview(db: Session) -> dict:
             }
         )
     return {
+        "profitability": profitability_report(orders, entries, subscriptions),
         "revenue": revenue,
         "supplier_cost": supplier_cost,
         "operating_expenses": operating_expenses,
@@ -263,3 +264,67 @@ def _periods(value: datetime | None) -> tuple[str, str]:
         return ("Month Unknown", "Week Unknown")
     iso = value.isocalendar()
     return (f"Month {value:%Y-%m}", f"Week {iso.year}-W{iso.week:02d}")
+
+
+def profitability_report(orders, entries, subscriptions) -> dict:
+    """Order contribution uses recorded receipts, not balances or pricing estimates.
+
+    Subscription schedules are forecasts; only posted ledger expenses enter net.
+    Unknown revenue/cost evidence stays unknown, never a fabricated zero.
+    """
+    rows = []
+    for order in orders:
+        if order.account_id == "sandbox" or not _is_realized_order(order):
+            continue
+        missing = []
+        merchandise = round(sum(float(i.sale_price or 0) * int(i.quantity or 0) for i in order.items), 2)
+        if not order.items or merchandise <= 0:
+            missing.append("item revenue")
+        shipping = order.buyer_shipping_revenue
+        if shipping is None:
+            missing.append("buyer shipping revenue")
+        purchases = [s for s in order.supplier_orders if s.status in PLACED_SUPPLIER_ORDER_STATUSES]
+        cost_valid = bool(purchases) and all(
+            s.external_order_id and float(s.total or 0) > 0
+            and abs(float(s.total) - float(s.card_amount or 0) - float(s.gift_card_amount or 0)) <= .01
+            and (not s.gift_card_amount or (s.gift_card and float(s.gift_card.face_value or 0) > 0))
+            for s in purchases)
+        cost = round(sum(_cash_supplier_cost(s) for s in purchases), 2) if cost_valid else None
+        if cost is None:
+            missing.append("confirmed supplier cost/payment split")
+        fee = order.ebay_fee_amount if order.ebay_fee_evidence_ref and order.ebay_fee_recorded_at else None
+        if fee is None:
+            missing.append("actual eBay fees including advertising")
+        revenue = round(merchandise + shipping, 2) if shipping is not None else None
+        contribution = round(revenue - cost - fee, 2) if not missing else None
+        rows.append({"order_id": order.id, "ebay_order_id": order.ebay_order_id,
+            "title": "; ".join(i.title for i in order.items), "status": order.status,
+            "month": order.paid_at.strftime("%Y-%m") if order.paid_at else "Unknown payment month",
+            "merchandise_revenue": merchandise, "buyer_shipping": shipping, "revenue": revenue,
+            "supplier_cost": cost, "ebay_fees": fee, "fee_evidence": order.ebay_fee_evidence_ref,
+            "contribution": contribution, "missing": missing})
+    months = []
+    month_keys = {r["month"] for r in rows} | {e.occurred_at.strftime("%Y-%m") for e in entries}
+    for month in sorted(month_keys, reverse=True):
+        group = [r for r in rows if r["month"] == month]
+        ledger = [e for e in entries if e.occurred_at.strftime("%Y-%m") == month]
+        # Generic fees cannot safely be added to per-order fees without reconciliation.
+        ambiguous_fees = any(e.entry_type == "fee" for e in ledger)
+        expenses = round(sum(abs(float(e.amount)) for e in ledger if e.entry_type in {"expense", "refund"}), 2)
+        complete = bool(group) and all(r["contribution"] is not None for r in group) and not ambiguous_fees
+        contribution = round(sum(r["contribution"] for r in group), 2) if complete else None
+        months.append({"month": month, "orders": len(group), "complete_orders": sum(r["contribution"] is not None for r in group),
+            "contribution": contribution, "recorded_expenses_refunds": expenses,
+            "recorded_net": round(contribution - expenses, 2) if complete else None,
+            "fee_reconciliation_required": ambiguous_fees})
+    run_rate = round(sum(float(s.amount) * {"monthly": 1, "annual": 1/12, "weekly": 52/12}.get(s.cadence, 0)
+                         for s in subscriptions if s.status == "active"), 2)
+    return {"as_of": datetime.utcnow().isoformat() + "Z", "orders": rows, "months": months,
+        "complete_orders": sum(r["contribution"] is not None for r in rows),
+        "monthly_subscription_run_rate": run_rate,
+        "expense_records": sum(e.entry_type in {"expense", "refund"} for e in entries),
+        "notes": ["Revenue excludes marketplace-collected sales tax; buyer shipping is included only when recorded.",
+                  "Order contribution subtracts receipt-backed supplier payment cost and recorded eBay fees. Missing amounts are not zero.",
+                  "Recorded net subtracts posted expenses and refunds; unrecorded costs and later returns can change it. Reconcile ledger expenses to avoid duplicating supplier costs or order fees.",
+                  "Subscription run rate is a planning amount, not another posted expense. No expense records does not prove there were no expenses.",
+                  "Months use the reported payment date. Historical orders without that date stay in Unknown payment month."]}

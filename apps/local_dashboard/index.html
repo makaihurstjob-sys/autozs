@@ -8408,35 +8408,39 @@
         const verifiedProfit = finance.profit_verified && finance.verified_profit !== null && finance.verified_profit !== undefined;
         return `<div class="report-grid">
           <div class="report-card wide">
-            <h3>Verified growth profit</h3>
-            ${reportRowsHtml([
-              ["Verification", verifiedProfit ? badge("verified") : badge("blocked")],
-              ["Gross merchandise sales", money(finance.gross_merchandise_revenue || 0)],
-              ["Realized fulfilled revenue", money(finance.realized_revenue || 0)],
-              ["Estimated marketplace-fee check", money(finance.estimated_marketplace_fees || 0)],
-              ["Return-risk reserve", money(finance.return_risk_reserve || 0)],
-              ["Verified profit", verifiedProfit ? money(finance.verified_profit) : "Not verified"],
-              ["Available business profit", money(finance.available_business_profit || 0)],
-              ["$8 Store/advertising gate", Number(finance.available_business_profit || 0) >= 8 && verifiedProfit ? "Ready for owner approval" : "Not reached"],
-            ])}
-            ${profitIssues.length ? `<p class="muted"><strong>Required evidence:</strong> ${profitIssues.map((issue) => esc(issue)).join(" ")}</p>` : ""}
+            <h3>Order profit evidence</h3>
+            <p class="muted">${Number(finance.profitability?.complete_orders || 0)} of ${(finance.profitability?.orders || []).length} fulfilled orders have complete revenue, supplier-cost and eBay-fee evidence. Contribution is before overhead and refunds; missing costs never count as zero.</p>
+            ${table(["Order / item", "Merchandise", "Buyer shipping", "Supplier cost", "Actual eBay fees", "Contribution", "Evidence needed"], (finance.profitability?.orders || []).map(row => [
+              `${esc(row.ebay_order_id)}<div class="muted">${esc(row.title)}</div>`, money(row.merchandise_revenue),
+              row.buyer_shipping == null ? "Unknown" : money(row.buyer_shipping),
+              row.supplier_cost == null ? "Unknown" : money(row.supplier_cost),
+              `${row.ebay_fees == null ? "Missing" : money(row.ebay_fees)} <button class="secondary" onclick="recordActualOrderFee(${Number(row.order_id)})">Record fee</button>`,
+              row.contribution == null ? "Not verified" : money(row.contribution), esc(row.missing.join(", ")) || "Complete"
+            ]))}
           </div>
           <div class="report-card wide">
-            <div class="settings-view-head">
-              <div><h3>Imported profit / loss</h3><p class="muted">This ledger is informational until the verified growth-profit card confirms supplier costs, actual eBay fees, risk reserve, and fresh available balances.</p></div>
-              <div class="actions">
-                <button class="secondary" onclick="addFinancialAccountSnapshot()">Add balance snapshot</button>
-                <button class="secondary" onclick="addSubscriptionExpense()">Add subscription</button>
-              </div>
-            </div>
-            ${table(["Period", "Orders", "Revenue", "Supplier cost", "Operating expenses", "Profit"], periods.map((row) => [
-              `<strong>${esc(row.period)}</strong>`,
-              esc(row.orders),
-              money(row.revenue),
-              money(row.supplier_cost),
-              money(row.operating_expenses),
-              `<strong>${money(row.profit)}</strong>`
+            <h3>Monthly recorded profit</h3>
+            ${table(["Payment month", "Orders with evidence", "Order contribution", "Posted expenses / refunds", "Recorded net"], (finance.profitability?.months || []).map(row => [
+              esc(row.month), `${row.complete_orders} / ${row.orders}`, row.contribution == null ? "Incomplete" : money(row.contribution),
+              money(row.recorded_expenses_refunds), row.recorded_net == null ? (row.fee_reconciliation_required ? "Reconcile fee entries" : "Incomplete") : money(row.recorded_net)
             ]))}
+            <p class="muted">Active subscriptions: ${money(finance.profitability?.monthly_subscription_run_rate || 0)}/month for planning. ${(finance.profitability?.expense_records || 0)} posted expense/refund records. Subscription schedules are not deducted again from posted expenses.</p>
+            ${(finance.profitability?.notes || []).map(note => `<p class="muted">${esc(note)}</p>`).join("")}
+            <div class="actions"><button class="secondary" onclick="addSubscriptionExpense()">Add subscription</button><button class="secondary" onclick="recordProfitExpense()">Record expense / refund</button></div>
+          </div>
+          <div class="report-card wide">
+            <h3>Would an eBay Store pay for itself?</h3>
+            <p class="muted">A positive balance or $8 in profit does not establish that a Store is worthwhile. Compare monthly fee savings plus contribution from additional sales against the added subscription cost.</p>
+            ${table(["US Store", "Monthly renewal", "Annual commitment, billed monthly", "Fixed-price allowance"], [
+              ["Starter", "$7.95", "$4.95", "250"], ["Basic", "$27.95", "$21.95", "1,000 in all categories"]
+            ])}
+            <p class="muted">Prices checked September 10, 2026; exclusions and seller limits apply. Annual plans carry commitment/cancellation terms. <a href="https://www.ebay.com/help/selling/fees-credits-invoices/store-selling-fees?id=4809" target="_blank" rel="noopener">Official eBay fees and plan details</a>.</p>
+            <div class="settings-grid">
+            <label class="settings-field">Added subscription cost per month <input id="store-monthly-cost" type="number" min="0" step="0.01" value="27.95" oninput="updateStoreScenario()"></label>
+            <label class="settings-field">Expected monthly fee savings <input id="store-monthly-savings" type="number" min="0" step="0.01" value="0" oninput="updateStoreScenario()"></label>
+            <label class="settings-field">Expected contribution from additional sales <input id="store-added-contribution" type="number" min="0" step="0.01" value="0" oninput="updateStoreScenario()"></label>
+            </div>
+            <p id="store-scenario-result">Scenario: $27.95/month additional benefit needed to cover Basic with monthly renewal. Savings and additional sales are assumptions, not verified results.</p>
           </div>
           <div class="report-card">
             <h3>Balances</h3>
@@ -8464,6 +8468,45 @@
             ])) : reportPlaceholder("Add recurring software and service costs here so they can be reconciled against imported card transactions.")}
           </div>
         </div>`;
+      }
+
+      function updateStoreScenario() {
+        const values = ["store-monthly-cost", "store-monthly-savings", "store-added-contribution"].map(id => {
+          const value = document.getElementById(id).value;
+          return value.trim() ? Number(value) : NaN;
+        });
+        const target = document.getElementById("store-scenario-result");
+        if (values.some(value => !Number.isFinite(value) || value < 0)) { target.textContent = "Enter nonnegative amounts for each scenario input."; return; }
+        const net = values[1] + values[2] - values[0];
+        target.textContent = `Scenario: ${money(net)}/month change in profit. ${net >= 0 ? "Assumed benefits cover the added cost." : `${money(-net)}/month more benefit is needed.`} Savings and additional sales are assumptions, not verified results.`;
+      }
+
+      async function recordActualOrderFee(orderId) {
+        const raw = prompt("Total actual eBay fees for this order, including advertising. Read the actual transaction breakdown; do not use a percentage estimate.");
+        if (raw === null) return;
+        const amount = Number(raw);
+        if (!raw.trim() || !Number.isFinite(amount) || amount < 0) return message("Enter the actual nonnegative fee amount.");
+        const evidence = prompt("Evidence reference: eBay order/transaction ID or report reference");
+        if (!evidence?.trim()) return;
+        await request(`/orders/${orderId}/ebay-fee`, {method: "POST", body: JSON.stringify({fee_amount: amount, evidence_ref: evidence.trim()})});
+        await refreshAll();
+        message("Actual eBay fee recorded.");
+      }
+
+      async function recordProfitExpense() {
+        const kind = prompt("Type: expense or refund", "expense");
+        if (!["expense", "refund"].includes(kind)) return;
+        const reference = prompt("Unique receipt or transaction reference. Do not re-enter supplier payments or eBay fees already recorded against an order.");
+        if (!reference?.trim()) return;
+        const raw = prompt("Actual amount paid/refunded (positive)");
+        if (raw === null || !raw.trim() || !Number.isFinite(Number(raw)) || Number(raw) <= 0) return message("Enter a positive amount.");
+        const date = prompt("Transaction date (YYYY-MM-DD)", new Date().toISOString().slice(0, 10));
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || !Number.isFinite(Date.parse(date))) return message("Enter a valid date.");
+        const description = prompt("Expense description", "");
+        if (description === null) return;
+        await request("/finance/entries/import", {method: "POST", body: JSON.stringify([{provider: "manual", external_id: reference.trim(), entry_type: kind, category: "business", amount: -Number(raw), description, occurred_at: `${date}T12:00:00Z`}])});
+        await refreshAll();
+        message("Expense record processed; duplicate references are not imported twice.");
       }
 
       async function addFinancialAccountSnapshot() {

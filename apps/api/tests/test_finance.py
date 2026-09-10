@@ -181,3 +181,49 @@ def test_finance_liquidity_ignores_non_robinhood_accounts(client) -> None:
     overview = client.get("/finance/overview").json()
     assert any("Robinhood" in issue for issue in overview["profit_data_issues"])
     assert overview["available_business_profit"] == 0.0
+
+
+def test_profitability_uses_receipts_not_tax_balances_or_missing_fees(client):
+    from app.main import app
+    from app.core.database import get_db
+    from app.models.domain import Order, OrderItem, SupplierOrder
+    db = next(app.dependency_overrides[get_db]())
+    order = Order(ebay_order_id="profit-real", account_id="real", status="shipped", total=24.60,
+                  buyer_shipping_revenue=3, paid_at=datetime(2026, 9, 2))
+    db.add(order); db.flush()
+    db.add(OrderItem(order_id=order.id, title="Test", quantity=2, sale_price=10))
+    db.add(SupplierOrder(order_id=order.id, status="shipped", external_order_id="receipt-1", total=12, card_amount=12))
+    db.commit()
+    report = client.get("/finance/overview").json()["profitability"]
+    assert report["orders"][0]["revenue"] == 23
+    assert report["orders"][0]["contribution"] is None
+    assert report["months"][0]["recorded_net"] is None
+    response = client.post(f"/orders/{order.id}/ebay-fee", json={"fee_amount":3,"evidence_ref":"transaction-1"})
+    assert response.status_code == 200
+    client.post("/finance/subscriptions", json={"name":"Annual tool", "amount":120, "cadence":"annual"})
+    client.post("/finance/entries/import", json=[{"provider":"test", "external_id":"expense-1", "entry_type":"expense", "category":"software", "amount":-2, "occurred_at":"2026-09-04T12:00:00"}, {"provider":"test", "external_id":"refund-1", "entry_type":"refund", "category":"refund", "amount":-1, "occurred_at":"2026-09-04T12:00:00"}])
+    report = client.get("/finance/overview").json()["profitability"]
+    assert report["orders"][0]["contribution"] == 8
+    assert report["months"][0]["recorded_net"] == 5
+    assert report["monthly_subscription_run_rate"] == 10
+    # A scheduled subscription is not double deducted from actual expenses.
+    assert report["complete_orders"] == 1
+    db.close()
+
+
+def test_profitability_rejects_unbalanced_supplier_payments_and_unknown_shipping(client):
+    from app.main import app
+    from app.core.database import get_db
+    from app.models.domain import Order, OrderItem, SupplierOrder
+    db = next(app.dependency_overrides[get_db]())
+    order = Order(ebay_order_id="profit-missing", account_id="real", status="shipped", total=20)
+    db.add(order); db.flush()
+    db.add(OrderItem(order_id=order.id, title="Test", quantity=1, sale_price=20))
+    db.add(SupplierOrder(order_id=order.id, status="shipped", external_order_id="receipt", total=12, card_amount=0))
+    db.commit()
+    row = client.get("/finance/overview").json()["profitability"]["orders"][0]
+    assert row["supplier_cost"] is None
+    assert row["buyer_shipping"] is None
+    assert row["contribution"] is None
+    assert row["month"] == "Unknown payment month"
+    db.close()

@@ -164,6 +164,12 @@ def import_ebay_order_report_rows(
                 setattr(order, field, reported)
         order.ship_by = _minimum_date(row["ship_by"] for row in order_rows)
         order.status = _order_status(order_rows)
+        reported_paid_at = _minimum_date(row["paid_on"] for row in order_rows)
+        if reported_paid_at:
+            order.paid_at = reported_paid_at
+        # Multi-line reports may repeat order-level shipping. Do not guess its grain.
+        if len(order_rows) == 1 and order_rows[0]["shipping"] is not None:
+            order.buyer_shipping_revenue = order_rows[0]["shipping"]
         reported_totals = [row["total"] for row in order_rows if row["total"] is not None]
         order.total = max(reported_totals) if reported_totals else round(
             sum((row["sold_for"] or 0.0) * row["quantity"] + (row["shipping"] or 0.0) for row in order_rows),
