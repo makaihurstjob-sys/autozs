@@ -838,6 +838,48 @@ function isHomeDepotTrackingUrl(url, externalOrderId) {
   }
 }
 
+function homeDepotDeliveryTrackerNumber(urlValue) {
+  try {
+    const url = new URL(urlValue);
+    if (url.protocol !== 'https:' || url.hostname !== 'delivery-tracker.pr-sc-delivery-execution.gcp.homedepot.com') return null;
+    return url.pathname.match(/^\/v1\/orders\/[^/]+\/tracking\/([A-Z0-9]{8,40})$/i)?.[1]?.toUpperCase() || null;
+  } catch { return null; }
+}
+
+function homeDepotDeliveryTrackerObservation(text, expectedNumber) {
+  const number = String(text || '').match(/Tracking\s*#\s*:\s*([A-Z0-9]{8,40})\b/i)?.[1]?.toUpperCase();
+  const carriers = [...new Set((String(text || '').match(/\b(?:UPS|FedEx|USPS|OnTrac|LaserShip|LSO)\b/gi) || []).map(value => value.toUpperCase()))];
+  if (number !== expectedNumber || carriers.length !== 1) return null;
+  const status = /delivered (?:on|at)|successfully delivered|package (?:was |has been )delivered/i.test(text) ? 'delivered'
+    : /shipment information sent|in transit|picked up|on (?:its|the) way/i.test(text) ? 'shipped' : null;
+  if (!status) return null;
+  return { trackingNumber: number, carrier: carriers[0] === 'FEDEX' ? 'FedEx' : carriers[0], status };
+}
+
+async function captureHomeDepotDeliveryTracker(senderTab, trackerUrl) {
+  const source = new URL(senderTab.url);
+  const externalOrderId = source.searchParams.get('orderNumber') || source.searchParams.get('orderId');
+  const expectedNumber = homeDepotDeliveryTrackerNumber(trackerUrl);
+  if (!isHomeDepotTrackingUrl(senderTab.url, externalOrderId) || !expectedNumber) throw new Error('Delivery tracker identity did not match.');
+  const tab = await chrome.tabs.create({ url: trackerUrl, active: false });
+  try {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const current = await chrome.tabs.get(tab.id);
+      if (homeDepotDeliveryTrackerNumber(current.url) !== expectedNumber) continue;
+      const results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => document.body?.innerText || '' }).catch(() => []);
+      const observation = homeDepotDeliveryTrackerObservation(results[0]?.result, expectedNumber);
+      if (!observation) continue;
+      const order = await reconcileSupplierTrackingObservation(senderTab.url, { ...observation, externalOrderId });
+      await recordSupplierTrackingResult(senderTab.url, 'tracking_captured');
+      return order;
+    }
+    throw new Error('Delivery tracker did not expose a verified carrier and tracking number.');
+  } finally {
+    await chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
 async function reconcileSupplierTrackingObservation(senderUrl, observation) {
   const externalOrderId = String(observation?.externalOrderId || "").trim();
   const carrier = String(observation?.carrier || "").trim();
@@ -1020,6 +1062,7 @@ function ebayTrackingUploadRunnerUrl(candidate) {
     throw new Error("Tracking upload candidate has no exact eBay or supplier order identity.");
   }
   const url = new URL("https://www.ebay.com/sh/ord");
+  url.searchParams.set('filter', 'status:ALL_ORDERS');
   url.searchParams.set("q", ebayOrderId);
   url.searchParams.set("autozs_workflow", "tracking_upload");
   url.searchParams.set("autozs_supplier_order_id", String(supplierOrderId));
@@ -1917,6 +1960,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'autozs-supplier-delivery-tracker') {
+    captureHomeDepotDeliveryTracker(sender.tab, message.trackerUrl)
+      .then(async order => {
+        sendResponse({ ok: true, status: order.status });
+        if (isSupplierTrackingRunnerUrl(sender.tab.url)) await chrome.tabs.remove(sender.tab.id);
+      })
+      .catch(async error => {
+        await recordSupplierTrackingResult(sender.tab?.url, 'delivery_tracker_unverified').catch(() => {});
+        sendResponse({ ok: false, handled: true, error: error.message });
+        if (isSupplierTrackingRunnerUrl(sender.tab?.url)) await chrome.tabs.remove(sender.tab.id).catch(() => {});
+      });
+    return true;
+  }
   if (message?.type === "autozs-supplier-tracking-observation") {
     reconcileSupplierTrackingObservation(sender.tab?.url, message)
       .then(async (order) => {
@@ -1973,7 +2029,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "autozs-ebay-tracking-prepared") {
     (async () => {
-      const senderUrl = new URL(sender.tab?.url || "");
+      const senderUrl = new URL(sender.url || sender.tab?.url || "");
       if (senderUrl.hostname !== "www.ebay.com" || !senderUrl.pathname.includes("/ship/trk/trackings")) {
         throw new Error("Prepared tracking report did not come from eBay's tracking form.");
       }

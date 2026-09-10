@@ -81,7 +81,24 @@ async function autozsObserveHomeDepotTracking() {
     });
   }
   const observation = autozsHomeDepotTrackingObservation(location.href, bodyText);
-  if (!observation) return false;
+  if (!observation) {
+    if (!autozsTrackingOrderVerified(location.href, bodyText)) return false;
+    const links = [...document.querySelectorAll('a[href]')].filter(link => {
+      try {
+        const url = new URL(link.href);
+        return url.hostname === 'delivery-tracker.pr-sc-delivery-execution.gcp.homedepot.com'
+          && /^\/v1\/orders\/[^/]+\/tracking\/[A-Z0-9]{8,40}$/i.test(url.pathname);
+      } catch { return false; }
+    });
+    const urls = [...new Set(links.map(link => link.href))];
+    // Split shipments need explicit reconciliation; never choose an arbitrary package.
+    if (urls.length !== 1) return false;
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: 'autozs-supplier-delivery-tracker', trackerUrl: urls[0] }, response => {
+        resolve(Boolean(!chrome.runtime.lastError && (response?.ok || response?.handled)));
+      });
+    });
+  }
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ type: "autozs-supplier-tracking-observation", ...observation }, (response) => {
       resolve(Boolean(!chrome.runtime.lastError && response?.ok));

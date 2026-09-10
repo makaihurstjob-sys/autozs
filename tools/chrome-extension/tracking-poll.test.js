@@ -34,3 +34,12 @@ test('tracking results persist bounded history without full URLs or tokens',asyn
  await c.recordSupplierTrackingResult('https://www.homedepot.com/auth/view/signin?redirect=%2Fmyaccount%2Fpurchase-history%3ForderId%3DWK123456','sign_in_required');
  assert.equal(storage['autozsTrackingResults:WK123456'].at(-1).outcome,'sign_in_required');
 });
+require('node:test')('tracking verification searches shipped orders as well as pending orders', () => {
+ const assert=require('node:assert/strict');
+ const c={URL,Date,AUTOZS_WORKER_OPENED_AT_PARAM:'autozs_worker_opened_at'};
+ vm.createContext(c);
+ vm.runInContext(source.slice(source.indexOf('function ebayTrackingUploadRunnerUrl('),source.indexOf('function isEbayTrackingUploadRunnerUrl(')),c);
+ const url=new URL(c.ebayTrackingUploadRunnerUrl({supplier_order_id:4,ebay_order_id:'08-15143-56000'}));
+ assert.equal(url.searchParams.get('filter'),'status:ALL_ORDERS');
+ assert.equal(url.searchParams.get('q'),'08-15143-56000');
+});

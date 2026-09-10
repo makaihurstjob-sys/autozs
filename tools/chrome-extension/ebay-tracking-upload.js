@@ -1,5 +1,6 @@
 (function () {
-  if (window !== window.top) return;
+  // Seller Hub opens Add Tracking inside a same-origin iframe.
+  if (window !== window.top && (location.hostname !== 'www.ebay.com' || location.pathname !== '/ship/trk/trackings')) return;
 
   const SESSION_KEY = "autozs_ebay_tracking_upload";
 
@@ -50,6 +51,14 @@
     return Boolean(rect && rect.width > 0 && rect.height > 0 && !element.disabled);
   }
 
+  function savedTrackingRowPresent(candidate) {
+    const number = String(candidate?.tracking_number || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    if (number.length < 8 || !candidate?.ebay_order_id) return false;
+    return [...document.querySelectorAll('.trk-number, .tracking-info button')].some(element =>
+      String(element.textContent || '').trim().toUpperCase() === number
+      && String(element.closest('tr')?.textContent || '').includes(candidate.ebay_order_id));
+  }
+
   function normalize(value) {
     return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
   }
@@ -93,7 +102,7 @@
         await new Promise(resolve => setTimeout(resolve, 500));
         continue;
       }
-      if (trackingRecordPresent(body, candidate)) {
+      if (trackingRecordPresent(body, candidate) || savedTrackingRowPresent(candidate)) {
         await reportSubmission(candidate);
         statusBanner("eBay already shows the exact carrier and tracking number. Order sync queued.", "ready");
         return true;
@@ -108,6 +117,7 @@
       });
       if (button) {
         sessionStorage.setItem(SESSION_KEY, JSON.stringify(candidate));
+        watchForSubmission(candidate);
         button.click();
         statusBanner("Exact eBay order verified. Opening Add Tracking…");
         return true;
@@ -127,7 +137,7 @@
     history.replaceState(history.state, "", guardedUrl.href);
     if (candidate.submission_attempted || candidate.verification_only) {
       statusBanner("Previous tracking submission needs verification. Checking the order again.", "working");
-      location.assign(`https://www.ebay.com/sh/ord?q=${encodeURIComponent(candidate.ebay_order_id)}&autozs_workflow=tracking_upload&autozs_supplier_order_id=${candidate.supplier_order_id}`);
+      location.assign(`https://www.ebay.com/sh/ord?filter=status:ALL_ORDERS&q=${encodeURIComponent(candidate.ebay_order_id)}&autozs_workflow=tracking_upload&autozs_supplier_order_id=${candidate.supplier_order_id}`);
       return false;
     }
     if (!String(document.body?.innerText || "").includes(candidate.ebay_order_id)) {
@@ -193,7 +203,7 @@
     let completed = false;
     let reporting = false;
     const check = async () => {
-      if (completed || reporting || !trackingSubmissionConfirmed(document.body?.innerText || "", candidate)) return;
+      if (completed || reporting || !(trackingSubmissionConfirmed(document.body?.innerText || "", candidate) || savedTrackingRowPresent(candidate))) return;
       reporting = true;
       try { await reportSubmission(candidate); }
       finally { reporting = false; }
@@ -230,5 +240,5 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run, { once: true });
   else run();
 
-  globalThis.autozsEbayTrackingUploadTest = { trackingRunnerIdentity, trackingPayloadIsSafe, trackingSubmissionConfirmed, trackingRecordPresent, fillTrackingForm };
+  globalThis.autozsEbayTrackingUploadTest = { trackingRunnerIdentity, trackingPayloadIsSafe, trackingSubmissionConfirmed, trackingRecordPresent, savedTrackingRowPresent, fillTrackingForm };
 })();

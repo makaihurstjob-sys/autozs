@@ -78,3 +78,22 @@ test('automatic submission is once-only and refuses a mismatched order', async (
   assert.equal(helpers.trackingRecordPresent('Order 03-15078-33225 Shipped UPS Tracking 1Z999AA10123456784',candidate),true);
   assert.equal(helpers.trackingRecordPresent('Order 03-15078-33225 Shipped FedEx Tracking 1Z999AA10123456784',candidate),false);
 });
+require('node:test')('tracking script initializes inside the eBay tracking iframe only', () => {
+  const assert = require('node:assert/strict');
+  const frame = { console, URL, window: { top: {} }, location: { hostname: 'www.ebay.com', pathname: '/ship/trk/trackings' }, document: { readyState: 'loading', addEventListener() {} }, globalThis: {} };
+  vm.createContext(frame);
+  vm.runInContext(source, frame);
+  assert.equal(typeof frame.globalThis.autozsEbayTrackingUploadTest.fillTrackingForm, 'function');
+  frame.location.pathname = '/unrelated';
+  frame.globalThis = {};
+  vm.runInContext(source, frame);
+  assert.equal(frame.globalThis.autozsEbayTrackingUploadTest, undefined);
+});
+require('node:test')('saved tracking must belong to the exact order row', () => {
+  const assert = require('node:assert/strict');
+  const candidate = { ebay_order_id: '08-15143-56000', tracking_number: '538849338995' };
+  context.document.querySelectorAll = () => [{ textContent: '538849338995', closest: () => ({ textContent: 'Order 08-15143-56000 Tracking 538849338995' }) }];
+  assert.equal(helpers.savedTrackingRowPresent(candidate), true);
+  assert.equal(helpers.savedTrackingRowPresent({ ...candidate, ebay_order_id: '03-15078-33225' }), false);
+  assert.equal(helpers.savedTrackingRowPresent({ ...candidate, tracking_number: '999999999999' }), false);
+});

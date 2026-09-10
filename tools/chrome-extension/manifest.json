@@ -33,6 +33,7 @@
     "http://localhost:8000/*",
     "https://www.amazon.com/*",
     "https://www.homedepot.com/*",
+    "https://delivery-tracker.pr-sc-delivery-execution.gcp.homedepot.com/*",
     "https://www.lowes.com/*",
     "https://www.ebay.com/*",
     "https://sell.ebay.com/*",
