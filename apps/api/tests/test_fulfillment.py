@@ -297,3 +297,72 @@ def test_home_depot_payment_card_is_secured_and_brokered_only_to_claim(client, m
     assert body["cardholder_name"] == "Test Seller"
     assert body["billing_postal_code"] == "80226"
     assert credential.headers["cache-control"] == "no-store"
+
+import pytest
+
+@pytest.mark.parametrize('status', ['placed', 'shipped', 'delivered', 'cancelled'])
+def test_purchased_order_cannot_be_prepared_or_approved_again(client, status):
+    from app.main import app
+    from app.core.database import get_db
+    from app.models.domain import SupplierOrder
+    prepared = _prepare_order(client).json()
+    db = next(app.dependency_overrides[get_db]())
+    row = db.get(SupplierOrder, prepared['id'])
+    row.status = status
+    row.external_order_id = 'WK12345678'
+    row.total = 21.23
+    db.commit()
+    response = client.post(f"/orders/{prepared['order_id']}/supplier-orders/prepare", json={'address_line1': 'Changed address'})
+    assert response.status_code == 200
+    assert response.json()['id'] == prepared['id']
+    assert response.json()['status'] == status
+    assert response.json()['total'] == 21.23
+    assert response.json()['address_line1'] == prepared['address_line1']
+    assert client.post(f"/supplier-orders/{prepared['id']}/approve").status_code == 422
+    assert client.patch(f"/supplier-orders/{prepared['id']}", json={'status':'queued'}).status_code == 422
+    assert db.query(SupplierOrder).count() == 1
+    db.close()
+
+
+def test_repeated_approval_and_prepare_preserve_active_checkout_lease(client):
+    from app.main import app
+    from app.core.database import get_db
+    from app.models.domain import SupplierOrder
+    prepared = _prepare_order(client).json()
+    client.post(f"/supplier-orders/{prepared['id']}/approve")
+    claimed = client.post('/supplier-orders/next').json()
+    db = next(app.dependency_overrides[get_db]())
+    row = db.get(SupplierOrder, prepared['id'])
+    token = row.checkout_token
+    assert token
+    repeated = client.post(f"/supplier-orders/{prepared['id']}/approve").json()
+    assert repeated['status'] == 'placing'
+    db.refresh(row)
+    assert row.checkout_token == token
+    again = client.post(f"/orders/{prepared['order_id']}/supplier-orders/prepare", json={}).json()
+    assert again['status'] == 'placing'
+    assert again['approved_total'] == claimed['approved_total']
+    db.refresh(row)
+    assert row.checkout_token == token
+    db.close()
+
+
+def test_expired_checkout_requires_reconciliation_not_automatic_retry(client):
+    from datetime import datetime, timedelta
+    from app.main import app
+    from app.core.database import get_db
+    from app.models.domain import SupplierOrder
+    prepared = _prepare_order(client).json()
+    client.post(f"/supplier-orders/{prepared['id']}/approve")
+    client.post('/supplier-orders/next')
+    db = next(app.dependency_overrides[get_db]())
+    row = db.get(SupplierOrder, prepared['id'])
+    row.lease_expires_at = datetime.utcnow() - timedelta(minutes=1)
+    db.commit()
+    assert client.post('/supplier-orders/next').json() is None
+    db.refresh(row)
+    assert row.status == 'needs_review'
+    assert row.checkout_token == ''
+    assert row.attempts == 1
+    assert client.post('/supplier-orders/next').json() is None
+    db.close()
