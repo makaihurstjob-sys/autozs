@@ -364,5 +364,10 @@ def test_expired_checkout_requires_reconciliation_not_automatic_retry(client):
     assert row.status == 'needs_review'
     assert row.checkout_token == ''
     assert row.attempts == 1
+    from app.models.domain import SupplierPurchaseAttempt
+    attempt = db.query(SupplierPurchaseAttempt).one()
+    assert attempt.status == 'uncertain'
+    assert attempt.attempt_number == 1
+    assert attempt.finished_at is not None
     assert client.post('/supplier-orders/next').json() is None
     db.close()

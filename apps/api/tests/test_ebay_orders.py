@@ -298,3 +298,33 @@ def test_multiple_sold_out_items_queue_only_one_restore(client):
         assert db.query(ListingJob).count() == 0
     finally:
         db.close()
+
+
+def test_new_sale_prepares_one_unapproved_draft_and_import_retry_preserves_it(client):
+    from app.models.domain import SupplierOrder
+    _captured_product(client)
+    payload = {"account_key": "a.m.anim-59", "filename": "orders.csv",
+               "report_base64": base64.b64encode(_orders_csv()).decode()}
+    assert client.post("/orders/import-file", json=payload).status_code == 200
+    db = next(app.dependency_overrides[get_db]())
+    draft = db.query(SupplierOrder).one()
+    assert draft.status in {"draft", "needs_review"}
+    assert draft.approved_at is None
+    assert draft.attempts == 0
+    draft_id = draft.id
+    assert client.post("/orders/import-file", json=payload).status_code == 200
+    assert db.query(SupplierOrder).one().id == draft_id
+    db.close()
+
+
+def test_unpaid_sale_waits_then_prepares_when_payment_arrives(client):
+    from app.models.domain import SupplierOrder
+    from app.services.orders import import_ebay_order_report_rows, parse_ebay_order_report
+    db = next(app.dependency_overrides[get_db]())
+    rows = parse_ebay_order_report(_orders_csv())
+    unpaid = [{key: ("" if "paid" in key.lower() else value) for key, value in row.items()} for row in rows]
+    import_ebay_order_report_rows(db, rows=unpaid, account_key="test")
+    assert db.query(SupplierOrder).count() == 0
+    import_ebay_order_report_rows(db, rows=rows, account_key="test")
+    assert db.query(SupplierOrder).count() == 1
+    db.close()

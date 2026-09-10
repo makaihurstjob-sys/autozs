@@ -221,6 +221,15 @@ def import_ebay_order_report_rows(
     for order in new_orders:
         db.expire(order, ["items"])
         ensure_order_thank_you_draft(db, order)
+    from app.services.fulfillment import prepare_supplier_order
+    for order in db.scalars(select(Order).where(
+        Order.account_id == account_key,
+        Order.ebay_order_id.in_(grouped),
+        Order.status == "imported",
+        ~Order.supplier_orders.any(),
+    )).all():
+        db.expire(order, ["items"])
+        prepare_supplier_order(db, order.id, commit=False)
 
     run = db.get(EbaySyncRun, run_id) if run_id else None
     if run is not None:

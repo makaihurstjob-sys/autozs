@@ -785,6 +785,19 @@ class SupplierOrder(Base, TimestampMixin):
     ledger_entries: Mapped[list["GiftCardLedgerEntry"]] = relationship(back_populates="supplier_order")
 
 
+class SupplierPurchaseAttempt(Base, TimestampMixin):
+    __tablename__ = "supplier_purchase_attempts"
+    __table_args__ = (UniqueConstraint("supplier_order_id", "attempt_number", name="uq_supplier_purchase_attempt"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_order_id: Mapped[int] = mapped_column(ForeignKey("supplier_orders.id"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    approved_total: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(32), default="started")
+    external_order_id: Mapped[str] = mapped_column(String(128), default="")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class SupplierOrderItem(Base, TimestampMixin):
     __tablename__ = "supplier_order_items"
 

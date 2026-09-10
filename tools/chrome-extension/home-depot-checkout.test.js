@@ -238,3 +238,12 @@ require('node:test')('waiting result requires the exact order details heading',(
  assert.equal(context.autozsTrackingOrderVerified(url,'Enter Your Email Address'),false);
  assert.equal(context.autozsTrackingOrderVerified(url.replace('order-details','purchase-history'),'ORDER # WK37553521'),false);
 });
+
+require('node:test')('cart rejects equal-price substitutions, extra items, wrong quantities, and missing evidence', () => {
+  const assert = require('node:assert/strict');
+  const item = { source_url: 'https://www.homedepot.com/p/Test/123456789', quantity: 2 };
+  assert.equal(context.autozsCartItemsMatch([item], [item]), true);
+  for (const observed of [[], [{...item, quantity: 1}], [{...item, source_url: 'https://www.homedepot.com/p/Test/987654321'}], [item, item], [{...item, quantity: null}]]) {
+    assert.equal(context.autozsCartItemsMatch([item], observed), false);
+  }
+});

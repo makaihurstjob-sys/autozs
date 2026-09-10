@@ -504,6 +504,37 @@ function autozsHomeDepotCheckoutSignIn(pathname) {
   return /^\/auth\/view\/checkout(?:\/|$)/i.test(String(pathname || ""));
 }
 
+function autozsCartItemsMatch(expectedItems, observedItems) {
+  const productId = value => {
+    try {
+      const url = new URL(value);
+      return url.hostname === "www.homedepot.com" ? url.pathname.match(/^\/p\/[^/]+\/(\d+)\/?$/)?.[1] : null;
+    } catch { return null; }
+  };
+  const normalize = items => {
+    const result = new Map();
+    for (const item of items || []) {
+      const id = productId(item.source_url);
+      const quantity = Number(item.quantity);
+      if (!id || !Number.isSafeInteger(quantity) || quantity <= 0 || result.has(id)) return null;
+      result.set(id, quantity);
+    }
+    return result.size ? result : null;
+  };
+  const expected = normalize(expectedItems), observed = normalize(observedItems);
+  return Boolean(expected && observed && expected.size === observed.size
+    && [...expected].every(([id, quantity]) => observed.get(id) === quantity));
+}
+
+function autozsReadCartItems() {
+  const rows = [...document.querySelectorAll('[data-testid="cart-item"], [data-testid="cartItem"], .cart-item')];
+  return rows.map(row => {
+    const urls = [...new Set([...row.querySelectorAll('a[href*="/p/"]')].map(link => link.href))];
+    const quantities = row.querySelectorAll('input[name*="quantity" i], input[aria-label*="quantity" i], select[aria-label*="quantity" i]');
+    return { source_url: urls.length === 1 ? urls[0] : "", quantity: quantities.length === 1 ? quantities[0].value : null };
+  });
+}
+
 async function autozsRunCartCheckoutCanary(supplierOrderId, supplierOrder) {
   autozsCheckoutProgress(76, "Verifying the Home Depot cart subtotal…");
   await new Promise((resolve) => setTimeout(resolve, 1800));
@@ -552,6 +583,12 @@ async function autozsRunCartCheckoutCanary(supplierOrderId, supplierOrder) {
     }
     const reason = `Checkout blocked: Home Depot cart subtotal is ${cartSubtotal === null ? "unreadable" : `$${cartSubtotal.toFixed(2)}`}; approved subtotal is $${expectedSubtotal.toFixed(2)}.`;
     await autozsMarkCheckoutReview(supplierOrderId, reason, cartSubtotal === null ? {} : { item_subtotal: cartSubtotal, total: cartSubtotal });
+    autozsCheckoutProgress(100, reason, "error");
+    return;
+  }
+  if (!autozsCartItemsMatch(supplierOrder.items, autozsReadCartItems())) {
+    const reason = "Checkout blocked: cart item identities and quantities could not be verified against the approved order.";
+    await autozsMarkCheckoutReview(supplierOrderId, reason);
     autozsCheckoutProgress(100, reason, "error");
     return;
   }

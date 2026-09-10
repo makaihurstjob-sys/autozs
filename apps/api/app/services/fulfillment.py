@@ -14,6 +14,7 @@ from app.models.domain import (
     Product,
     SupplierOrder,
     SupplierOrderItem,
+    SupplierPurchaseAttempt,
     SupplierOrderStatus,
 )
 
@@ -216,6 +217,7 @@ def prepare_supplier_order(
     db: Session,
     order_id: int,
     *,
+    commit: bool = True,
     gift_card_id: int | None = None,
     recipient_name: str = "",
     address_line1: str = "",
@@ -235,6 +237,8 @@ def prepare_supplier_order(
     )
     if order is None:
         raise LookupError("Order not found.")
+    if order.status in {"cancelled", "shipped", "delivered"} and not order.supplier_orders:
+        raise ValueError("Cannot prepare a cancelled or fulfilled order.")
     purchased = next((row for row in order.supplier_orders if _purchase_recorded(row)), None)
     if purchased is not None:
         return _load_supplier_order(db, purchased.id)
@@ -270,7 +274,7 @@ def prepare_supplier_order(
             **recipient_defaults,
         )
         _refresh_supplier_order_readiness(db, existing)
-        db.commit()
+        db.commit() if commit else db.flush()
         return _load_supplier_order(db, existing.id)
 
     card = db.get(GiftCard, gift_card_id) if gift_card_id is not None else None
@@ -322,7 +326,7 @@ def prepare_supplier_order(
         supplier_order.failure_reason = "This eBay order contains products from multiple suppliers and must be split."
     supplier_order.shipping_cost = round(shipping_total, 2)
     _refresh_supplier_order_readiness(db, supplier_order)
-    db.commit()
+    db.commit() if commit else db.flush()
     return _load_supplier_order(db, supplier_order.id)
 
 
@@ -361,6 +365,7 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
         )
     ).all()
     for supplier_order in stale:
+        _finish_purchase_attempt(db, supplier_order, "uncertain")
         supplier_order.status = SupplierOrderStatus.needs_review.value
         supplier_order.failure_reason = "Browser checkout lease expired; verify supplier purchase history before retrying."
         supplier_order.lease_expires_at = None
@@ -395,6 +400,7 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
     supplier_order.attempts = int(supplier_order.attempts or 0) + 1
     supplier_order.lease_expires_at = now + timedelta(minutes=10)
     supplier_order.checkout_token = secrets.token_urlsafe(32)
+    db.add(SupplierPurchaseAttempt(supplier_order_id=supplier_order.id, attempt_number=supplier_order.attempts, approved_total=supplier_order.approved_total, status="started"))
     db.commit()
     return _load_supplier_order(db, supplier_order.id)
 
@@ -538,6 +544,17 @@ def _readiness_issues(supplier_order: SupplierOrder) -> list[str]:
     return issues
 
 
+def _finish_purchase_attempt(db: Session, supplier_order: SupplierOrder, status: str) -> None:
+    attempt = db.scalar(select(SupplierPurchaseAttempt).where(
+        SupplierPurchaseAttempt.supplier_order_id == supplier_order.id,
+        SupplierPurchaseAttempt.attempt_number == supplier_order.attempts,
+    ))
+    if attempt is not None:
+        attempt.status = status
+        attempt.external_order_id = supplier_order.external_order_id
+        attempt.finished_at = datetime.utcnow()
+
+
 def _apply_supplier_order_status(db: Session, supplier_order: SupplierOrder, status: str) -> None:
     now = datetime.utcnow()
     if status == SupplierOrderStatus.placed.value:
@@ -571,6 +588,7 @@ def _apply_supplier_order_status(db: Session, supplier_order: SupplierOrder, sta
     elif status == SupplierOrderStatus.cancelled.value:
         supplier_order.lease_expires_at = None
     if status != SupplierOrderStatus.placing.value:
+        _finish_purchase_attempt(db, supplier_order, status)
         supplier_order.checkout_token = ""
     supplier_order.status = status
 
