@@ -3706,7 +3706,7 @@
         ] : [
           ["Drafts", draftProducts().length],
           ["Scheduled", ebayListingItems().filter(listingIsScheduled).length],
-          ["Listings", ebayListingItems().filter(listingIsLive).length],
+          ["Listings", confirmedLiveListingCount()],
           ["Orders", state.orders.length],
           ["30D Views", Number(state.listingViewsSummary?.views_30d || 0).toLocaleString()],
         ]).map(([label, value]) => `<span class="header-stat">${esc(label)} <strong>${esc(value)}</strong></span>`).join("");
@@ -7443,8 +7443,17 @@
         return scheduleDate(item.listing_started_at) || scheduleDate(item.listing_job?.listing_schedule_at);
       }
 
+      function confirmedLiveListingCount() {
+        const account = selectedEbayStoreKey();
+        return new Set((state.ebayListings || []).filter(listing =>
+          listing.account_id === account && listing.listing_id
+          && ["active", "live", "listed"].includes(String(listing.status || "").toLowerCase())
+        ).map(listing => String(listing.listing_id))).size;
+      }
+
       function listingIsLive(item) {
         const status = String(item.listing_status || "").toLowerCase();
+        if (["ended", "tombstoned", "cancelled", "deleted"].includes(status)) return false;
         const scheduledStart = listingStartInstant(item);
         if (scheduledStart && scheduledStart > new Date()) return false;
         if (["active", "live", "listed"].includes(status)) return true;
@@ -7455,6 +7464,7 @@
       }
 
       function listingIsScheduled(item) {
+        if (["ended", "tombstoned", "cancelled", "deleted"].includes(String(item.listing_status || "").toLowerCase())) return false;
         if (listingIsLive(item) || item.listing_job?.status === "tombstoned") return false;
         const scheduledStart = listingStartInstant(item);
         if (scheduledStart && scheduledStart > new Date()) return true;
