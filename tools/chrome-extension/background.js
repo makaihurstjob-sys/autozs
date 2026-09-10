@@ -1316,7 +1316,9 @@ async function reconcileNextSupplierReceipt() {
             for(let i=0;i<10;i++) {
               await new Promise(resolve=>setTimeout(resolve,300));
               const dialog=document.querySelector('[role="dialog"]');
-              if(dialog?.innerText?.includes('Adjusted Total')) {chargeText=dialog.innerText;break;}
+              const body=document.body?.innerText || '';
+              const history=dialog?.innerText || body.slice(body.lastIndexOf('Charge History'));
+              if(history.startsWith('Charge History') && history.includes('Adjusted Total')) {chargeText=history;break;}
             }
           }
           return {source_url:location.href,external_order_id:orderId,financial_text:match[0],charge_history_text:chargeText};
