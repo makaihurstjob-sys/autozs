@@ -9,6 +9,9 @@ from app.models.domain import (
     EbayRevisionJob,
     EbayRevisionJobStatus,
     ListingDraft,
+    ListingJob,
+    Order,
+    OrderItem,
     Product,
     ProductStatus,
     SourceRefreshJob,
@@ -252,7 +255,7 @@ def enqueue_ebay_stock_revisions(
         if reason is not None:
             wanted_action = None if already_out_of_stock else OUT_OF_STOCK_ACTION
         else:
-            wanted_action = RESTOCK_ACTION if already_out_of_stock else None
+            wanted_action = RESTOCK_ACTION if already_out_of_stock or sold_listing_restock_allowed(db, listing, supplier) else None
 
         open_job = db.scalar(
             select(EbayRevisionJob)
@@ -297,6 +300,47 @@ def enqueue_ebay_stock_revisions(
 
     db.commit()
     return blocked, released
+
+
+def sold_listing_restock_allowed(db: Session, listing: EbayListing, supplier: SupplierProduct) -> bool:
+    """Restore an existing sold-out item only with fresh stock and no competing listing."""
+    from app.services.listing_exclusions import listing_exclusion_reason
+
+    if (int(listing.quantity or 0) > 0 or listing.status not in {"active", "live", "listed"}
+        or listing.relist_blocked or listing_exclusion_reason(db, listing.product_id)
+        or supplier.in_stock is not True or supplier_availability_block(supplier)
+        or supplier.last_price is None or supplier.updated_at < _now() - timedelta(hours=24)):
+        return False
+    if db.scalar(select(EbayListing.id).where(
+        EbayListing.product_id == listing.product_id,
+        EbayListing.account_id == listing.account_id,
+        EbayListing.id != listing.id,
+        EbayListing.status.in_(REVISION_LISTING_STATUSES),
+        EbayListing.quantity > 0,
+    ).limit(1)) is not None:
+        return False
+    if db.scalar(select(ListingJob.id).where(
+        ListingJob.product_id == listing.product_id,
+        ListingJob.ebay_account_key == listing.account_id,
+        ListingJob.action == "publish",
+        ListingJob.status.in_(("queued", "running", "needs_review", "ready_to_save", "paused")),
+    ).limit(1)) is not None:
+        return False
+    # Multiple historical sold-out rows must not all become sellable at once.
+    newest = db.scalar(select(EbayListing.id).where(
+        EbayListing.product_id == listing.product_id,
+        EbayListing.account_id == listing.account_id,
+        EbayListing.status.in_(("active", "live", "listed")),
+        EbayListing.quantity <= 0,
+        EbayListing.relist_blocked.is_(False),
+    ).order_by(EbayListing.created_at.desc(), EbayListing.id.desc()).limit(1))
+    if newest != listing.id:
+        return False
+    return db.scalar(select(OrderItem.id).join(Order).where(
+        OrderItem.product_id == listing.product_id,
+        Order.account_id == listing.account_id,
+        Order.status != "cancelled",
+    ).limit(1)) is not None
 
 
 def enqueue_zero_view_retirement(db: Session, listing_id: int, replacement_product_id: int) -> EbayRevisionJob:

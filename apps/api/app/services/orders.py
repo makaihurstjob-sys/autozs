@@ -273,9 +273,11 @@ def _queue_automatic_restock(
         return
     if listing.status not in ("scheduled", "listed", "live", "active", "ended"):
         return
-    listing.status = "ended"
-
-    _queue_replacement_publish(db, product=product, account_key=account_key, excluded_listing_id=listing.id)
+    # A sale does not mean eBay ended the item: fixed-price listings can remain
+    # active at quantity zero. The stock worker restores that same item ID.
+    if listing.status == "ended":
+        _queue_replacement_publish(db, product=product, account_key=account_key,
+                                   excluded_listing_id=listing.id, require_confirmed_stock=True)
 
 
 def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None) -> dict[str, int]:
@@ -286,6 +288,8 @@ def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None
     sale, ended listing, and current active-listing evidence on every worker pass.
     """
     checked_at = now or datetime.utcnow()
+    from app.services.ebay_revisions import enqueue_ebay_stock_revisions
+
     sold_product_ids = set(
         db.scalars(
             select(OrderItem.product_id)
@@ -293,6 +297,7 @@ def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None
             .where(OrderItem.product_id.is_not(None), Order.status != "cancelled")
         ).all()
     )
+    enqueue_ebay_stock_revisions(db, product_ids=list(sold_product_ids))
     result = {"candidates": 0, "queued": 0, "awaiting_confirmation": 0, "confirmed_active": 0}
     for product_id in sold_product_ids:
         product = db.get(Product, product_id)
@@ -336,6 +341,10 @@ def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None
         )
         open_job = _open_replacement_job(db, product_id=product_id, account_key=account_key)
         if pending_listing is not None or open_job is not None:
+            result["awaiting_confirmation"] += 1
+            continue
+        if sold_out_listing.status != "ended":
+            # Active zero-quantity items are revised, never republished.
             result["awaiting_confirmation"] += 1
             continue
         if _queue_replacement_publish(

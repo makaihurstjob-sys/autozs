@@ -88,14 +88,10 @@ def test_chrome_order_report_import_is_idempotent_and_matches_listing(client) ->
     assert orders[0]["items"][0]["sale_price"] == 19.53
     assert orders[0]["fulfillment_tasks"][0]["status"] == "open"
     listings = client.get("/ebay/listings").json()
-    assert listings[0]["status"] == "ended"
+    assert listings[0]["status"] == "active"
     assert listings[0]["quantity"] == 0
     restock_jobs = client.get("/listing-jobs").json()
-    assert len(restock_jobs) == 1
-    assert restock_jobs[0]["product_id"] == product["id"]
-    assert restock_jobs[0]["action"] == "publish"
-    assert restock_jobs[0]["status"] == "queued"
-    assert "automatic restock" in restock_jobs[0]["message"]
+    assert restock_jobs == []
 
     repeated = client.post("/orders/import-file", json=payload)
     assert repeated.status_code == 200
@@ -103,7 +99,7 @@ def test_chrome_order_report_import_is_idempotent_and_matches_listing(client) ->
     assert len(repeated_orders) == 1
     assert len(repeated_orders[0]["items"]) == 1
     assert len(repeated_orders[0]["fulfillment_tasks"]) == 1
-    assert len(client.get("/listing-jobs").json()) == 1
+    assert len(client.get("/listing-jobs").json()) == 0
 
 
 def test_sold_listing_reconciler_repairs_failed_publish_and_waits_for_live_confirmation(client) -> None:
@@ -111,13 +107,14 @@ def test_sold_listing_reconciler_repairs_failed_publish_and_waits_for_live_confi
     session_provider = app.dependency_overrides[get_db]
     db = next(session_provider())
     try:
-        first_job = db.query(ListingJob).one()
+        listing = db.query(EbayListing).one()
+        first_job = ListingJob(product_id=listing.product_id, ebay_account_key=listing.account_id, action="publish", status="failed")
+        db.add(first_job)
         first_job.status = "failed"
         first_job.completed_at = datetime.utcnow()
-        # Seller Hub's Active Listings report can retain the item as active even
-        # though its available quantity is zero.
+        # Only a genuinely ended listing needs a replacement publication.
         sold_listing = db.query(EbayListing).filter(EbayListing.listing_id == "800123456789").one()
-        sold_listing.status = "active"
+        sold_listing.status = "ended"
         supplier = db.query(SupplierProduct).filter(SupplierProduct.product_id == first_job.product_id).one()
         supplier.in_stock = True
         supplier.updated_at = datetime.utcnow()
@@ -181,7 +178,10 @@ def test_restock_respects_product_exclusions_on_sale_and_retry(client, exclusion
     test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
     db = next(app.dependency_overrides[get_db]())
     try:
-        job = db.query(ListingJob).one()
+        listing = db.query(EbayListing).one()
+        job = ListingJob(product_id=listing.product_id, ebay_account_key=listing.account_id, action="publish", status="failed")
+        db.add(job)
+        db.flush()
         job.status = 'cancelled' if exclusion == 'cancelled' else 'failed'
         product = db.get(Product, job.product_id)
         listing = db.query(EbayListing).one()
@@ -217,6 +217,84 @@ def test_unmatched_sale_item_does_not_decrement_another_listing(client):
         listing = db.query(EbayListing).one()
         assert listing.quantity == 1
         assert listing.status == 'active'
+        assert db.query(ListingJob).count() == 0
+    finally:
+        db.close()
+
+
+def test_sold_active_listing_restores_same_item_and_never_publishes(client):
+    from app.models.domain import EbayRevisionJob
+    from app.services.ebay_revisions import enqueue_ebay_stock_revisions
+    test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        supplier = db.query(SupplierProduct).one()
+        supplier.in_stock = True
+        supplier.updated_at = datetime.utcnow()
+        db.commit()
+        reconcile_sold_listing_replacements(db)
+        jobs = db.query(EbayRevisionJob).filter_by(action='restore_stock').all()
+        assert len(jobs) == 1
+        assert jobs[0].ebay_listing_id == db.query(EbayListing).one().id
+        assert jobs[0].status == 'queued'
+        assert db.query(ListingJob).count() == 0
+        enqueue_ebay_stock_revisions(db)
+        reconcile_sold_listing_replacements(db)
+        assert db.query(EbayRevisionJob).filter_by(action='restore_stock').count() == 1
+        assert jobs[0].status == 'queued'
+        listing = db.query(EbayListing).one()
+        listing.quantity = 1
+        jobs[0].status = 'completed'
+        db.commit()
+        assert reconcile_sold_listing_replacements(db)['queued'] == 0
+        assert db.query(ListingJob).count() == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('block', ['stale', 'unknown', 'out_of_stock', 'paused', 'blocked', 'sibling', 'other_account'])
+def test_sold_stock_restoration_requires_fresh_stock_and_no_duplicate(client, block):
+    from datetime import timedelta
+    from app.models.domain import EbayRevisionJob, Order
+    test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        listing = db.query(EbayListing).one()
+        supplier = db.query(SupplierProduct).one()
+        supplier.in_stock = True
+        supplier.updated_at = datetime.utcnow()
+        if block == 'stale': supplier.updated_at -= timedelta(days=2)
+        if block == 'unknown': supplier.last_price = None
+        if block == 'out_of_stock': supplier.in_stock = False
+        if block == 'paused': db.get(Product, listing.product_id).status = 'paused'
+        if block == 'blocked': listing.relist_blocked = True
+        if block == 'other_account': db.query(Order).one().account_id = 'different-seller'
+        if block == 'sibling':
+            db.add(EbayListing(product_id=listing.product_id, account_id=listing.account_id,
+                               listing_id='800123456790', status='active', quantity=1))
+        db.commit()
+        reconcile_sold_listing_replacements(db)
+        assert db.query(EbayRevisionJob).filter_by(action='restore_stock').count() == 0
+        assert db.query(ListingJob).count() == 0
+    finally:
+        db.close()
+
+
+def test_multiple_sold_out_items_queue_only_one_restore(client):
+    from app.models.domain import EbayRevisionJob
+    test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        listing = db.query(EbayListing).one()
+        supplier = db.query(SupplierProduct).one()
+        supplier.in_stock = True
+        supplier.updated_at = datetime.utcnow()
+        db.add(EbayListing(product_id=listing.product_id, account_id=listing.account_id,
+                           listing_id='800123456790', status='active', quantity=0))
+        db.commit()
+        reconcile_sold_listing_replacements(db)
+        reconcile_sold_listing_replacements(db)
+        assert db.query(EbayRevisionJob).filter_by(action='restore_stock', status='queued').count() == 1
         assert db.query(ListingJob).count() == 0
     finally:
         db.close()
