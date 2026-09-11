@@ -1,7 +1,17 @@
 # Agent assignment board
 
 Coordinator: Benny. Setup date: September 11, 2026.
-Round: initial parallel code audits completed and reviewed; no agents running and no live changes assigned.
+Round: implementation round dispatched from 8355c1b; live resources remain coordinator-only.
+
+## Active implementation round
+
+| Task | Owner | Branch / worktree | Permitted edits | Acceptance | Status |
+| --- | --- | --- | --- | --- | --- |
+| Uncertain submission guard | /root/posting_fix | agents/posting-fix-20260911 / C:/AutoZS/worktrees/posting-fix-20260911 | tools/chrome-extension posting code and tests; docs/agents/posting-implementation.md | Persist before click, hold unknown outcomes across restart, reconcile confirmation, isolated regressions | Running |
+| Bounded delivery trial | /root/delivery_trial | agents/delivery-trial-20260911 / C:/AutoZS/worktrees/delivery-trial-20260911 | delivery API/service/tests; tools/delivery-check-extension if needed; docs/agents/delivery-implementation.md | One product/ZIP with broad gate off, revocation and existing behavior covered | Running |
+| Account-scoped replacement | /root/inventory_fix | agents/inventory-fix-20260911 / C:/AutoZS/worktrees/inventory-fix-20260911 | apps/api/app/services/orders.py and tests/test_ebay_orders.py; docs/agents/inventory-implementation.md | Reproduce cross-account bug, fix account-scoped repair and idempotency | Running |
+
+Base for all three: 8355c1b. No operational API/database/browser actions or service activation authorized to workers. Inspect test fixtures before execution; use only disposable databases/mocked external services. Report scope expansion needs to coordinator. Earlier audit-round restrictions below are historical to that round.
 
 | Task | Owner | Branch / worktree | Scope | Acceptance | Status |
 | --- | --- | --- | --- | --- | --- |
