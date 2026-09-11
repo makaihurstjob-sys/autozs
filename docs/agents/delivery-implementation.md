@@ -30,3 +30,19 @@ Six new backend regressions cover target/ZIP isolation against pre-existing broa
 
 No live browser, API, database, policy, extension activation, or service changes performed. Coordinator must integrate and activate separately; mocked checks do not prove a live Home Depot quote cycle.
 
+
+## Independent continuation review
+
+Reviewed implementation commit `6451015` against canonical assignment board. No blocking defect found in the requested single-supplier/ZIP trial or durable revocation paths. The six committed regressions cover target isolation, independent enrollment, disable/re-enable, product/ZIP switch, invalid policy preserving a lease, and explicit secondary supplier selection. Re-inspected the in-memory backend fixture and mocked worker harness; the previously recorded 65 backend and 10 worker passes are existing evidence, not new executions in this review. No redundant broad suite was run.
+
+Coordinator activation sequence:
+
+1. Integrate the backend commit, validate the combined tree, and activate AUTOZS through its existing operational process after idle checks. This change does not alter the delivery extension package. Inspect the deployed worker version before deciding whether a reload is necessary.
+2. Read current `GET /delivery-quotes/policy` and `/delivery-quotes/jobs`, inspect the dedicated worker state and tabs, and establish exclusive ownership of the delivery guest profile. Do not proceed over an active or paused job or an unknown cart. Confirm policy is `enabled: false, trial: null` before browser inspection; preserve the existing `postal_codes` list.
+3. Confirm a currently accessible Home Depot product and signed-out empty cart in the dedicated profile. The coordinator-only inspection helper supports `--inspect-cart` and `--inspect-product <exact URL>` on port 9335. Historical supplier errors require a fresh check. Its inspection mode refuses any existing worker state; a paused state needs explicit cart reconciliation, not blind storage clearing.
+4. Select the exact supplier-product ID (not parent product ID) and five-digit destination ZIP. Confirm its parent product is draft/monitoring and inspect any existing job for that pair: a fresh completion will not rerun; needs_review or exhausted attempts will not auto-reset. There is no delivery-job retry/reset API in this implementation. Resolve an existing hold through a separately reviewed recovery action or choose another eligible target; do not edit live DB rows as a shortcut.
+5. PUT the preserved policy with `enabled: false` and the exact trial object, then GET it back and verify both fields. Let the isolated worker claim naturally; a manual diagnostic claim would itself reserve a browser lease. Observe only the selected supplier/ZIP job running.
+6. Verify the full quantity-one add, destination, stable quote, removal and empty-cart cycle, persisted completed job, and matching product quote. Confirm worker state is cleared and its owned tab closes. A paid quote is valid capture evidence but remains a listing blocker. An API completion alone does not replace browser/cart evidence.
+7. End the controlled trial promptly by PUT with `enabled: false, trial: null` and the preserved ZIP list, and read policy back. On failure, revoke scope immediately and inspect the preserved cart/state before recovery. Revocation invalidates API leases durably but cannot cancel an already in-flight browser action. Never re-enable merely to resurrect the old token.
+
+Remaining prerequisites are operational activation, fresh resource/cart/supplier checks, actual target ID/ZIP selection, and one successful live quote cycle. Broad coverage stays disabled. No live resource was accessed during this review.
