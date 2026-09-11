@@ -17,4 +17,6 @@ Fixtures inspected: tests/conftest.py uses sqlite:///:memory:, dependency overri
 
 ## Limits
 
+The 24-hour check currently measures `SupplierProduct.updated_at`, not a dedicated stock/price observation timestamp. Importers can update a row while carrying forward older values. This closes missing eligibility checks but does not establish freshly observed supplier stock; the timestamp follow-up is tracked separately.
+
 Mocked/in-memory results do not establish live restocking. Browser fallback quantity handling is a separate existing concern under coordinator review; this task does not edit extension code. Upload authorization cannot retract an external action already in flight. A rejected prepared sheet returns an error on that poll, then the next poll can build a fresh batch. Existing batch membership lookup silently omits deleted job IDs; manual deletion/integrity hardening remains a separate follow-up.
