@@ -46,3 +46,9 @@ The revision-upload test is relevant to the restock execution boundary. The uplo
 7. Observe add-one, destination, stable quote, remove, empty cart, completed matching job/quote, and cleared worker state. Stop the trial with `enabled: false, trial: null` and read it back. The trial is target-bounded, not one-shot: explicitly end it. Revocation blocks API leases but cannot cancel an in-flight browser action. Paid quotes still block listing eligibility, and API completion alone is not cart evidence.
 
 Missing live evidence is a validation gap, not a claim that the supplier is currently down or a request for renewed blanket authorization. Coordinator must resolve real resource conflicts or missing target information before the dependent action.
+
+## Coordinator follow-up findings
+
+After this review, the coordinator reported operational HEAD `373acec` contains the board-only divergence and added isolated uploader rejection coverage in `9e96c49`. Those are coordinator-reported findings, not additional executions by this reviewer. The new test proves the backend rejection prevents the Upload click in its mocked harness.
+
+Two remaining limitations require explicit handling: the backend fallback can offer quantity actions to an extension that implements price edits only, and a separate restriction follow-up is planned; do not treat that fallback as a verified stock-restoration path. Also, current freshness uses `supplier.updated_at` row recency. An importer may update the row without obtaining new stock/price evidence, so passing that timestamp check does not prove a fresh supplier observation. Controlled live inventory validation must inspect actual supplier evidence; these guards must not be described as live supplier revalidation.
