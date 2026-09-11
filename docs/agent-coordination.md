@@ -8,6 +8,26 @@ Use one branch and worktree per active worker under C:/AutoZS/worktrees. Every s
 
 Workers may read code and run isolated tests. Do not load production .env files, start application servers/workers, use operational databases, navigate operational browser tabs, reload extensions, or change live policies without a coordinator assignment for that resource. Tests must use disposable databases and mocks; inspect their setup before running. Do not copy credentials or database files into worktrees or commit them.
 
+The baseline repository already tracks dev.db-shm and dev.db-wal. They therefore appear in new worktrees even though dev.db is ignored. Do not open or use these remnants as test fixtures, and do not stage runtime changes to them. Cleaning up tracked database remnants is a separate maintenance task.
+
+## Creating a later assignment
+
+The coordinator first inspects `git status --short` and `git worktree list` in C:/AutoZS/repo, records an explicit base commit, and chooses a new task-specific branch and directory. For example, from that checkout:
+
+```powershell
+git worktree add -b agents/task-name C:/AutoZS/worktrees/task-name BASE_COMMIT
+```
+
+Replace BASE_COMMIT with the reviewed commit hash. Record the assignment before launching an agent. In a separate terminal, a separately managed session can start with:
+
+```powershell
+Set-Location C:/AutoZS/worktrees/task-name
+codex
+# Or start claude in this directory, using the same assignment.
+```
+
+Built-in subagents also need the explicit worktree path in their task; spawning alone does not move them into a separate checkout. No vendor-specific background command is needed for the built-in team. Launching an external terminal does not enroll that session in the coordinator's message channel; use the board and a committed handoff report for those sessions.
+
 ## Shared state
 
 PROJECT_CONTEXT.md is the versioned baseline. C:/AutoZS/repo/docs/agent-board.md is the canonical local assignment board; copies in worker branches can be stale. Only the coordinator writes the board. Workers read it at start and before handoff and communicate blockers through their parent session. This protocol also applies to separately launched Claude/Codex sessions; they must be registered on the board before working.
