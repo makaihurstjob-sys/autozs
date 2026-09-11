@@ -598,7 +598,7 @@ async function runAssistantTest() {
   if (nativeReplaceCalls !== 0) {
     throw new Error("Expected native replace-text to be skipped when the focused element is not the target Brand field.");
   }
-  delete context.chrome;
+  context.chrome = { storage: { local: { get: async () => ({}), set: async () => {} } } };
   delete context.document.activeElement;
   if (!result.lines.every((line) => !/publish|submit|list item/i.test(line))) {
     throw new Error("Fill results should not claim to publish or submit.");
@@ -941,6 +941,8 @@ async function runAssistantTest() {
     if (selector === '[role="alert"], [aria-live="assertive"], .error, [class*="error" i]') return [];
     return [];
   };
+  // Persistence/restart behavior is covered using real helpers in ebay-submission-attempt.test.js.
+  vm.runInContext("readListingSubmissionAttempt = async () => null; persistListingSubmissionAttempt = async () => ({})", context);
   const ignoredFinalClick = await vm.runInContext("submitScheduledListing({ listing_schedule_at: '2026-07-22T19:00:00' }, 20)", context);
   if (ignoredFinalClick.ok) {
     throw new Error(`Expected a no-op final List click not to be reported as submitted, got ${JSON.stringify(ignoredFinalClick)}`);
@@ -957,7 +959,7 @@ async function runAssistantTest() {
   // listings silently failed.
   const unconfirmedFinalClick = await vm.runInContext("submitScheduledListing({ listing_schedule_at: '2026-07-22T19:00:00' }, 20)", context);
   if (unconfirmedFinalClick.ok) {
-    throw new Error(`Expected an unconfirmed final List click to be reported as still a draft, got ${JSON.stringify(unconfirmedFinalClick)}`);
+    throw new Error(`Expected an unconfirmed final List click to be held for reconciliation, got ${JSON.stringify(unconfirmedFinalClick)}`);
   }
   finalButtonVisible = true;
   finalScheduleButton.clicked = false;
@@ -965,6 +967,7 @@ async function runAssistantTest() {
     finalScheduleButton.clicked = true;
     finalButtonVisible = false;
     context.location.pathname = "/sh/lst/scheduled";
+    context.document.body.innerText = "Your listing has been scheduled. ID: 123456789012";
   };
   const acceptedFinalClick = await vm.runInContext("submitScheduledListing({ listing_schedule_at: '2026-07-22T19:00:00' }, 20)", context);
   if (!acceptedFinalClick.ok || !finalScheduleButton.clicked) {
