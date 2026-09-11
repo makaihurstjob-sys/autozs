@@ -3723,6 +3723,26 @@ def capture_supplier_receipt(supplier_id: int, payload: dict, db: Session = Depe
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/finance/ebay-payments/capture")
+def capture_ebay_payments(payload: dict, db: Session = Depends(get_db)):
+    from app.services.ebay_payments import capture
+    try:
+        return capture(db, payload)
+    except (ValueError, KeyError, TypeError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/finance/ebay-payments/failure")
+def fail_ebay_payments(payload: dict, db: Session = Depends(get_db)):
+    from app.services.ebay_payments import record_failure
+    try:
+        record_failure(db, str(payload.get("account_key", "")), payload.get("error", "Capture failed"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"status": "needs_review"}
+
+
 @router.get("/finance/overview", response_model=FinanceOverviewRead)
 def read_finance_overview(db: Session = Depends(get_db)) -> FinanceOverviewRead:
     return FinanceOverviewRead(**finance_overview(db))

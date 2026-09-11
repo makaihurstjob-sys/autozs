@@ -329,7 +329,9 @@ def profitability_report(orders, entries, subscriptions, db=None) -> dict:
             "fee_reconciliation_required": ambiguous_fees})
     run_rate = round(sum(float(s.amount) * {"monthly": 1, "annual": 1/12, "weekly": 52/12}.get(s.cadence, 0)
                          for s in subscriptions if s.status == "active"), 2)
+    from app.services.ebay_payments import report as payment_report
     return {"as_of": datetime.utcnow().isoformat() + "Z", "orders": rows, "months": months,
+        "payments": payment_report(db, rows, orders, entries) if db is not None else [],
         "complete_orders": sum(r["contribution"] is not None for r in rows),
         "monthly_subscription_run_rate": run_rate,
         "expense_records": sum(e.entry_type in {"expense", "refund"} for e in entries),

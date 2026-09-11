@@ -1,5 +1,5 @@
 if (typeof importScripts === "function") {
-  importScripts("dashboard-browser-bridge-config.js", "dashboard-browser-bridge-agent.js");
+  importScripts("dashboard-browser-bridge-config.js", "dashboard-browser-bridge-agent.js", "ebay-payments.js");
 }
 
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -2391,6 +2391,7 @@ const AUTOZS_ALARM_SCHEDULE = [
   [EBAY_TRAFFIC_ALARM, 1, 2],
   [EBAY_ORDER_ALARM, 1, 2],
   ["autozs-profit-reconciliation", 1, 2],
+  ["autozs-ebay-payments", 1, 5],
   ["autozs-supplier-receipts", 1, 2],
   [EBAY_TRACKING_UPLOAD_ALARM, 1, 2],
   [SUPPLIER_ORDER_ALARM, 1, 2],
@@ -2472,6 +2473,7 @@ if (chrome.alarms) {
     if (alarm?.name === EBAY_TRAFFIC_ALARM) openNextEbayTrafficSync().catch(() => {});
     if (alarm?.name === "autozs-supplier-receipts") reconcileNextSupplierReceipt().catch(() => {});
     if (alarm?.name === "autozs-profit-reconciliation") reconcileNextOrderProfit().catch(() => {});
+    if (alarm?.name === "autozs-ebay-payments") reconcileEbayPayments().catch(() => {});
     if (alarm?.name === EBAY_ORDER_ALARM) openNextEbayOrderSync().catch(() => {});
     if (alarm?.name === EBAY_TRACKING_UPLOAD_ALARM) openNextEbayTrackingUpload().catch(() => {});
     if (alarm?.name === SUPPLIER_ORDER_ALARM) openNextSupplierOrder().catch(() => {});

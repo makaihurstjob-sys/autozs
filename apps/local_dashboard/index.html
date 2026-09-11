@@ -8441,6 +8441,15 @@
             <div class="actions"><button class="secondary" onclick="addSubscriptionExpense()">Add subscription</button><button class="secondary" onclick="recordProfitExpense()">Record expense / refund</button></div>
           </div>
           <div class="report-card wide">
+            <h3>Automatic eBay payment reconciliation</h3>
+            ${(finance.profitability?.payments || []).map(payment => `<p>Account ${esc(payment.account_key)} · ${esc(payment.start_date)} through ${esc(payment.end_date)} · captured ${esc(payment.observed_at)}</p>
+              ${table(["Refund effect on tracked orders", "Account fees / credits", "Tracked contribution after adjustments"], [[money(payment.tracked_refund_effect), money(payment.account_fee_effect), payment.tracked_contribution_after_adjustments == null ? "Needs review" : money(payment.tracked_contribution_after_adjustments)]])}
+              ${table(["Date", "Transaction", "Classification", "Earnings effect"], payment.rows.map(row => [esc(row.date), esc(row.description), esc(row.category), row.category === "unsupported" ? "Needs review" : money(row.effect)]))}
+              <p class="muted">${esc(payment.limitation)}</p>
+              ${Object.entries(payment.untracked_order_settlements || {}).map(([order, amount]) => `<p class="muted">Other order ${esc(order)}: ${money(amount)} after eBay sale/refund entries; supplier costs require separate verification.</p>`).join("")}
+              ${(payment.issues || []).map(issue => `<p>${esc(issue)}</p>`).join("")}`).join("") || '<p class="muted">No complete transaction capture yet. Refund and account-fee coverage is unverified.</p>'}
+          </div>
+          <div class="report-card wide">
             <h3>Would an eBay Store pay for itself?</h3>
             <p class="muted">A positive balance or $8 in profit does not establish that a Store is worthwhile. Compare monthly fee savings plus contribution from additional sales against the added subscription cost.</p>
             ${table(["US Store", "Monthly renewal", "Annual commitment, billed monthly", "Fixed-price allowance"], [

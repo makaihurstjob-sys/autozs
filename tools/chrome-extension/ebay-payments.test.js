@@ -1,0 +1,5 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const storage={},posts=[],closed=[];
+const context={URL,Date,setTimeout:fn=>fn(),canRunAutozsWorkerJobs:async()=>true,matchedEbayAccountKey:async()=> 'seller',localApiJson:async(path,options)=>{if(path.includes('browser-account'))return {can_list:true,expected_username:'seller'};posts.push(JSON.parse(options.body));return {status:'captured'};},chrome:{storage:{local:{get:async()=>storage,set:async obj=>Object.assign(storage,obj)}},tabs:{query:async()=>[{id:42}],remove:async id=>closed.push(id)},scripting:{executeScript:async()=>[{result:{account_key:'seller',rows:[{id:'one'}]}}]}}};
+vm.createContext(context);vm.runInContext(fs.readFileSync(`${__dirname}/ebay-payments.js`,'utf8'),context);
+(async()=>{await vm.runInContext('reconcileEbayPayments()',context);await vm.runInContext('reconcileEbayPayments()',context);assert.equal(posts.length,1);assert.deepEqual(closed,[]);assert.equal(storage['autozsPaymentsCheck:seller'].status,'captured');console.log('Payment worker cooldown and user tab preservation passed');})().catch(e=>{console.error(e);process.exitCode=1;});
