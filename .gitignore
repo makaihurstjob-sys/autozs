@@ -17,3 +17,4 @@ node_modules/
 postgres_data/
 
 jobs_tmp.json
+/tmp/delivery-check-extension/

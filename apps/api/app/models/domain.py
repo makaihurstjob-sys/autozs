@@ -217,6 +217,25 @@ class SupplierProduct(Base, TimestampMixin):
     product: Mapped[Product] = relationship(back_populates="supplier_products")
 
 
+class DeliveryCheckJob(Base, TimestampMixin):
+    __tablename__ = "delivery_check_jobs"
+    __table_args__ = (UniqueConstraint("supplier_product_id", "postal_code", name="uq_delivery_check_supplier_zip"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_product_id: Mapped[int] = mapped_column(ForeignKey("supplier_products.id"), index=True)
+    postal_code: Mapped[str] = mapped_column(String(5))
+    source_url: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    worker_id: Mapped[str] = mapped_column(String(128), default="")
+    lease_token: Mapped[str] = mapped_column(String(64), default="")
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_charge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    message: Mapped[str] = mapped_column(Text, default="Awaiting isolated browser cart check")
+
+
 class SupplierDeliveryQuote(Base, TimestampMixin):
     __tablename__ = "supplier_delivery_quotes"
     __table_args__ = (UniqueConstraint("supplier_product_id", "postal_code", "quantity", name="uq_supplier_delivery_zip_quantity"),)

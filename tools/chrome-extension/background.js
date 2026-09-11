@@ -1747,7 +1747,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'autozs-cart-delivery-quote') {
     let page;
     try { page = new URL(sender.tab?.url || ''); } catch { return false; }
-    if (page.origin !== 'https://www.homedepot.com' || page.pathname !== '/mycart/home' || sender.frameId !== 0) return false;
+    if (page.origin !== 'https://www.homedepot.com' || !['/mycart/home', '/cart'].includes(page.pathname) || sender.frameId !== 0) return false;
     localApiJson('/delivery-quotes/cart', { method: 'POST', body: JSON.stringify(message.quote) })
       .then(result => sendResponse({ ok: true, ...result }))
       .catch(error => sendResponse({ ok: false, error: String(error.message || error) }));

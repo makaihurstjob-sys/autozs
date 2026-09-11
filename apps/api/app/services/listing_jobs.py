@@ -13,6 +13,7 @@ from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing
 from app.services.importer import build_ebay_listing_package, build_listing_readiness
 from app.services.settings import read_pricing_settings
 from app.services.delivery_quotes import delivery_risk_reason
+from app.services.delivery_checks import ensure_checks, coverage_reason
 
 
 AUTOMATION_PAUSE_KEY = "listing_automation_paused"
@@ -105,7 +106,8 @@ def enqueue_listing_jobs(
             continue
         if _supplier_delivery_unavailable(product):
             continue
-        if delivery_risk_reason(db, product_id):
+        ensure_checks(db, product_id)
+        if delivery_risk_reason(db, product_id, include_coverage=False):
             continue
         # eBay pulled a listing for this product, so re-publishing it would just
         # re-offend. This sits in enqueue_listing_jobs because every path -- the
@@ -249,6 +251,7 @@ def queue_zero_view_listing_rotations(
             ListingJob.status.not_in(TERMINAL_STATUSES),
         )) is not None:
             continue
+        ensure_checks(db, product.id)
         readiness = build_listing_readiness(db, product.id)
         package = build_ebay_listing_package(db, product.id)
         if not readiness or not readiness.get("manual_ready") or not package or not package.get("meets_minimum_profit"):
@@ -354,6 +357,7 @@ def queue_listing_expansion(
     for product in products:
         if product.id in unavailable_product_ids or listing_exclusion_reason(db, product.id):
             continue
+        ensure_checks(db, product.id)
         readiness = build_listing_readiness(db, product.id)
         package = build_ebay_listing_package(db, product.id)
         if not readiness or not readiness.get("manual_ready") or not package or not package.get("meets_minimum_profit"):
@@ -503,11 +507,19 @@ def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
         db.commit()
         db.refresh(job)
         return job
-    delivery_risk = delivery_risk_reason(db, product.id)
+    ensure_checks(db, product.id)
+    delivery_risk = delivery_risk_reason(db, product.id, include_coverage=False)
     if _supplier_delivery_unavailable(product) or delivery_risk:
         job.status = ListingJobStatus.needs_review.value
         job.completed_at = _now_utc_naive()
         job.message = delivery_risk or "Supplier delivery is unavailable; AutoZS blocked this listing from being submitted to eBay."
+        db.commit()
+        db.refresh(job)
+        return job
+    pending_delivery = coverage_reason(db, product.id)
+    if pending_delivery:
+        job.status = ListingJobStatus.queued.value
+        job.message = pending_delivery
         db.commit()
         db.refresh(job)
         return job
@@ -593,7 +605,16 @@ def start_next_listing_job(
     )
     if ebay_account_key:
         stmt = stmt.where(ListingJob.ebay_account_key == ebay_account_key)
-    job = db.scalar(stmt)
+    job = None
+    for candidate in db.scalars(stmt).all():
+        ensure_checks(db, candidate.product_id)
+        pending_delivery = coverage_reason(db, candidate.product_id)
+        if pending_delivery and not delivery_risk_reason(db, candidate.product_id, include_coverage=False):
+            candidate.message = pending_delivery
+            continue
+        job = candidate
+        break
+    db.commit()
     if job is None:
         return None
     if job.action == "publish" and job.listing_schedule_at is not None:

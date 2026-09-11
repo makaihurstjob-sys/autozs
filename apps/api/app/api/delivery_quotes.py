@@ -4,6 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.services.delivery_quotes import record_cart_quote, product_delivery_quotes
+from app.services import delivery_checks
+from app.models.domain import DeliveryCheckJob
+from sqlalchemy import select
+from pydantic import field_validator
 
 router = APIRouter(prefix="/delivery-quotes", tags=["delivery-quotes"])
 
@@ -27,3 +31,81 @@ def capture_cart_quote(payload: CartQuote, db: Session = Depends(get_db)):
 @router.get("/products/{product_id}")
 def read_product_quotes(product_id: int, db: Session = Depends(get_db)):
     return product_delivery_quotes(db, product_id)
+
+
+class CheckPolicy(BaseModel):
+    enabled: bool
+    postal_codes: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("postal_codes")
+    @classmethod
+    def valid_zips(cls, values):
+        import re
+        if len(set(values)) != len(values) or any(not re.fullmatch(r"[0-9]{5}", v) for v in values):
+            raise ValueError("Provide unique five-digit ZIP codes")
+        return values
+
+
+class WorkerClaim(BaseModel):
+    worker_id: str = Field(min_length=1, max_length=128)
+
+
+class WorkerLease(WorkerClaim):
+    lease_token: str = Field(min_length=32, max_length=64)
+
+
+class CheckResult(WorkerLease):
+    quote: CartQuote
+    cart_cleared: bool
+
+
+class CheckFailure(WorkerLease):
+    message: str = Field(min_length=1, max_length=500)
+    retryable: bool = False
+
+
+@router.get("/policy")
+def read_check_policy(db: Session = Depends(get_db)):
+    return delivery_checks.read_policy(db)
+
+
+@router.put("/policy")
+def save_check_policy(payload: CheckPolicy, db: Session = Depends(get_db)):
+    return delivery_checks.write_policy(db, payload.model_dump())
+
+
+@router.get("/jobs")
+def list_checks(db: Session = Depends(get_db)):
+    return [delivery_checks.serialize_job(j) for j in db.scalars(
+        select(DeliveryCheckJob).order_by(DeliveryCheckJob.id.desc()).limit(250)).all()]
+
+
+@router.post("/jobs/claim")
+def claim_check(payload: WorkerClaim, db: Session = Depends(get_db)):
+    return delivery_checks.claim_check(db, payload.worker_id)
+
+
+@router.post("/jobs/{job_id}/heartbeat")
+def check_heartbeat(job_id: int, payload: WorkerLease, db: Session = Depends(get_db)):
+    try:
+        return delivery_checks.heartbeat(db, job_id, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/complete")
+def complete_check(job_id: int, payload: CheckResult, db: Session = Depends(get_db)):
+    if not payload.cart_cleared:
+        raise HTTPException(status_code=409, detail="Clear the owned test item before completing the check")
+    try:
+        return delivery_checks.finish_check(db, job_id, payload.worker_id, payload.lease_token, payload.quote.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/failed")
+def fail_check(job_id: int, payload: CheckFailure, db: Session = Depends(get_db)):
+    try:
+        return delivery_checks.fail_check(db, job_id, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

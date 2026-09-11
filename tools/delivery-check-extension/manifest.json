@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "AutoZS Isolated Delivery Checks",
+  "version": "0.1.0",
+  "description": "Guest-cart delivery sampling only. No listing, checkout or purchasing capabilities.",
+  "permissions": ["alarms", "tabs", "storage", "scripting"],
+  "host_permissions": ["https://www.homedepot.com/*", "http://127.0.0.1:8000/*"],
+  "background": {"service_worker": "background.js"}
+}

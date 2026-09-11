@@ -40,7 +40,7 @@ def record_cart_quote(db: Session, source_url: str, postal_code: str, quantity: 
     return len(suppliers)
 
 
-def delivery_risk_reason(db: Session, product_id: int) -> str | None:
+def delivery_risk_reason(db: Session, product_id: int, *, include_coverage: bool = True) -> str | None:
     # Paid observations remain blocking when old: age is not evidence that a fee disappeared.
     quote = db.scalar(select(SupplierDeliveryQuote).join(SupplierProduct).where(
         SupplierProduct.product_id == product_id,
@@ -49,6 +49,9 @@ def delivery_risk_reason(db: Session, product_id: int) -> str | None:
     if quote:
         return (f"Supplier cart delivery costs ${quote.delivery_charge:.2f} to ZIP {quote.postal_code} "
                 f"for quantity {quote.quantity}; recheck that destination before listing.")
+    if include_coverage:
+        from app.services.delivery_checks import coverage_reason
+        return coverage_reason(db, product_id)
     return None
 
 

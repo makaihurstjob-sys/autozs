@@ -26,7 +26,10 @@ function autozsReadDeliveryQuote(doc) {
   return { source_url: urls[0], postal_code: destinations[0], quantity: Number(inputs[0].value), delivery_charge: amount };
 }
 
-if (typeof location !== 'undefined' && location.pathname === '/mycart/home') {
+if (typeof location !== 'undefined' && ['/mycart/home', '/cart'].includes(location.pathname)
+    && chrome.runtime.getManifest().name !== 'AutoZS Isolated Delivery Checks'
+    && !globalThis.autozsCartQuoteObserverStarted) {
+  globalThis.autozsCartQuoteObserverStarted = true;
   let previous = '', saved = '', pending = false;
   setInterval(() => {
     const quote = autozsReadDeliveryQuote(document);

@@ -1,0 +1,126 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+const source = fs.readFileSync(`${__dirname}/background.js`, 'utf8');
+
+function harness(options = {}) {
+  let now = 100000, empty = true, complete = false, addCount = 0;
+  const storage = {}, calls = [], actions = [], tabs = [];
+  const job = { id: 1, lease_token: 'x'.repeat(32), source_url: 'https://www.homedepot.com/p/Anvil/123456789', postal_code: '33101' };
+  let context = {
+    Date: { now: () => now }, crypto: { randomUUID: () => 'worker-id' }, setTimeout: () => {},
+    fetch: async (url, request) => {
+      const body = JSON.parse(request.body); calls.push({ url, body });
+      if (options.networkDown) throw Error('network');
+      if (url.endsWith('/claim')) return { ok: true, json: async () => job };
+      if (url.endsWith('/heartbeat')) return { ok: !options.leaseInvalid, status: 409, json: async () => ({ status: complete ? 'completed' : 'running' }) };
+      if (url.endsWith('/complete')) {
+        complete = true;
+        if (options.loseCompleteResponse) throw Error('connection lost');
+        return { ok: true, json: async () => ({ status: 'completed' }) };
+      }
+      return { ok: true, json: async () => ({ status: 'needs_review' }) };
+    },
+    chrome: {
+      storage: { local: {
+        get: async () => structuredClone(storage),
+        set: async values => Object.assign(storage, structuredClone(values)),
+      } },
+      tabs: {
+        query: async () => options.existingTab ? [{ id: 99 }] : tabs,
+        create: async ({ url }) => { const tab = { id: 7, url, status: 'complete' }; tabs.push(tab); return tab; },
+        get: async () => tabs[0], update: async (_id, values) => Object.assign(tabs[0], values),
+        reload: async () => actions.push('reload'),
+        remove: async () => { tabs.length = 0; }, onUpdated: { addListener() {} },
+      },
+      scripting: { executeScript: async request => {
+        if (request.files) return [];
+        const action = request.args[0]; actions.push(action);
+        if (options.supplierError) throw Error('Transient supplier page error: Home Depot requested a refresh');
+        if (action === 'inspect') return [{ result: {
+          empty: options.foreignCart ? false : empty,
+          cartMatches: !empty,
+          quote: empty ? null : { source_url: job.source_url, postal_code: job.postal_code, quantity: 1, delivery_charge: 35 },
+        } }];
+        if (action === 'add') { addCount++; empty = false; }
+        if (action === 'remove') empty = true;
+        return [{ result: { ok: true } }];
+      } },
+      alarms: { create() {}, onAlarm: { addListener() {} } },
+      runtime: { onStartup: { addListener() {} }, onInstalled: { addListener() {} } },
+    },
+  };
+  vm.createContext(context); vm.runInContext(source, context);
+  return { storage, calls, actions, options, context, tabs,
+    tick: async () => { now += 10000; await context.deliveryTick(); },
+    get addCount() { return addCount; }, get complete() { return complete; },
+    restart: () => { context = vm.createContext({ ...context }); vm.runInContext(source, context); },
+  };
+}
+
+test('isolated flow captures paid quote and confirms cleanup before completing', async () => {
+  const h = harness();
+  for (let i = 0; i < 10 && !h.complete; i++) await h.tick();
+  assert.equal(h.complete, true);
+  assert.equal(h.addCount, 1);
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.deepEqual(h.actions.filter(a => a !== 'inspect'), ['prepare_product', 'add', 'remove']);
+  const result = h.calls.find(c => c.url.endsWith('/complete')).body;
+  assert.equal(result.quote.delivery_charge, 35);
+  assert.equal(result.cart_cleared, true);
+});
+
+test('restart after uncertain Add to Cart inspects cart without another add', async () => {
+  const h = harness();
+  for (let i = 0; i < 4; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'add_pending');
+  h.restart();
+  for (let i = 0; i < 6 && !h.complete; i++) await h.tick();
+  assert.equal(h.complete, true);
+  assert.equal(h.addCount, 1);
+});
+
+test('unknown existing tab prevents claiming or modifying any cart', async () => {
+  const h = harness({ existingTab: true }); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  assert.equal(h.calls.length, 0); assert.equal(h.actions.length, 0);
+});
+
+test('nonempty initial cart is preserved and marked for review', async () => {
+  const h = harness({ foreignCart: true }); await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  assert.equal(h.addCount, 0); assert.equal(h.actions.includes('remove'), false);
+  assert.equal(h.calls.at(-1).body.retryable, false);
+});
+
+test('invalid lease stops before reading or mutating the page', async () => {
+  const h = harness(); await h.tick(); h.options.leaseInvalid = true; await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true); assert.equal(h.actions.length, 0);
+});
+
+test('network outage preserves state and resumes after connectivity returns', async () => {
+  const h = harness(); await h.tick(); h.options.networkDown = true; await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'initial');
+  assert.equal(h.actions.length, 0);
+  h.options.networkDown = false; await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'product');
+});
+
+test('lost completion response is recovered without duplicate cart work', async () => {
+  const h = harness({ loseCompleteResponse: true });
+  for (let i = 0; i < 10 && !h.complete; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'complete');
+  await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.addCount, 1);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/complete')).length, 1);
+});
+
+test('supplier refresh errors have a bounded retry budget and never add an item', async () => {
+  const h = harness({ supplierError: true });
+  for (let i = 0; i < 5; i++) await h.tick();
+  assert.equal(h.actions.filter(a => a === 'reload').length, 3);
+  assert.equal(h.addCount, 0);
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+});
