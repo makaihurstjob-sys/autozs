@@ -122,6 +122,21 @@ async function deliveryTick() {
     }
     if (state?.job) {
       const message = String(error.message || error).slice(0, 500);
+      // Before add_pending this worker has never attempted an Add to Cart.
+      // Let the server back off this product without stalling unrelated checks.
+      const safeRetry = /Transient supplier page error/.test(message) &&
+        ['initial', 'product', 'prepared'].includes(state.phase);
+      if (safeRetry) {
+        try {
+          await api(`/jobs/${state.job.id}/failed`, { ...lease(state), message, retryable: true });
+          await chrome.tabs.remove(state.tabId);
+          await save(null);
+          return;
+        } catch {
+          await save({ ...state, paused: true, message: 'Could not confirm delivery retry or tab cleanup; review isolated profile' });
+          return;
+        }
+      }
       try { await api(`/jobs/${state.job.id}/failed`, { ...lease(state), message, retryable: false }); } catch {}
       await save({ ...state, paused: true, message });
     } else await chrome.storage.local.set({ deliveryLastError: String(error.message || error) });

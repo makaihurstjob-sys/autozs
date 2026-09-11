@@ -20,6 +20,7 @@ function harness(options = {}) {
         if (options.loseCompleteResponse) throw Error('connection lost');
         return { ok: true, json: async () => ({ status: 'completed' }) };
       }
+      if (url.endsWith('/failed') && options.loseFailureResponse) throw Error('connection lost');
       return { ok: true, json: async () => ({ status: 'needs_review' }) };
     },
     chrome: {
@@ -117,10 +118,33 @@ test('lost completion response is recovered without duplicate cart work', async 
   assert.equal(h.calls.filter(c => c.url.endsWith('/complete')).length, 1);
 });
 
-test('supplier refresh errors have a bounded retry budget and never add an item', async () => {
+test('supplier refresh errors before adding back off without pausing the worker', async () => {
   const h = harness({ supplierError: true });
   for (let i = 0; i < 5; i++) await h.tick();
   assert.equal(h.actions.filter(a => a === 'reload').length, 3);
   assert.equal(h.addCount, 0);
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.tabs.length, 0);
+  assert.equal(h.calls.at(-1).body.retryable, true);
+});
+
+test('supplier error after a possible add preserves the cart for review', async () => {
+  const h = harness();
+  for (let i = 0; i < 4; i++) await h.tick();
+  h.options.supplierError = true;
+  for (let i = 0; i < 5; i++) await h.tick();
+  assert.equal(h.addCount, 1);
   assert.equal(h.storage.deliveryCheckState.paused, true);
+  assert.equal(h.tabs.length, 1);
+  assert.equal(h.calls.at(-1).body.retryable, false);
+  assert.equal(h.actions.includes('remove'), false);
+});
+
+test('uncertain failure report preserves state instead of claiming another job', async () => {
+  const h = harness({ supplierError: true, loseFailureResponse: true });
+  for (let i = 0; i < 6; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  assert.equal(h.tabs.length, 1);
+  assert.equal(h.addCount, 0);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/claim')).length, 1);
 });

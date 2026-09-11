@@ -124,6 +124,30 @@ def test_completed_response_can_be_recovered_after_connection_loss(client):
     assert response.status_code == 200 and response.json()['status'] == 'completed'
 
 
+def test_supplier_failures_back_off_then_exhaust_retry_budget(client):
+    product = create_ready_product(client)
+    enable(client, ['33101'])
+    enqueue(client, product)
+    for attempt in range(1, 4):
+        job = claim(client)
+        assert job['attempts'] == attempt
+        response = client.post(f"/delivery-quotes/jobs/{job['id']}/failed", json={
+            'worker_id': 'isolated-1', 'lease_token': job['lease_token'],
+            'message': 'Transient supplier page error', 'retryable': True})
+        assert response.status_code == 200
+        assert response.json()['status'] == ('queued' if attempt < 3 else 'needs_review')
+        assert claim(client) is None
+        def advance_retry(db):
+            db.get(DeliveryCheckJob, job['id']).retry_at = datetime.utcnow() - timedelta(seconds=1)
+        mutate(client, advance_retry)
+    assert claim(client) is None
+    assert client.get(f"/delivery-quotes/products/{product['id']}").json()['quotes'] == []
+    assert client.post('/listing-jobs/next').status_code == 404
+    other = create_ready_product(client, source_id='987654321')
+    enqueue(client, other)
+    assert claim(client)['source_url'].endswith('987654321')
+
+
 def test_missing_quote_at_queue_head_does_not_starve_verified_product(client):
     first = create_ready_product(client)
     second = create_ready_product(client, source_id='987654321')
