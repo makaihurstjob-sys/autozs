@@ -330,3 +330,71 @@ def test_unpaid_sale_waits_then_prepares_when_payment_arrives(client):
     import_ebay_order_report_rows(db, rows=rows, account_key="test")
     assert db.query(SupplierOrder).count() == 1
     db.close()
+
+
+@pytest.mark.parametrize("sale_a_listing", [False, True])
+def test_ended_replacement_never_uses_another_accounts_listing(client, sale_a_listing):
+    from datetime import timedelta
+    test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        listing = db.query(EbayListing).one()
+        product_id = listing.product_id
+        listing.status = "ended" if sale_a_listing else "missing"
+        listing.updated_at = datetime.utcnow() - timedelta(hours=1)
+        supplier = db.query(SupplierProduct).one()
+        supplier.in_stock = True
+        supplier.updated_at = datetime.utcnow()
+        db.add(EbayListing(product_id=product_id, listing_id="other-account-item",
+                           account_id="other-seller", environment="manual",
+                           quantity=0, status="ended", updated_at=datetime.utcnow()))
+        db.commit()
+        result = reconcile_sold_listing_replacements(db)
+        jobs = db.query(ListingJob).all()
+        assert [job.ebay_account_key for job in jobs] == (["a.m.anim-59"] if sale_a_listing else [])
+        assert result["queued"] == int(sale_a_listing)
+        assert reconcile_sold_listing_replacements(db)["queued"] == 0
+        assert db.query(ListingJob).count() == int(sale_a_listing)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("account_a_block", [None, "active", "scheduled", "open_job"])
+def test_ended_replacements_reconcile_each_sale_account_once(client, account_a_block):
+    from app.models.domain import Order, OrderItem
+    test_chrome_order_report_import_is_idempotent_and_matches_listing(client)
+    db = next(app.dependency_overrides[get_db]())
+    try:
+        listing = db.query(EbayListing).one()
+        listing.status = "ended"
+        supplier = db.query(SupplierProduct).one()
+        supplier.in_stock = True
+        supplier.updated_at = datetime.utcnow()
+        for account, status in [("other-seller", "imported"), ("cancelled-seller", "cancelled"),
+                                ("a.m.anim-59", "imported")]:
+            order = Order(ebay_order_id=f"sale-{account}", account_id=account, status=status)
+            db.add(order)
+            db.flush()
+            db.add(OrderItem(order_id=order.id, product_id=listing.product_id, title="Sold product"))
+            if account != "a.m.anim-59":
+                db.add(EbayListing(product_id=listing.product_id, listing_id=f"ended-{account}",
+                                   account_id=account, environment="manual", quantity=0, status="ended"))
+        if account_a_block == "open_job":
+            db.add(ListingJob(product_id=listing.product_id, ebay_account_key=listing.account_id,
+                              action="publish", status="needs_review"))
+        elif account_a_block:
+            db.add(EbayListing(product_id=listing.product_id, listing_id="replacement-a",
+                               account_id=listing.account_id, environment="manual", quantity=1,
+                               status=account_a_block))
+        db.commit()
+        result = reconcile_sold_listing_replacements(db)
+        assert result["candidates"] == 2
+        assert result["queued"] == (2 if account_a_block is None else 1)
+        queued = db.query(ListingJob).filter_by(status="queued").all()
+        assert {job.ebay_account_key for job in queued} == (
+            {"a.m.anim-59", "other-seller"} if account_a_block is None else {"other-seller"})
+        count = db.query(ListingJob).count()
+        assert reconcile_sold_listing_replacements(db)["queued"] == 0
+        assert db.query(ListingJob).count() == count
+    finally:
+        db.close()
