@@ -720,7 +720,7 @@ def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
     running = db.scalar(
         select(EbayRevisionJob)
         .where(
-            EbayRevisionJob.action != 'end_zero_view',
+            EbayRevisionJob.action == "revise_price",
             EbayRevisionJob.status == EbayRevisionJobStatus.running.value,
             EbayRevisionJob.guard_passed.is_(True),
             EbayRevisionJob.approval_required.is_(False),
@@ -735,7 +735,7 @@ def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
     job = db.scalar(
         select(EbayRevisionJob)
         .where(
-            EbayRevisionJob.action != 'end_zero_view',
+            EbayRevisionJob.action == "revise_price",
             EbayRevisionJob.status == EbayRevisionJobStatus.queued.value,
             EbayRevisionJob.guard_passed.is_(True),
             EbayRevisionJob.approval_required.is_(False),
