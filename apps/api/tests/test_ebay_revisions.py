@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import pytest
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -846,6 +847,144 @@ def test_restock_only_releases_listings_autozs_actually_took_down() -> None:
     assert restock.status == EbayRevisionJobStatus.queued.value
 
 
+def _completed_stock_reduction(db, listing):
+    db.add(EbayRevisionJob(
+        product_id=listing.product_id, ebay_listing_id=listing.id,
+        ebay_account_key=listing.account_id, action=OUT_OF_STOCK_ACTION,
+        target_price=listing.price, status=EbayRevisionJobStatus.completed.value,
+        completed_at=datetime.utcnow(), guard_passed=True, approval_required=False,
+    ))
+    db.commit()
+
+
+def _invalidate_restock(db, product, listing, condition):
+    from app.models.domain import ListingJob
+    supplier = db.query(SupplierProduct).one()
+    if condition == "stale":
+        supplier.updated_at = datetime.utcnow() - timedelta(hours=25)
+    elif condition == "missing_price":
+        supplier.last_price = None
+    elif condition in {"paused", "deleted"}:
+        product.status = condition
+    elif condition == "blocked_sibling":
+        db.add(EbayListing(product_id=product.id, listing_id="blocked-sibling",
+                           account_id=listing.account_id, relist_blocked=True, status="ended"))
+    elif condition == "cancelled_publish":
+        db.add(ListingJob(product_id=product.id, ebay_account_key=listing.account_id,
+                          action="publish", status="cancelled"))
+    db.commit()
+
+
+@pytest.mark.parametrize("condition", ["stale", "missing_price", "paused", "deleted", "blocked_sibling", "cancelled_publish"])
+@pytest.mark.parametrize("queued_first", [False, True])
+def test_generic_restock_requires_current_eligible_evidence(condition, queued_first):
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=0.0)
+        _completed_stock_reduction(db, listing)
+        if queued_first:
+            assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        _invalidate_restock(db, product, listing, condition)
+        assert enqueue_ebay_stock_revisions(db) == (0, 0)
+        assert not db.query(EbayRevisionJob).filter_by(action=RESTOCK_ACTION, status="queued").all()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("condition", ["stale", "missing_price", "paused", "blocked_sibling", "cancelled_publish"])
+def test_restock_evidence_guard_preserves_stock_reductions(condition):
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=-1.0)
+        _invalidate_restock(db, product, listing, condition)
+        assert enqueue_ebay_stock_revisions(db) == (1, 0)
+        assert db.query(EbayRevisionJob).one().action == OUT_OF_STOCK_ACTION
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("execution", ["browser", "running_browser", "csv", "batch", "prepared", "upload"])
+def test_stale_restock_is_rechecked_before_execution(execution, monkeypatch):
+    from app.services import ebay_revisions
+    from app.services.ebay_revision_batches import update_ebay_revision_batch
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=0.0)
+        _completed_stock_reduction(db, listing)
+        assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        job = db.query(EbayRevisionJob).filter_by(action=RESTOCK_ACTION).one()
+        template = "Action,Item number,Start price,Quantity\n"
+        save_ebay_revision_template(db, account_key=listing.account_id, filename="test.csv", template_csv=template)
+        batch = None
+        if execution in {"prepared", "upload"}:
+            batch = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+            assert batch is not None
+        if execution == "running_browser":
+            job.status = "running"
+            job.lease_expires_at = datetime.utcnow() + timedelta(minutes=10)
+            db.commit()
+        _invalidate_restock(db, product, listing, "stale")
+        if execution in {"browser", "running_browser"}:
+            monkeypatch.setattr(ebay_revisions, "read_pricing_settings", lambda db: {"ebay_revision_execution_mode": "browser_fallback"})
+            assert start_next_ebay_revision_job(db) is None
+            assert job.status == ("running" if execution == "running_browser" else "cancelled")
+        elif execution == "batch":
+            assert prepare_next_ebay_revision_batch(db, account_key=listing.account_id) is None
+            assert job.status == "cancelled"
+        elif execution == "csv":
+            with pytest.raises(ValueError, match="cannot restore stock"):
+                build_ebay_price_revision_csv(db, account_key=listing.account_id, job_ids=[job.id], template_csv=template)
+        elif execution == "prepared":
+            with pytest.raises(ValueError, match="cannot restore stock"):
+                prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        else:
+            with pytest.raises(ValueError, match="cannot restore stock"):
+                update_ebay_revision_batch(db, batch, status="uploading")
+            assert batch.status == "cancelled"
+            assert batch.attempts == 0
+    finally:
+        db.close()
+
+
+def test_invalid_restock_does_not_block_zero_quantity_batch():
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=0.0)
+        _completed_stock_reduction(db, listing)
+        assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        listing.listing_id = "800456297710"
+        db.commit()
+        _, zero_listing = _sourced_product(db, shipping=-1.0)
+        assert enqueue_ebay_stock_revisions(db) == (1, 0)
+        supplier = db.query(SupplierProduct).filter_by(product_id=product.id).one()
+        supplier.updated_at = datetime.utcnow() - timedelta(hours=25)
+        db.commit()
+        save_ebay_revision_template(db, account_key=listing.account_id, filename="test.csv",
+                                   template_csv="Action,Item number,Start price,Quantity\n")
+        batch = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        assert batch is not None
+        assert batch.rows_total == 1
+        assert db.query(EbayRevisionJob).filter_by(action=OUT_OF_STOCK_ACTION, status="running").one().ebay_listing_id == zero_listing.id
+    finally:
+        db.close()
+
+
+def test_restock_confirmation_remains_recordable_after_evidence_changes():
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=0.0)
+        listing.quantity = 0
+        _completed_stock_reduction(db, listing)
+        assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        job = db.query(EbayRevisionJob).filter_by(action=RESTOCK_ACTION).one()
+        _invalidate_restock(db, product, listing, "stale")
+        update_ebay_revision_job(db, job, status="completed")
+        assert job.status == "completed"
+        assert listing.quantity == 1
+    finally:
+        db.close()
+
+
 def test_already_out_of_stock_listing_is_not_zeroed_twice() -> None:
     db = make_session()
     _, listing = _sourced_product(db, shipping=-1.0)
@@ -994,3 +1133,75 @@ def test_out_of_stock_uses_the_real_ebay_available_quantity_column() -> None:
     assert cells[6] == "", f"start price must stay blank on a stock revision: {cells}"
     assert cells[8] == "0", f"available quantity must be 0: {cells}"
 
+
+
+@pytest.mark.parametrize("job_status", ["cancelled", "paused"])
+def test_prepared_restock_cannot_upload_after_job_revocation(job_status):
+    from app.services.ebay_revision_batches import update_ebay_revision_batch
+    db = make_session()
+    try:
+        _, listing = _sourced_product(db, shipping=0.0)
+        _completed_stock_reduction(db, listing)
+        assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        save_ebay_revision_template(db, account_key=listing.account_id, filename="test.csv",
+                                   template_csv="Action,Item number,Start price,Quantity\n")
+        batch = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        job = db.query(EbayRevisionJob).filter_by(action=RESTOCK_ACTION).one()
+        job.status = job_status
+        db.commit()
+        with pytest.raises(ValueError, match="cannot restore stock"):
+            update_ebay_revision_batch(db, batch, status="uploading")
+        assert batch.status == "cancelled"
+        assert job.status == job_status
+        with pytest.raises(ValueError, match="cannot upload from cancelled"):
+            update_ebay_revision_batch(db, batch, status="uploading")
+    finally:
+        db.close()
+
+
+def test_invalid_prepared_restock_releases_safe_rows_for_next_batch():
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=0.0)
+        _completed_stock_reduction(db, listing)
+        assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        listing.listing_id = "800456297710"
+        db.commit()
+        _, zero_listing = _sourced_product(db, shipping=-1.0)
+        assert enqueue_ebay_stock_revisions(db) == (1, 0)
+        save_ebay_revision_template(db, account_key=listing.account_id, filename="test.csv",
+                                   template_csv="Action,Item number,Start price,Quantity\n")
+        original = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        assert original.rows_total == 2
+        supplier = db.query(SupplierProduct).filter_by(product_id=product.id).one()
+        supplier.updated_at = datetime.utcnow() - timedelta(hours=25)
+        db.commit()
+        with pytest.raises(ValueError, match="cannot restore stock"):
+            prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        assert original.status == "cancelled"
+        batch = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        assert batch.id != original.id
+        assert batch.rows_total == 1
+        assert db.query(EbayRevisionJob).filter_by(action=OUT_OF_STOCK_ACTION, status="running").one().ebay_listing_id == zero_listing.id
+    finally:
+        db.close()
+
+
+def test_uploading_restock_keeps_uncertain_outcome_when_evidence_expires():
+    from app.services.ebay_revision_batches import update_ebay_revision_batch
+    db = make_session()
+    try:
+        product, listing = _sourced_product(db, shipping=0.0)
+        _completed_stock_reduction(db, listing)
+        assert enqueue_ebay_stock_revisions(db) == (0, 1)
+        save_ebay_revision_template(db, account_key=listing.account_id, filename="test.csv",
+                                   template_csv="Action,Item number,Start price,Quantity\n")
+        batch = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
+        update_ebay_revision_batch(db, batch, status="uploading")
+        _invalidate_restock(db, product, listing, "stale")
+        with pytest.raises(ValueError, match="cannot restore stock"):
+            update_ebay_revision_batch(db, batch, status="uploading")
+        assert batch.status == "uploading"
+        assert db.query(EbayRevisionJob).filter_by(action=RESTOCK_ACTION).one().status == "running"
+    finally:
+        db.close()

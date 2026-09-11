@@ -189,13 +189,64 @@ def supplier_availability_block(supplier: SupplierProduct | None) -> str | None:
     return None
 
 
+def stock_restoration_block(db: Session, listing: EbayListing | None, supplier: SupplierProduct | None = None) -> str | None:
+    """Current eligibility for increasing quantity, independent of why it was zeroed."""
+    from app.services.listing_exclusions import listing_exclusion_reason
+
+    if listing is None or listing.status not in REVISION_LISTING_STATUSES or listing.relist_blocked:
+        return "the listing is unavailable or relisting is blocked"
+    product = db.get(Product, listing.product_id)
+    if product is None or product.status == ProductStatus.deleted.value:
+        return "the product is unavailable"
+    exclusion = listing_exclusion_reason(db, listing.product_id)
+    if exclusion:
+        return exclusion
+    if supplier is None:
+        supplier = db.scalar(select(SupplierProduct).where(
+            SupplierProduct.product_id == listing.product_id
+        ).order_by(SupplierProduct.created_at.asc(), SupplierProduct.id.asc()).limit(1))
+    if supplier is None or supplier.in_stock is not True:
+        return "the supplier has not confirmed stock"
+    unavailable = supplier_availability_block(supplier)
+    if unavailable:
+        return unavailable
+    if supplier.last_price is None:
+        return "the supplier price is missing"
+    if supplier.updated_at is None or supplier.updated_at < _now() - timedelta(hours=24):
+        return "supplier evidence is older than 24 hours"
+    return None
+
+
+def restock_job_block(db: Session, job: EbayRevisionJob) -> str | None:
+    if job.action != RESTOCK_ACTION:
+        return None
+    return stock_restoration_block(db, db.get(EbayListing, job.ebay_listing_id))
+
+
+def cancel_ineligible_queued_restocks(db: Session) -> int:
+    cancelled = 0
+    for job in db.scalars(select(EbayRevisionJob).where(
+        EbayRevisionJob.action == RESTOCK_ACTION,
+        EbayRevisionJob.status == EbayRevisionJobStatus.queued.value,
+    )).all():
+        reason = restock_job_block(db, job)
+        if reason:
+            job.status = EbayRevisionJobStatus.cancelled.value
+            job.completed_at = _now()
+            job.lease_expires_at = None
+            job.message = f"Stock restoration cancelled: {reason}."
+            cancelled += 1
+    if cancelled:
+        db.commit()
+    return cancelled
+
+
 def _stock_job_fields(listing: EbayListing, supplier: SupplierProduct | None) -> dict:
     """Evidence for a quantity-only revision.
 
-    These carry no pricing risk -- zeroing quantity cannot lose money and restoring it
-    only returns the listing to a price that was already approved -- so they skip the
-    profit guard and apply without manual approval. That is what makes the response
-    automatic, which is the point of the workflow.
+    Quantity-only revisions retain the approved price and skip the profit guard.
+    Positive restoration separately requires current supplier and exclusion evidence;
+    quantity-zero reductions remain available when that evidence is unsafe.
     """
     return {
         "source_price": supplier.last_price if supplier is not None else None,
@@ -220,6 +271,7 @@ def enqueue_ebay_stock_revisions(
     and search standing, and a restock would have to be listed from scratch. Out of stock
     keeps all of it, so recovery is a single revision.
     """
+    cancel_ineligible_queued_restocks(db)
     blocked = 0
     released = 0
     seen_listing_ids: set[int] = set()
@@ -255,7 +307,8 @@ def enqueue_ebay_stock_revisions(
         if reason is not None:
             wanted_action = None if already_out_of_stock else OUT_OF_STOCK_ACTION
         else:
-            wanted_action = RESTOCK_ACTION if already_out_of_stock or sold_listing_restock_allowed(db, listing, supplier) else None
+            eligible = stock_restoration_block(db, listing, supplier) is None
+            wanted_action = RESTOCK_ACTION if eligible and (already_out_of_stock or sold_listing_restock_allowed(db, listing, supplier)) else None
 
         open_job = db.scalar(
             select(EbayRevisionJob)
@@ -304,12 +357,8 @@ def enqueue_ebay_stock_revisions(
 
 def sold_listing_restock_allowed(db: Session, listing: EbayListing, supplier: SupplierProduct) -> bool:
     """Restore an existing sold-out item only with fresh stock and no competing listing."""
-    from app.services.listing_exclusions import listing_exclusion_reason
-
     if (int(listing.quantity or 0) > 0 or listing.status not in {"active", "live", "listed"}
-        or listing.relist_blocked or listing_exclusion_reason(db, listing.product_id)
-        or supplier.in_stock is not True or supplier_availability_block(supplier)
-        or supplier.last_price is None or supplier.updated_at < _now() - timedelta(hours=24)):
+        or stock_restoration_block(db, listing, supplier)):
         return False
     if db.scalar(select(EbayListing.id).where(
         EbayListing.product_id == listing.product_id,
@@ -667,6 +716,7 @@ def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
     if read_pricing_settings(db).get("ebay_revision_execution_mode") != "browser_fallback":
         return None
     release_expired_ebay_revision_jobs(db)
+    cancel_ineligible_queued_restocks(db)
     running = db.scalar(
         select(EbayRevisionJob)
         .where(
@@ -679,6 +729,8 @@ def start_next_ebay_revision_job(db: Session) -> EbayRevisionJob | None:
         .order_by(EbayRevisionJob.started_at.asc(), EbayRevisionJob.id.asc())
     )
     if running is not None:
+        if restock_job_block(db, running):
+            return None
         return running
     job = db.scalar(
         select(EbayRevisionJob)

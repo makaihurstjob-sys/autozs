@@ -16,7 +16,12 @@ from app.models.domain import (
     EbayRevisionJobStatus,
 )
 from app.services.ebay_revision_csv import build_ebay_price_revision_csv, read_ebay_revision_template
-from app.services.ebay_revisions import update_ebay_revision_job
+from app.services.ebay_revisions import (
+    RESTOCK_ACTION,
+    cancel_ineligible_queued_restocks,
+    restock_job_block,
+    update_ebay_revision_job,
+)
 
 
 ACTIVE_BATCH_STATUSES = {
@@ -52,12 +57,15 @@ def prepare_next_ebay_revision_batch(
     account_key: str,
     limit: int = 25,
 ) -> EbayRevisionBatch | None:
+    cancel_ineligible_queued_restocks(db)
     active = db.scalar(
         select(EbayRevisionBatch)
         .where(EbayRevisionBatch.account_key == account_key, EbayRevisionBatch.status.in_(ACTIVE_BATCH_STATUSES))
         .order_by(EbayRevisionBatch.created_at.asc(), EbayRevisionBatch.id.asc())
     )
     if active is not None:
+        if active.status == EbayRevisionBatchStatus.prepared.value:
+            _assert_batch_restock_eligible(db, active)
         return active
     template = read_ebay_revision_template(db, account_key)
     if template is None:
@@ -123,6 +131,35 @@ def prepare_next_ebay_revision_batch(
     return batch
 
 
+def _assert_batch_restock_eligible(db: Session, batch: EbayRevisionBatch) -> None:
+    for job in _batch_jobs(db, batch):
+        if job.action != RESTOCK_ACTION:
+            continue
+        reason = restock_job_block(db, job)
+        if job.status != EbayRevisionJobStatus.running.value:
+            reason = f"the restoration job is {job.status}"
+        if reason:
+            message = f"Batch {batch.id} cannot restore stock for job {job.id}: {reason}"
+            if batch.status == EbayRevisionBatchStatus.prepared.value:
+                # No upload was authorized: retire this cached sheet and release only
+                # eligible rows. Never requeue a sheet with an uncertain upload outcome.
+                batch.status = EbayRevisionBatchStatus.cancelled.value
+                batch.completed_at = datetime.utcnow()
+                batch.message = message
+                for pending in _batch_jobs(db, batch):
+                    if pending.status != EbayRevisionJobStatus.running.value:
+                        continue
+                    blocked = restock_job_block(db, pending)
+                    pending.status = (EbayRevisionJobStatus.cancelled.value if blocked
+                                      else EbayRevisionJobStatus.queued.value)
+                    pending.completed_at = datetime.utcnow() if blocked else None
+                    pending.started_at = None
+                    pending.lease_expires_at = None
+                    pending.message = message if blocked else "Unuploaded sheet retired; queued for a fresh sheet."
+                db.commit()
+            raise ValueError(message)
+
+
 def update_ebay_revision_batch(
     db: Session,
     batch: EbayRevisionBatch,
@@ -133,6 +170,10 @@ def update_ebay_revision_batch(
     if status is not None:
         if status not in {item.value for item in EbayRevisionBatchStatus}:
             raise ValueError(f"Unsupported revision batch status {status}")
+        if status == EbayRevisionBatchStatus.uploading.value:
+            if batch.status not in {EbayRevisionBatchStatus.prepared.value, EbayRevisionBatchStatus.uploading.value}:
+                raise ValueError(f"Batch {batch.id} cannot upload from {batch.status}")
+            _assert_batch_restock_eligible(db, batch)
         batch.status = status
         if status == EbayRevisionBatchStatus.uploading.value:
             batch.started_at = batch.started_at or datetime.utcnow()
