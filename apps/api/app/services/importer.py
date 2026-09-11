@@ -1368,6 +1368,10 @@ def build_listing_readiness(db: Session, product_id: int, *, package: dict | Non
         "source_shipping": "supplier/source shipping",
     }
     missing_manual = [label for key, label in manual_labels.items() if not checks[key]]
+    from app.services.delivery_quotes import delivery_risk_reason
+    delivery_risk = delivery_risk_reason(db, product_id)
+    if delivery_risk:
+        missing_manual.append(delivery_risk)
     exclusion = listing_exclusion_reason(db, product_id)
     if exclusion:
         missing_manual.append(exclusion)

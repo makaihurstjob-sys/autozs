@@ -217,6 +217,18 @@ class SupplierProduct(Base, TimestampMixin):
     product: Mapped[Product] = relationship(back_populates="supplier_products")
 
 
+class SupplierDeliveryQuote(Base, TimestampMixin):
+    __tablename__ = "supplier_delivery_quotes"
+    __table_args__ = (UniqueConstraint("supplier_product_id", "postal_code", "quantity", name="uq_supplier_delivery_zip_quantity"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_product_id: Mapped[int] = mapped_column(ForeignKey("supplier_products.id"), index=True)
+    postal_code: Mapped[str] = mapped_column(String(5))
+    quantity: Mapped[int] = mapped_column(Integer)
+    delivery_charge: Mapped[float] = mapped_column(Float)
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ProductImage(Base, TimestampMixin):
     __tablename__ = "product_images"
     __table_args__ = (UniqueConstraint("product_id", "image_url", name="uq_product_image_url"),)

@@ -88,6 +88,7 @@
       ],
       "js": [
         "home-depot-product-hunt.js",
+        "home-depot-cart-quotes.js",
         "home-depot-checkout.js"
       ],
       "run_at": "document_idle"

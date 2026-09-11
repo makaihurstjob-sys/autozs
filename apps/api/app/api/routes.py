@@ -392,6 +392,8 @@ from app.services.push_notifications import (
 )
 
 router = APIRouter()
+from app.api.delivery_quotes import router as delivery_quotes_router
+router.include_router(delivery_quotes_router)
 
 
 def _require_z_finance_bearer(request: Request) -> None:
@@ -2631,6 +2633,11 @@ def create_listing_jobs(payload: ListingJobCreate, db: Session = Depends(get_db)
     if not jobs:
         # Say WHY when the reason is a relist block -- "no matching products"
         # reads like a lookup miss and hides that eBay pulled the listing.
+        from app.services.delivery_quotes import delivery_risk_reason
+        delivery_blocks = [reason for product_id in payload.product_ids
+                           if (reason := delivery_risk_reason(db, product_id))]
+        if delivery_blocks:
+            raise HTTPException(status_code=409, detail=" ".join(delivery_blocks))
         blocked = relist_blocked_product_ids(db, payload.product_ids)
         if blocked:
             raise HTTPException(

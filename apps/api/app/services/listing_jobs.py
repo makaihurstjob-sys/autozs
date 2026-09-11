@@ -12,6 +12,7 @@ from app.services.listing_exclusions import listing_exclusion_reason
 from app.services.ebay_revisions import cancel_revision_jobs_for_ebay_listing
 from app.services.importer import build_ebay_listing_package, build_listing_readiness
 from app.services.settings import read_pricing_settings
+from app.services.delivery_quotes import delivery_risk_reason
 
 
 AUTOMATION_PAUSE_KEY = "listing_automation_paused"
@@ -103,6 +104,8 @@ def enqueue_listing_jobs(
         if product is None or product.status == ProductStatus.deleted.value:
             continue
         if _supplier_delivery_unavailable(product):
+            continue
+        if delivery_risk_reason(db, product_id):
             continue
         # eBay pulled a listing for this product, so re-publishing it would just
         # re-offend. This sits in enqueue_listing_jobs because every path -- the
@@ -500,10 +503,11 @@ def start_listing_job(db: Session, job: ListingJob) -> ListingJob:
         db.commit()
         db.refresh(job)
         return job
-    if _supplier_delivery_unavailable(product):
+    delivery_risk = delivery_risk_reason(db, product.id)
+    if _supplier_delivery_unavailable(product) or delivery_risk:
         job.status = ListingJobStatus.needs_review.value
         job.completed_at = _now_utc_naive()
-        job.message = "Supplier delivery is unavailable; AutoZS blocked this listing from being submitted to eBay."
+        job.message = delivery_risk or "Supplier delivery is unavailable; AutoZS blocked this listing from being submitted to eBay."
         db.commit()
         db.refresh(job)
         return job
