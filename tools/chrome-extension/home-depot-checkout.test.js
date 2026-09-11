@@ -11,6 +11,20 @@ const context = {
 vm.createContext(context);
 vm.runInContext(source, context);
 
+require('node:test')('free cart delivery requires the buyer ZIP and one explicit summary charge', () => {
+  const assert = require('node:assert/strict');
+  const check = context.autozsCartFreeDeliveryForZip;
+  const cart = 'Delivering to 33936 (1 item) Pickup FREE Your Order Subtotal $34.97 Delivery FREE Total $34.97';
+  assert.equal(check(cart, '33936-1839'), true);
+  assert.equal(check(cart, '87508'), false);
+  assert.equal(check(cart, ''), false);
+  assert.equal(check(cart.replace('Delivering to 33936', 'Location 33936'), '33936'), false);
+  assert.equal(check(cart.replace('Delivery FREE', 'Delivery $35.00'), '33936'), false);
+  assert.equal(check(cart.replace('Your Order', ''), '33936'), false);
+  assert.equal(check(cart + ' Delivery $35.00', '33936'), false);
+  assert.equal(check(cart + ' Delivering to 87508', '33936'), false);
+});
+
 require('node:test')('checkout waits for delayed cart confirmation and does not retry an uncertain add', async () => {
   const assert = require('node:assert/strict');
   let polls = 0;
@@ -201,9 +215,6 @@ if (!source.includes('iframe#iframe-credit-card-payment-field')) {
 }
 if (!source.includes('autozsNativeCheckoutClick(supplierOrderId, "edit_address")')) {
   throw new Error("Expected a matching saved delivery address to be reopened for exact field verification.");
-}
-if (!source.includes("pickup checkout was not allowed")) {
-  throw new Error("Expected cart checkout to require visibly confirmed free delivery instead of supplier pickup.");
 }
 if (!source.includes("if (!cartDeliveryConfirmed) await autozsNativeCheckoutClick")) {
   throw new Error("Expected an already-confirmed free-delivery cart to avoid a redundant fulfillment click.");

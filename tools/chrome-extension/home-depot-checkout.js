@@ -593,10 +593,9 @@ async function autozsRunCartCheckoutCanary(supplierOrderId, supplierOrder) {
     return;
   }
   autozsCheckoutProgress(79, "Confirming free delivery in the cartâ€¦");
-  const cartHasConfirmedDelivery = () => {
-    const orderSummary = String(document.body?.innerText || "").split(/Your Order/i).slice(-1)[0];
-    return /Delivery\s+FREE/i.test(orderSummary) && !/Pickup\s+FREE/i.test(orderSummary.slice(0, 500));
-  };
+  const cartHasConfirmedDelivery = () => autozsCartFreeDeliveryForZip(
+    String(document.body?.innerText || ""), supplierOrder.postal_code
+  );
   let cartDeliveryConfirmed = cartHasConfirmedDelivery();
   if (!cartDeliveryConfirmed) await autozsNativeCheckoutClick(supplierOrderId, "delivery");
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -605,7 +604,7 @@ async function autozsRunCartCheckoutCanary(supplierOrderId, supplierOrder) {
     if (cartDeliveryConfirmed) break;
   }
   if (!cartDeliveryConfirmed) {
-    const reason = "Checkout blocked: Home Depot did not confirm free delivery in the cart; pickup checkout was not allowed.";
+    const reason = "Checkout blocked: Home Depot did not confirm free cart delivery to the buyer's ZIP. Verify the delivery ZIP and order-summary charge; pickup or another destination is not sufficient.";
     await autozsMarkCheckoutReview(supplierOrderId, reason);
     autozsCheckoutProgress(100, reason, "error");
     return;
@@ -621,6 +620,19 @@ async function autozsRunCartCheckoutCanary(supplierOrderId, supplierOrder) {
   sessionStorage.setItem(AUTOZS_CHECKOUT_SESSION_KEY, String(supplierOrderId));
   autozsCheckoutProgress(82, "Cart verified. Opening Home Depot's checkout form…");
   await autozsNativeCheckoutClick(supplierOrderId, "checkout");
+}
+
+function autozsCartFreeDeliveryForZip(text, postalCode) {
+  const zip = String(postalCode || "").trim().match(/^(\d{5})(?:-\d{4})?$/)?.[1];
+  if (!zip) return false;
+  const destinations = [...String(text).matchAll(/Delivering to\s+(\d{5})(?:-\d{4})?\b/gi)];
+  if (!destinations.length || destinations.some(match => match[1] !== zip)) return false;
+  const sections = String(text).split(/Your Order/i);
+  if (sections.length !== 2) return false;
+  const summary = sections[1];
+  const charges = [...summary.matchAll(/\bDelivery\s+(FREE|\$\s*[\d,.]+)/gi)];
+  return charges.length === 1 && /^FREE$/i.test(charges[0][1])
+    && !/Pickup\s+FREE/i.test(summary.slice(0, 500));
 }
 
 async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
