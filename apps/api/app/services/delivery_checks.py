@@ -10,7 +10,7 @@ from app.models.domain import AppSetting, DeliveryCheckJob, ListingJob, Product,
 from app.services.delivery_quotes import home_depot_item_id, record_cart_quote
 
 POLICY_KEY = "delivery_check_policy"
-DEFAULT_POLICY = {"enabled": False, "postal_codes": ["10001", "33101", "60601", "75201", "90001"]}
+DEFAULT_POLICY = {"enabled": False, "postal_codes": ["10001", "33101", "60601", "75201", "90001"], "trial": None}
 MAX_ATTEMPTS = 3
 FRESH_HOURS = 24
 LEASE_MINUTES = 10
@@ -18,10 +18,25 @@ LEASE_MINUTES = 10
 
 def read_policy(db: Session) -> dict:
     setting = db.scalar(select(AppSetting).where(AppSetting.key == POLICY_KEY))
-    return json.loads(setting.value) if setting else dict(DEFAULT_POLICY)
+    return {**DEFAULT_POLICY, **(json.loads(setting.value) if setting else {})}
 
 
 def write_policy(db: Session, policy: dict) -> dict:
+    previous = read_policy(db)
+    trial = policy.get("trial")
+    if trial:
+        if policy["enabled"]:
+            raise ValueError("Disable broad checks before configuring a bounded trial")
+        supplier = db.get(SupplierProduct, trial["supplier_product_id"])
+        product = db.get(Product, supplier.product_id) if supplier else None
+        if not product or product.status not in {"draft", "monitoring"} or not home_depot_item_id(supplier.source_url):
+            raise ValueError("Trial requires an eligible Home Depot supplier product")
+    # Revocation is durable: toggling back cannot resurrect a browser lease.
+    for job in db.scalars(select(DeliveryCheckJob).where(DeliveryCheckJob.status == "running")).all():
+        if not in_scope(policy, job.supplier_product_id, job.postal_code) or (
+                previous.get("trial") != trial and previous.get("trial")):
+            job.status, job.lease_token, job.lease_expires_at = "needs_review", "", None
+            job.message = "Delivery scope changed; inspect isolated cart before retrying"
     setting = db.scalar(select(AppSetting).where(AppSetting.key == POLICY_KEY))
     if setting is None:
         setting = AppSetting(key=POLICY_KEY)
@@ -29,6 +44,13 @@ def write_policy(db: Session, policy: dict) -> dict:
     setting.value = json.dumps(policy)
     db.commit()
     return read_policy(db)
+
+
+def in_scope(policy: dict, supplier_id: int, postal_code: str) -> bool:
+    trial = policy.get("trial")
+    if trial:
+        return supplier_id == trial["supplier_product_id"] and postal_code == trial["postal_code"]
+    return policy["enabled"] and postal_code in policy["postal_codes"]
 
 
 def coverage_reason(db: Session, product_id: int) -> str | None:
@@ -55,14 +77,17 @@ def coverage_reason(db: Session, product_id: int) -> str | None:
 
 def ensure_checks(db: Session, product_id: int) -> list[DeliveryCheckJob]:
     policy = read_policy(db)
-    if not policy["enabled"]:
+    if not policy["enabled"] and not policy.get("trial"):
         return []
     product = db.get(Product, product_id)
-    supplier = product.supplier_products[0] if product and product.supplier_products else None
-    if not supplier or product.status not in {"draft", "monitoring"} or not home_depot_item_id(supplier.source_url):
+    trial = policy.get("trial")
+    supplier = (db.get(SupplierProduct, trial["supplier_product_id"]) if trial
+                else product.supplier_products[0] if product and product.supplier_products else None)
+    if (not product or not supplier or supplier.product_id != product_id
+            or product.status not in {"draft", "monitoring"} or not home_depot_item_id(supplier.source_url)):
         return []
     result = []
-    for zip_code in policy["postal_codes"]:
+    for zip_code in ([trial["postal_code"]] if trial else policy["postal_codes"]):
         job = db.scalar(select(DeliveryCheckJob).where(
             DeliveryCheckJob.supplier_product_id == supplier.id, DeliveryCheckJob.postal_code == zip_code))
         if job is None:
@@ -86,11 +111,14 @@ def serialize_job(job: DeliveryCheckJob) -> dict:
 
 def claim_check(db: Session, worker_id: str) -> dict | None:
     policy = read_policy(db)
-    if not policy["enabled"]:
+    if not policy["enabled"] and not policy.get("trial"):
         return None
     # Old listing jobs are enrolled as well as new enqueue requests.
     product_ids = db.scalars(select(ListingJob.product_id).where(
         ListingJob.status.in_({"queued", "needs_review", "paused"})).distinct()).all()
+    if policy.get("trial"):
+        supplier = db.get(SupplierProduct, policy["trial"]["supplier_product_id"])
+        product_ids = [supplier.product_id] if supplier else []
     for product_id in product_ids:
         ensure_checks(db, product_id)
     now = datetime.utcnow()
@@ -105,16 +133,21 @@ def claim_check(db: Session, worker_id: str) -> dict | None:
     active = db.scalar(select(DeliveryCheckJob).where(
         DeliveryCheckJob.status == "running", DeliveryCheckJob.worker_id == worker_id))
     if active:
+        try:
+            validate_active_check(db, active)
+        except ValueError:
+            return None
         return {**serialize_job(active), "lease_token": active.lease_token}
     candidates = db.scalars(select(DeliveryCheckJob).where(
         DeliveryCheckJob.status == "queued", DeliveryCheckJob.attempts < MAX_ATTEMPTS,
         or_(DeliveryCheckJob.retry_at.is_(None), DeliveryCheckJob.retry_at <= now),
-        DeliveryCheckJob.postal_code.in_(policy["postal_codes"]),
     ).order_by(DeliveryCheckJob.updated_at, DeliveryCheckJob.id)).all()
     for job in candidates:
+        if not in_scope(policy, job.supplier_product_id, job.postal_code):
+            continue
         supplier = db.get(SupplierProduct, job.supplier_product_id)
         product = db.get(Product, supplier.product_id) if supplier else None
-        if not product or product.status not in {"draft", "monitoring"}:
+        if not product or product.status not in {"draft", "monitoring"} or not home_depot_item_id(supplier.source_url):
             continue
         token = uuid4().hex
         changed = db.execute(update(DeliveryCheckJob).where(
@@ -139,7 +172,7 @@ def owned_job(db: Session, job_id: int, worker_id: str, lease_token: str) -> Del
 
 def validate_active_check(db: Session, job: DeliveryCheckJob) -> None:
     policy = read_policy(db)
-    if not policy["enabled"] or job.postal_code not in policy["postal_codes"]:
+    if not in_scope(policy, job.supplier_product_id, job.postal_code):
         raise ValueError("Delivery checks paused or ZIP no longer configured")
     supplier = db.get(SupplierProduct, job.supplier_product_id)
     if (not supplier or not home_depot_item_id(job.source_url)

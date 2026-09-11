@@ -7,7 +7,7 @@ from app.services.delivery_quotes import record_cart_quote, product_delivery_quo
 from app.services import delivery_checks
 from app.models.domain import DeliveryCheckJob
 from sqlalchemy import select
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 router = APIRouter(prefix="/delivery-quotes", tags=["delivery-quotes"])
 
@@ -33,9 +33,21 @@ def read_product_quotes(product_id: int, db: Session = Depends(get_db)):
     return product_delivery_quotes(db, product_id)
 
 
+class CheckTrial(BaseModel):
+    supplier_product_id: int = Field(strict=True, gt=0)
+    postal_code: str = Field(pattern=r"^[0-9]{5}$")
+
+
 class CheckPolicy(BaseModel):
     enabled: bool
+    trial: CheckTrial | None = None
     postal_codes: list[str] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def trial_requires_broad_disabled(self):
+        if self.enabled and self.trial:
+            raise ValueError("Disable broad checks before configuring a bounded trial")
+        return self
 
     @field_validator("postal_codes")
     @classmethod
@@ -71,7 +83,10 @@ def read_check_policy(db: Session = Depends(get_db)):
 
 @router.put("/policy")
 def save_check_policy(payload: CheckPolicy, db: Session = Depends(get_db)):
-    return delivery_checks.write_policy(db, payload.model_dump())
+    try:
+        return delivery_checks.write_policy(db, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/jobs")

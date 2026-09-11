@@ -197,3 +197,110 @@ def test_source_change_revokes_browser_action_lease(client):
         'worker_id': 'isolated-1', 'lease_token': job['lease_token']}).status_code == 409
     assert complete(client, job).status_code == 409
     assert client.get(f"/delivery-quotes/products/{product['id']}").json()['quotes'] == []
+
+
+def configure_trial(client, product, zip_code='60601'):
+    supplier_ids = []
+    mutate(client, lambda db: supplier_ids.append(db.scalar(select(SupplierProduct.id).where(
+        SupplierProduct.product_id == product['id']))))
+    policy = {'enabled': False, 'postal_codes': ['33101', '10001'],
+              'trial': {'supplier_product_id': supplier_ids[0], 'postal_code': zip_code}}
+    assert client.put('/delivery-quotes/policy', json=policy).status_code == 200
+    return policy
+
+
+def test_trial_claims_only_selected_product_and_zip_without_listing_gate(client):
+    first = create_ready_product(client)
+    selected = create_ready_product(client, source_id='987654321')
+    enable(client)
+    enqueue(client, first)  # Older broad jobs must not escape the trial scope.
+    policy = configure_trial(client, selected)
+    assert enqueue(client, selected)['manual_ready'] is True
+    job = claim(client)
+    assert job['supplier_product_id'] == policy['trial']['supplier_product_id']
+    assert job['postal_code'] == '60601'
+    assert claim(client, 'isolated-2') is None
+    assert complete(client, job).status_code == 200
+    assert claim(client) is None
+    assert client.get('/delivery-quotes/policy').json()['enabled'] is False
+    assert len(client.get(f"/delivery-quotes/products/{selected['id']}").json()['quotes']) == 1
+    # Removing trial leaves broad checking off; enabling broad checking later resumes old jobs.
+    assert client.put('/delivery-quotes/policy', json={'enabled': False, 'postal_codes': ['33101']}).status_code == 200
+    assert claim(client) is None
+    enable(client)
+    assert claim(client)['supplier_product_id'] != policy['trial']['supplier_product_id']
+
+
+def test_trial_runs_without_listing_and_revocation_cannot_resurrect_lease(client):
+    product = create_ready_product(client)
+    policy = configure_trial(client, product)
+    job = claim(client)
+    assert job is not None
+    assert client.put('/delivery-quotes/policy', json={'enabled': False, 'postal_codes': ['33101']}).status_code == 200
+    assert client.put('/delivery-quotes/policy', json=policy).status_code == 200
+    lease = {'worker_id': 'isolated-1', 'lease_token': job['lease_token']}
+    assert client.post(f"/delivery-quotes/jobs/{job['id']}/heartbeat", json=lease).status_code == 409
+    assert complete(client, job).status_code == 409
+    assert client.post(f"/delivery-quotes/jobs/{job['id']}/failed", json={**lease, 'message': 'old', 'retryable': True}).status_code == 409
+    assert claim(client) is None
+    assert client.get('/delivery-quotes/jobs').json()[0]['status'] == 'needs_review'
+
+
+def test_switch_trial_revokes_old_scope_and_leases_only_new_scope(client):
+    first = create_ready_product(client)
+    second = create_ready_product(client, source_id='987654321')
+    configure_trial(client, first)
+    old = claim(client)
+    configure_trial(client, second, '75201')
+    assert complete(client, old).status_code == 409
+    new = claim(client)
+    assert new['source_url'].endswith('987654321') and new['postal_code'] == '75201'
+    assert complete(client, new).status_code == 200
+    assert client.get(f"/delivery-quotes/products/{first['id']}").json()['quotes'] == []
+
+
+def test_trial_rejects_invalid_scope_without_changing_policy_or_lease(client):
+    product = create_ready_product(client)
+    policy = configure_trial(client, product)
+    job = claim(client)
+    invalid_policies = [
+        {**policy, 'enabled': True},
+        {**policy, 'trial': {'supplier_product_id': 999999, 'postal_code': '60601'}},
+        {**policy, 'trial': {'supplier_product_id': True, 'postal_code': '60601'}},
+        {**policy, 'trial': {**policy['trial'], 'postal_code': 'invalid'}},
+    ]
+    for invalid in invalid_policies:
+        assert client.put('/delivery-quotes/policy', json=invalid).status_code == 422
+        assert client.get('/delivery-quotes/policy').json() == policy
+    assert claim(client)['lease_token'] == job['lease_token']
+    assert complete(client, job).status_code == 200
+
+
+def test_trial_selects_explicit_supplier_even_when_first_supplier_is_not_home_depot(client):
+    product = create_ready_product(client)
+    supplier_ids = []
+    def add_supplier(db):
+        first = db.scalar(select(SupplierProduct).where(SupplierProduct.product_id == product['id']))
+        first.source_url = 'https://www.amazon.com/dp/B012345678'
+        selected = SupplierProduct(product_id=product['id'], source_url='https://www.homedepot.com/p/Test/987654321')
+        db.add(selected)
+        db.flush()
+        supplier_ids.append(selected.id)
+    mutate(client, add_supplier)
+    policy = {'enabled': False, 'postal_codes': ['33101'],
+              'trial': {'supplier_product_id': supplier_ids[0], 'postal_code': '60601'}}
+    assert client.put('/delivery-quotes/policy', json=policy).status_code == 200
+    job = claim(client)
+    assert job['supplier_product_id'] == supplier_ids[0]
+    assert complete(client, job).status_code == 200
+
+
+def test_changing_only_trial_zip_revokes_old_lease(client):
+    product = create_ready_product(client)
+    configure_trial(client, product)
+    old = claim(client)
+    configure_trial(client, product, '75201')
+    assert complete(client, old).status_code == 409
+    job = claim(client)
+    assert job['postal_code'] == '75201'
+    assert complete(client, job).status_code == 200
