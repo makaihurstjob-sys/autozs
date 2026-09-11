@@ -1,7 +1,7 @@
 # Agent assignment board
 
 Coordinator: Benny. Setup date: September 11, 2026.
-Round: implementation round dispatched from 8355c1b; live resources remain coordinator-only.
+Round: implementation round resumed from 8355c1b on September 11, 2026; live resources remain coordinator-only. Previous session agents were absent; three replacement agents inspected and resumed their existing assigned worktrees without discarding edits.
 
 ## Active implementation round
 
