@@ -14,7 +14,7 @@ No blocking conflict was identified between the three integrated tracks during t
 Run in the coordinator's isolated integration checkout after serial integration, with no `.env` or operational database copied into it:
 
 ```powershell
-C:/AutoZS/venv/Scripts/python.exe -m pytest apps/api/tests/test_ebay_orders.py apps/api/tests/test_ebay_revisions.py apps/api/tests/test_delivery_checks.py apps/api/tests/test_delivery_quotes.py apps/api/tests/test_listing_jobs.py -q --disable-warnings
+C:/AutoZS/venv/Scripts/python.exe -m pytest apps/api/tests/test_ebay_orders.py apps/api/tests/test_ebay_revisions.py apps/api/tests/test_ebay_revision_fallback.py apps/api/tests/test_delivery_checks.py apps/api/tests/test_delivery_quotes.py apps/api/tests/test_listing_jobs.py -q --disable-warnings
 node --test tools/delivery-check-extension/background.test.js
 node tools/chrome-extension/ebay-submission-attempt.test.js
 node tools/chrome-extension/ebay-fill.test.js
