@@ -7,9 +7,9 @@ Round: implementation round resumed from 8355c1b on September 11, 2026; live res
 
 | Task | Owner | Branch / worktree | Permitted edits | Acceptance | Status |
 | --- | --- | --- | --- | --- | --- |
-| Uncertain submission guard | /root/posting_fix | agents/posting-fix-20260911 / C:/AutoZS/worktrees/posting-fix-20260911 | tools/chrome-extension posting code and tests; docs/agents/posting-implementation.md | Persist before click, hold unknown outcomes across restart, reconcile confirmation, isolated regressions | Running |
-| Bounded delivery trial | /root/delivery_trial | agents/delivery-trial-20260911 / C:/AutoZS/worktrees/delivery-trial-20260911 | delivery API/service/tests; tools/delivery-check-extension if needed; docs/agents/delivery-implementation.md | One product/ZIP with broad gate off, revocation and existing behavior covered | Running |
-| Account-scoped replacement | /root/inventory_fix | agents/inventory-fix-20260911 / C:/AutoZS/worktrees/inventory-fix-20260911 | apps/api/app/services/orders.py and tests/test_ebay_orders.py; docs/agents/inventory-implementation.md | Reproduce cross-account bug, fix account-scoped repair and idempotency | Running |
+| Uncertain submission guard | /root/posting_fix | agents/posting-fix-20260911 / C:/AutoZS/worktrees/posting-fix-20260911 | tools/chrome-extension posting code and tests; docs/agents/posting-implementation.md | Persist before click, hold unknown outcomes across restart, reconcile confirmation, isolated regressions | Resumed for completion/review in current session |
+| Bounded delivery trial | /root/delivery_trial | agents/delivery-trial-20260911 / C:/AutoZS/worktrees/delivery-trial-20260911 | delivery API/service/tests; tools/delivery-check-extension if needed; docs/agents/delivery-implementation.md | One product/ZIP with broad gate off, revocation and existing behavior covered | Resumed for completion/review in current session |
+| Account-scoped replacement | /root/inventory_fix | agents/inventory-fix-20260911 / C:/AutoZS/worktrees/inventory-fix-20260911 | apps/api/app/services/orders.py and tests/test_ebay_orders.py; docs/agents/inventory-implementation.md | Reproduce cross-account bug, fix account-scoped repair and idempotency | Resumed for completion/review in current session |
 
 Base for all three: 8355c1b. No operational API/database/browser actions or service activation authorized to workers. Inspect test fixtures before execution; use only disposable databases/mocked external services. Report scope expansion needs to coordinator. Earlier audit-round restrictions below are historical to that round.
 
@@ -31,3 +31,10 @@ All branches start from 23fcd18. Session owners: /root/posting, /root/delivery, 
 
 All three workers completed independently in distinct branches, committed only their assigned reports, and handed off for serial review/cherry-pick. Coordinator verified branch paths, shared instruction files, absence of runtime .env/dev.db, and clean whitespace checks. Existing tracked SQLite sidecars remain unchanged by this work; the operational checkout's pre-existing dev.db-shm modification was not staged.
 Delivery worker: ten mocked tests passed. Posting: schedule persistence tests and one isolated uncertain-submission reproduction passed. Inventory: static audit only. Application behavior and live readiness have not changed in this setup round.
+
+## Current session continuation
+Posting owner /root/posting_fix resumes unfinished guard in its existing worktree, base 8355c1b. Delivery owner /root/delivery_review reviews its completed 6451015 worktree and activation readiness; report-only scope docs/agents/delivery-implementation.md. Inventory owner /root/inventory_review reviews completed c9520e5 and verifies replacement compatibility; report-only scope docs/agents/inventory-implementation.md. Coordinator reviews combined integration checkout aeffcbc and integrates serially. All workers remain prohibited from live resources.
+
+
+Follow-up assigned to /root/inventory_review: agents/restock-guards-20260911 at C:/AutoZS/worktrees/restock-guards-20260911, base aeffcbc. Scope apps/api/app/services/ebay_revisions.py, apps/api/tests/test_ebay_revisions.py, docs/agents/restock-guards.md. Reproduce and fix generic out-of-stock RESTOCK bypass of freshness/exclusion/affirmative stock checks while preserving valid recovery. Disposable tests only; no live resources. Status assigned.
+Restock scope expanded: minimal shared eligibility call sites in apps/api/app/services/ebay_revision_batches.py and ebay_revision_csv.py plus corresponding tests, to enforce queued execution checks. No live resource grant.
