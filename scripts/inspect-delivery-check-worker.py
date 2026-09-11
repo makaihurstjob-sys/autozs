@@ -12,6 +12,26 @@ parser.add_argument('--reload', action='store_true')
 parser.add_argument('--inspect-product')
 args = parser.parse_args()
 extension = Path(__file__).resolve().parents[1] / 'tmp' / 'delivery-check-extension'
+
+
+def ready_worker(context, timeout=15):
+    """A serviceworker event can arrive before Chrome installs extension APIs."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for candidate in context.service_workers:
+            if not candidate.url.endswith('/background.js'):
+                continue
+            try:
+                name = candidate.evaluate("() => globalThis.chrome?.runtime?.getManifest?.().name")
+                if name == 'AutoZS Isolated Delivery Checks':
+                    return candidate
+            except Exception:
+                # A replaced worker may remain in Playwright's list briefly.
+                continue
+        time.sleep(0.2)
+    raise RuntimeError('The isolated delivery extension did not become ready')
+
+
 with sync_playwright() as p:
     browser = p.chromium.connect_over_cdp(f'http://127.0.0.1:{args.port}', timeout=15000)
     cdp = browser.new_browser_cdp_session()
@@ -20,7 +40,8 @@ with sync_playwright() as p:
     if worker is None:
         with context.expect_event('serviceworker', predicate=lambda w: w.url.endswith('/background.js'), timeout=15000) as event:
             cdp.send('Extensions.loadUnpacked', {'path': str(extension)})
-        worker = event.value
+        event.value
+        worker = ready_worker(context)
     if worker.evaluate('() => chrome.runtime.getManifest().name') != 'AutoZS Isolated Delivery Checks':
         raise RuntimeError('Expected the isolated delivery extension')
     if args.reload:
@@ -28,7 +49,8 @@ with sync_playwright() as p:
             raise RuntimeError('An existing check must not be interrupted for reload')
         with context.expect_event('serviceworker', predicate=lambda w: w.url.endswith('/background.js'), timeout=15000) as event:
             cdp.send('Extensions.loadUnpacked', {'path': str(extension)})
-        worker = event.value
+        event.value
+        worker = ready_worker(context)
     print(json.dumps(worker.evaluate("async () => {const s=(await chrome.storage.local.get('deliveryCheckState')).deliveryCheckState; return {name:chrome.runtime.getManifest().name, phase:s?.phase||null, paused:!!s?.paused, message:s?.message||null};}")))
     if args.inspect_cart or args.inspect_product:
         from urllib.parse import urlparse
