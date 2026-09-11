@@ -4223,14 +4223,24 @@ async function refreshListingScheduleIfStale(pkg, schedule) {
   // a fresh future time now instead of resubmitting a time eBay will reject
   // as already in the past.
   const freshEasternWallClock = formatAsEasternWallClock(new Date(Date.now() + LISTING_SCHEDULE_REFRESH_LEAD_MS));
-  pkg.listing_schedule_at = freshEasternWallClock;
   const refreshed = parseListingSchedule(freshEasternWallClock);
   const jobId = currentWorkflowJobId();
   if (jobId) {
-    try {
-      await updateListingJob(jobId, { listing_schedule_at: freshEasternWallClock });
-    } catch {}
+    let saved = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await updateListingJob(jobId, { listing_schedule_at: freshEasternWallClock });
+        saved = true;
+        break;
+      } catch {
+        if (attempt < 2) await delay(500 * (attempt + 1));
+      }
+    }
+    // Leave the old package intact so a later attempt must retry the save.
+    // Otherwise it appears fresh locally even though the API has the old time.
+    if (!saved) return null;
   }
+  pkg.listing_schedule_at = freshEasternWallClock;
   return refreshed;
 }
 

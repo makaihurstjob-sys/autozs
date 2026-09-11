@@ -23,6 +23,7 @@ function buildContext(overrides = {}) {
   const ctx = {
     Date,
     Intl,
+    delay: async () => {},
     LISTING_SCHEDULE_MIN_LEAD_MS: extractConstValue('LISTING_SCHEDULE_MIN_LEAD_MS'),
     LISTING_SCHEDULE_REFRESH_LEAD_MS: extractConstValue('LISTING_SCHEDULE_REFRESH_LEAD_MS'),
     ...overrides,
@@ -80,6 +81,34 @@ function buildContext(overrides = {}) {
     assert.equal(updateCalls.length, 1, 'the backend must be told about the corrected schedule');
     assert.equal(updateCalls[0][0], 'job-42');
     assert.equal(updateCalls[0][1].listing_schedule_at, pkg.listing_schedule_at);
+  }
+
+  {
+    let attempts = 0;
+    const ctx = buildContext({
+      currentWorkflowJobId: () => 'job-42',
+      updateListingJob: async () => { if (++attempts < 3) throw Error('temporary outage'); },
+    });
+    const pkg = { listing_schedule_at: '2020-01-01T12:00:00' };
+    const result = await ctx.refreshListingScheduleIfStale(pkg, ctx.parseListingSchedule(pkg.listing_schedule_at));
+    assert.ok(result);
+    assert.equal(attempts, 3);
+    assert.notEqual(pkg.listing_schedule_at, '2020-01-01T12:00:00');
+  }
+
+  {
+    let attempts = 0;
+    const ctx = buildContext({
+      currentWorkflowJobId: () => 'job-42',
+      updateListingJob: async () => { attempts++; throw Error('offline'); },
+    });
+    const pkg = { listing_schedule_at: '2020-01-01T12:00:00' };
+    assert.equal(await ctx.refreshListingScheduleIfStale(pkg, ctx.parseListingSchedule(pkg.listing_schedule_at)), null);
+    assert.equal(attempts, 3);
+    assert.equal(pkg.listing_schedule_at, '2020-01-01T12:00:00');
+    ctx.updateListingJob = async () => { attempts++; };
+    assert.ok(await ctx.refreshListingScheduleIfStale(pkg, ctx.parseListingSchedule(pkg.listing_schedule_at)));
+    assert.equal(attempts, 4, 'recovery must save again rather than trust a local-only schedule');
   }
 
   console.log('schedule refresh tests passed');

@@ -20,6 +20,8 @@ Next: validate a controlled product/ZIP cart cycle once the supplier product pag
 
 ## Unattended recovery follow-up
 
+Further posting recovery: the isolated cart still returned Home Depot's error page. Fixed eBay schedule refresh so a stale schedule is saved to AUTOZS before the browser package uses it. API failures retry up to three times with short delays; exhausted failures prevent submission and leave the old package schedule intact so a later attempt retries persistence. Seven targeted Node test files passed (full eBay fill, schedule refresh/field, review diagnostic, and three item-specific regressions). Operational extension reload and live listing validation remain outstanding for this change. No listing was submitted during these checks.
+
 The latest 100 listing jobs returned 83 completed, five needing review and 12 tombstoned. Completion does not measure manual assistance. Remaining review reasons include eBay item specifics, scheduling, description validation and an unverified brand. Estimated implementation readiness is approximately 85%, not a measured unattended success rate. Acceptance still requires enabled live delivery checks, reliable handling of listing validation and browser sessions, and a sustained unattended run with intervention tracking.
 
 Retesting a second product, Husky 317436410, returned the same supplier error as Anvil. After reloading the extension, `/cart` also returned the supplier error page; the cart's current contents could not be verified. Inspection tabs were closed and no items were added.
