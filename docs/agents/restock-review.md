@@ -24,3 +24,9 @@ Freshness is row recency, not proof of a fresh affirmative stock observation: `i
 ## Handoff
 
 No application changes made. Two batch lifecycle defects were sent to /root/restock_finish for regression-backed repair. Final clearance depends on reviewing that resulting diff and combined isolated tests. Canonical board read at start and handoff; no worker live-resource grant.
+
+## Follow-up review of worker lifecycle repair
+
+Re-read the updated worker batch service after the initial report. The helper now persistently cancels an invalid prepared batch, cancels ineligible running restoration rows, and requeues eligible running rows for a fresh sheet; a subsequent poll can proceed after the initial 409. It rejects non-running restoration members and uploading from terminal batch states. Uploading/waiting-results batches are not automatically requeued. These changes address findings 1 and 2 for existing members; clearance is static pending the worker and coordinator test results.
+
+Residual integrity follow-up: `_batch_jobs` silently omits nonexistent IDs from job_ids_json. A manually deleted member therefore cannot be revalidated against cached CSV. No normal member-deletion path was established in this review, so this is not a demonstrated normal-workflow blocker.
