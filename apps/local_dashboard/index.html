@@ -10340,6 +10340,7 @@
             </label>
             <div class="product-card-primary-action">
               ${product ? `<button onclick="openSource(${product.id})">Open Source</button>` : `<button class="secondary" onclick="toggleOrderDrawer(${order.id})">Details</button>`}
+              ${/^\d{2}-\d{5}-\d{5}$/.test(String(order.ebay_order_id || "")) ? `<button class="secondary" onclick="openEncodedUrl('${encodeURIComponent('https://www.ebay.com/mesh/ord/details?mode=SH&orderid=' + order.ebay_order_id)}')">Open Order</button>` : ""}
             </div>
           </div>
           ${orderDrawerHtml(order, status, open)}
