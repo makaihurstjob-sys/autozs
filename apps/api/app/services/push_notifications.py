@@ -57,6 +57,7 @@ DEFAULT_PUSH_PREFERENCES: dict[str, bool | str | int] = {
     "revision_completed": False,
     "order_sold": True,
     "worker_attention": True,
+    "traffic_attention": True,
     "delivery_mode": "individual",
 }
 ATTENTION_STATUSES = {"failed", "needs_review", "paused"}
@@ -480,6 +481,8 @@ def _alert_enabled_for_subscription(subscription: PushSubscription, alert: Opera
         return bool(preferences.get("revision_attention"))
     if alert.source == "worker":
         return bool(preferences.get("worker_attention"))
+    if alert.source == "ebay-traffic":
+        return bool(preferences.get("traffic_attention"))
     return True
 
 
