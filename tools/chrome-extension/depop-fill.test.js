@@ -102,7 +102,7 @@ async function run() {
     chrome: {
       storage: { local: {
         get: async () => ({ autozsDepopPendingPublication: {
-          jobId: "7", tabToken: "tab-7", color: "Red", price: 41.6, postClickedAt: new Date().toISOString(),
+          jobId: "7", tabToken: "tab-7", username: "m4coq", title: "Red purse", color: "Red", price: 41.6, postClickedAt: new Date().toISOString(),
         } }),
         remove: async () => { removedPending = true; },
       } },
@@ -118,10 +118,19 @@ async function run() {
   assert.equal(confirmedPath, "", "matching active card must not confirm a publication");
   assert.equal(removedPending, false);
 
-  // The originating tab's immediate product redirect is accepted.
+  // Product navigation without exact product evidence stays uncertain.
+  activeContext.document.querySelector = () => null;
+  // The originating tab's immediate product redirect needs exact product evidence.
   activeContext.__AUTOZS_DEPOP_FILL__ = false;
   activeContext.location.href = "https://www.depop.com/products/m4coq-red-purse-ab12/";
   activeContext.document.referrer = "https://www.depop.com/products/create/?autozs_job_id=7";
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "depop-fill.js"), "utf8"), activeContext);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(confirmedPath, "");
+  activeContext.__AUTOZS_DEPOP_FILL__ = false;
+  activeContext.document.querySelectorAll = () => [{href:"https://www.depop.com/m4coq/likes/"}];
+  activeContext.document.querySelector = () => ({querySelector: (selector) => selector.includes('name')
+    ? {textContent: "Red purse"} : {getAttribute: () => "41.60"}});
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "depop-fill.js"), "utf8"), activeContext);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(confirmedPath, "/depop/jobs/7/published");

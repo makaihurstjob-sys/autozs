@@ -42,6 +42,8 @@
       .replace(/\s+/g, " ").trim().toLowerCase();
   }
 
+  const selectionKey = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+
   async function selectCombobox(idPrefix, wanted) {
     if (!wanted) return true;
     const input = document.getElementById(`${idPrefix}-input`);
@@ -53,22 +55,23 @@
     const options = [...document.querySelectorAll('[role="option"], [role="menuitem"], li, button')]
       .filter(visible)
       .filter((element) => !element.id?.endsWith("toggle-button"));
-    const exact = options.find((element) => optionText(element) === target);
-    const partial = target === "other" ? null : options.find((element) => optionText(element).includes(target));
+    const exact = options.find((element) => selectionKey(optionText(element)) === selectionKey(target));
+    const partial = null;
     const choice = exact || partial;
     if (choice) {
       choice.click();
       await wait(150);
-      return true;
+      return selectionKey(input.value) === selectionKey(target);
     }
     // Searchable Depop comboboxes filter their menu from a real input event.
     setControlledValue(input, wanted);
     await wait(250);
     const filteredOptions = [...document.querySelectorAll('[role="option"], [role="menuitem"], li')].filter(visible);
-    const filtered = filteredOptions.find((element) => optionText(element) === target)
-      || (target === "other" ? null : filteredOptions.find((element) => optionText(element).includes(target)));
+    const filtered = filteredOptions.find((element) => selectionKey(optionText(element)) === selectionKey(target))
+;
     if (filtered) filtered.click();
-    return Boolean(filtered);
+    await wait(150);
+    return Boolean(filtered) && selectionKey(input.value) === selectionKey(target);
   }
 
   function localPathToUrl(path) {
@@ -94,6 +97,18 @@
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     return files.length;
+  }
+
+  function photosReady(expected) {
+    const input = document.getElementById("upload-input__input");
+    const region = input?.closest?.('[data-testid="image-upload"], [class*="ImageUpload"], [class*="imageUpload"]');
+    if (!region || expected < 1) return false;
+    if (region.querySelector('[role="progressbar"], [aria-busy="true"], [role="alert"]')) return false;
+    // Local blob previews only prove selection, never completed server upload.
+    const sources = new Set([...region.querySelectorAll('img')]
+      .filter((img) => img.complete && img.naturalWidth > 0 && /^https:\/\//i.test(img.currentSrc || img.src || ""))
+      .map((img) => img.currentSrc || img.src));
+    return sources.size === expected;
   }
 
   async function patchJob(status, progress, message) {
@@ -141,7 +156,20 @@
         if (referrer.origin !== location.origin || !/^\/products\/create\/?$/.test(referrer.pathname)) return null;
       } catch { return null; }
     }
-    return listingIdentity(location.href);
+    const identity = listingIdentity(location.href);
+    const accountLinks = [...document.querySelectorAll('header a[aria-label="Likes"], nav a[aria-label="Likes"]')];
+    const expectedAccountPath = `/${pending.username}/likes/`;
+    if (!pending.username || !accountLinks.some((link) => {
+      try { const url = new URL(link.href); return url.origin === location.origin && `${url.pathname.replace(/\/$/, "")}/` === expectedAccountPath; }
+      catch { return false; }
+    })) return null;
+    // Navigation alone can be a manual visit to an unrelated product.
+    const product = document.querySelector?.('[itemtype="https://schema.org/Product"]');
+    const name = product?.querySelector('[itemprop="name"]')?.textContent?.trim();
+    const priceNode = product?.querySelector('[itemprop="price"]');
+    const price = priceNode?.getAttribute('content') || priceNode?.textContent;
+    if (!identity || name !== pending.title || Number(price) !== Number(pending.price)) return null;
+    return identity;
   }
 
   async function confirmPublication(pending, identity) {
@@ -187,22 +215,61 @@
       tabToken,
       jobId: String(jobId),
       variantId: pkg.variant_id,
+      username: pkg.verified_username,
       title: pkg.title || "",
       color: pkg.color || "",
       price: pkg.price,
       postClickedAt: null,
     };
     await storageSet(PENDING_PUBLICATION_KEY, pending);
-    const markPostClicked = async (event) => {
-      const button = event.target?.closest?.('button[type="submit"], input[type="submit"]');
-      const label = String(button?.innerText || button?.value || "").trim().toLowerCase();
-      if (!button || label !== "post") return;
-      pending.postClickedAt = new Date().toISOString();
-      await storageSet(PENDING_PUBLICATION_KEY, pending);
-      watchForPublishedDestination(pending).catch(() => {});
+    let submitting = false;
+    let replay = false;
+    let ready = false;
+    let expectedPhotos = 0;
+    const fieldsStillMatch = () => {
+      const description = [pkg.title, pkg.description && pkg.description !== pkg.title ? pkg.description : ""].filter(Boolean).join("\n\n");
+      return Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
+        && document.getElementById("description")?.value === description
+        && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
+        && [["group", pkg.category], ["brand", pkg.brand], ["condition", pkg.condition],
+          ["colour", pkg.color], ["shippingMethods", pkg.shipping_method]].every(([field, value]) =>
+          Boolean(value) && selectionKey(document.getElementById(`${field}-input`)?.value) === selectionKey(value));
     };
-    document.addEventListener("pointerdown", markPostClicked, true);
-    document.addEventListener("click", markPostClicked, true);
+    const interceptPost = (event) => {
+      const button = event.type === "submit" ? event.submitter
+        : event.target?.closest?.('button[type="submit"], input[type="submit"]');
+      const label = String(button?.innerText || button?.value || "").trim().toLowerCase();
+      if (event.type !== "submit" && (!button || label !== "post")) return;
+      if (replay) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (submitting) return;
+      if (!ready || !fieldsStillMatch() || !photosReady(expectedPhotos) || !button || button.disabled) {
+        showStatus("Post blocked: listing fields and completed photo uploads need verification.", true);
+        return;
+      }
+      submitting = true;
+      (async () => {
+        // Persist locally first; any uncertain API outcome remains blocked.
+        pending.postClickedAt = new Date().toISOString();
+        await storageSet(PENDING_PUBLICATION_KEY, pending);
+        await apiRequest(`/depop/jobs/${encodeURIComponent(jobId)}/begin-submission`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account_key: pkg.account_key }),
+        });
+        if (!fieldsStillMatch() || !photosReady(expectedPhotos) || !button.isConnected || button.disabled) {
+          throw new Error("Form changed after submission was armed; review required");
+        }
+        replay = true;
+        try { button.click(); } finally { replay = false; }
+        if (!(await watchForPublishedDestination(pending))) {
+          showStatus("Post outcome is unconfirmed. This job is held for review; do not repost.", true);
+        }
+      })().catch((error) => showStatus(`Post held for review: ${error.message}`, true));
+    };
+    document.addEventListener("click", interceptPost, true);
+    document.addEventListener("submit", interceptPost, true);
+    return (fieldsReady, count) => { ready = fieldsReady; expectedPhotos = count; };
   }
 
   async function resumePublicationConfirmation() {
@@ -318,13 +385,16 @@
       throw new Error("Depop signed-in username does not match the enabled listing account");
     }
 
-    await armPublicationConfirmation(pkg);
+    pkg.verified_username = expectedUsername;
+    const setPublicationReadiness = await armPublicationConfirmation(pkg);
 
     // Uploading photos makes Depop rerender the form. Do that first so it
     // cannot erase controlled values written below.
     const imagePaths = [...new Set((pkg.local_image_paths?.length ? pkg.local_image_paths : pkg.image_urls) || [])];
     const uploaded = await uploadImages(imagePaths);
-    await wait(1000);
+    for (let attempt = 0; uploaded > 0 && attempt < 60 && !photosReady(uploaded); attempt++) {
+      await wait(500);
+    }
 
     // Depop has no title input: its listing title is derived from description.
     // Put the curated title first, then the longer copy, without duplicating it.
@@ -347,7 +417,7 @@
     const usps = document.getElementById("usps__shipping");
     if (usps && !usps.checked) usps.click();
     await wait(200);
-    results.push(await selectCombobox("shippingMethods", pkg.shipping_method || "Medium Under 1lb"));
+    results.push(await selectCombobox("shippingMethods", pkg.shipping_method));
     await wait(300);
     const requiredValuesPersisted = Boolean(
       document.getElementById("description")?.value?.trim()
@@ -356,12 +426,25 @@
       && document.getElementById("brand-input")?.value?.trim()
       && document.getElementById("condition-input")?.value?.trim()
     );
-    const unresolved = results.filter((result) => !result).length + (requiredValuesPersisted ? 0 : 1);
-    const note = unresolved
+    const unresolved = (!pkg.shipping_method || !pkg.category || !pkg.brand || !pkg.condition ? 1 : 0) + results.filter((result) => !result).length + (requiredValuesPersisted ? 0 : 1);
+    setPublicationReadiness(unresolved === 0, uploaded);
+    const photosVerified = photosReady(uploaded);
+    const note = !photosVerified
+      ? `Draft filled; photo upload completion is unverified. Post is blocked pending review.`
+      : unresolved
       ? `Draft filled with ${uploaded} photo(s); ${unresolved} dropdown(s) need review.`
       : `Draft filled with ${uploaded} photo(s), listing details, and shipping. Review it, then post.`;
-    await patchJob("needs_review", 90, note);
+    if (unresolved || !photosVerified) await patchJob("needs_review", 90, note);
     showStatus(note);
+    const scheduler = await storageGet("autozsDepopScheduler");
+    if (!unresolved && photosVerified && scheduler?.enabled === true && scheduler?.autoPublish === true
+      && scheduler.accountKey === pkg.account_key) {
+      const buttons = [...document.querySelectorAll('button[type="submit"], input[type="submit"]')]
+        .filter((button) => visible(button) && !button.disabled && optionText(button) === "post");
+      if (buttons.length !== 1) throw new Error("A unique enabled Post button was not found");
+      // The capturing handler owns durable authorization and the only replay.
+      buttons[0].click();
+    }
   }
 
   const task = isFillRun ? run() : Promise.all([resumePublicationConfirmation(), syncActiveListingMetrics()]);
