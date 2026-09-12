@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -56,6 +58,26 @@ class CheckPolicy(BaseModel):
         if len(set(values)) != len(values) or any(not re.fullmatch(r"[0-9]{5}", v) for v in values):
             raise ValueError("Provide unique five-digit ZIP codes")
         return values
+
+
+class LiveListingAudit(BaseModel):
+    account_id: str = Field(min_length=1, max_length=128)
+    listing_ids: list[Annotated[int, Field(strict=True, gt=0)]] = Field(min_length=1, max_length=100)
+
+    @field_validator("listing_ids")
+    @classmethod
+    def unique_listing_ids(cls, values):
+        if len(set(values)) != len(values) or any(v <= 0 for v in values):
+            raise ValueError("Provide unique positive listing row IDs")
+        return values
+
+
+@router.post("/audits/live-listings")
+def enroll_live_listing_audit(payload: LiveListingAudit, db: Session = Depends(get_db)):
+    try:
+        return delivery_checks.enroll_live_listings(db, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class WorkerClaim(BaseModel):

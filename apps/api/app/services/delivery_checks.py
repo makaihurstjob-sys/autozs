@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select, update, or_
 from sqlalchemy.orm import Session
 
-from app.models.domain import AppSetting, DeliveryCheckJob, ListingJob, Product, SupplierProduct
+from app.models.domain import AppSetting, DeliveryCheckJob, EbayListing, ListingJob, Product, SupplierProduct
 from app.services.delivery_quotes import home_depot_item_id, record_cart_quote
 
 POLICY_KEY = "delivery_check_policy"
@@ -97,10 +97,41 @@ def ensure_checks(db: Session, product_id: int) -> list[DeliveryCheckJob]:
                 or job.completed_at < datetime.utcnow() - timedelta(hours=FRESH_HOURS)
                 or home_depot_item_id(job.source_url) != home_depot_item_id(supplier.source_url)):
             job.status, job.attempts, job.source_url = "queued", 0, supplier.source_url
+            job.completed_at, job.delivery_charge = None, None
+            job.retry_at, job.lease_token, job.lease_expires_at = None, "", None
             job.message = "Delivery evidence expired or supplier product changed"
         result.append(job)
     db.commit()
     return result
+
+
+def enroll_live_listings(db: Session, account_id: str, listing_ids: list[int]) -> dict:
+    """Explicit bounded audit; supplier/ZIP evidence is shared, listing selection is not."""
+    policy = read_policy(db)
+    if not policy["enabled"] or policy.get("trial"):
+        raise ValueError("Enable configured ZIP checks before enrolling live listings")
+    if (not account_id.strip() or not 1 <= len(listing_ids) <= 100
+            or any(type(value) is not int or value <= 0 for value in listing_ids)
+            or len(set(listing_ids)) != len(listing_ids)):
+        raise ValueError("Provide an account and 1 to 100 unique listing row IDs")
+    listings = {row.id: row for row in db.scalars(select(EbayListing).where(
+        EbayListing.id.in_(listing_ids), EbayListing.account_id == account_id,
+        EbayListing.environment == "production", EbayListing.status.in_({"active", "live", "listed"}),
+    )).all()}
+    enrolled, skipped = [], []
+    for listing_id in listing_ids:
+        listing = listings.get(listing_id)
+        if listing is None:
+            skipped.append({"listing_id": listing_id, "reason": "No active production listing in this account"})
+            continue
+        jobs = ensure_checks(db, listing.product_id)
+        if not jobs:
+            skipped.append({"listing_id": listing_id, "reason": "Product is not eligible for Home Depot checks"})
+            continue
+        enrolled.append({"listing_id": listing_id, "product_id": listing.product_id,
+                         "jobs": [serialize_job(job) for job in jobs]})
+    return {"account_id": account_id, "postal_codes": policy["postal_codes"],
+            "enrolled": enrolled, "skipped": skipped}
 
 
 def serialize_job(job: DeliveryCheckJob) -> dict:
