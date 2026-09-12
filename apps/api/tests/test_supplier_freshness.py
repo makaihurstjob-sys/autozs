@@ -8,6 +8,8 @@ fallback to updated_at for rows that predate this feature.
 """
 from datetime import datetime, timedelta
 
+import pytest
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -207,3 +209,22 @@ def test_recording_a_completed_restock_job_is_unaffected_by_evidence_expiring() 
 
     assert job.status == "completed"
     assert listing.quantity == 1
+
+@pytest.mark.parametrize('field,value', [('last_price', value) for value in (0.0, -1.0, float('nan'), float('inf'), -float('inf'))] + [('last_shipping', value) for value in (float('nan'), float('inf'), -float('inf'))])
+def test_invalid_numeric_values_block_restoration_with_fresh_timestamps(field, value):
+    db = make_session()
+    try:
+        listing, supplier = _restockable_listing_and_supplier(db)
+        setattr(supplier, field, value)
+        assert stock_restoration_block(db, listing, supplier) is not None
+    finally:
+        db.close()
+
+@pytest.mark.parametrize('field', ['stock_observed_at', 'price_observed_at', 'shipping_observed_at'])
+def test_future_observations_block_restoration(field):
+    db = make_session()
+    try:
+        listing, supplier = _restockable_listing_and_supplier(db, **{field: datetime.utcnow() + timedelta(hours=1)})
+        assert stock_restoration_block(db, listing, supplier) is not None
+    finally:
+        db.close()

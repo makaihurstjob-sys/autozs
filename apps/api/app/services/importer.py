@@ -535,17 +535,20 @@ def import_products(
             supplier.last_shipping = -1.0
             db.add(supplier)
         # Bulk/URL import never carries explicit per-field capture evidence (its
-        # in_stock=True below is a default, not an observation), so none of the
-        # three observation timestamps are ever stamped here -- only cleared if
-        # the source identity itself changed.
+        # in_stock=True below is a default, not an observation), so the
+        # three observation timestamps are never stamped here. Any overwritten
+        # value loses its previous capture evidence, even if numerically equal.
         _reset_observations_on_source_change(supplier, data.source_url)
         supplier.source_url = data.source_url
         supplier.supplier_sku = data.supplier_sku
         if data.source_price is not None:
             supplier.last_price = data.source_price
+            supplier.price_observed_at = None
         if source_shipping_override is not None:
             supplier.last_shipping = source_shipping_override
+            supplier.shipping_observed_at = None
         supplier.in_stock = True
+        supplier.stock_observed_at = None
 
         existing_image_count = db.scalar(select(ProductImage).where(ProductImage.product_id == product.id).limit(1)) is not None
         used_inferred_image = any("Image URL was inferred" in warning for warning in data_warnings)
@@ -1028,6 +1031,8 @@ def _apply_supplier_capture(
         supplier.price_unavailable = False
         if math.isfinite(source_price) and source_price > 0:
             supplier.price_observed_at = received_at
+        else:
+            supplier.price_observed_at = None
     elif source_price_unavailable is True:
         supplier.last_price = None
         supplier.price_unavailable = True
@@ -1038,7 +1043,9 @@ def _apply_supplier_capture(
 
     if source_shipping is not None:
         supplier.last_shipping = source_shipping
-        supplier.shipping_observed_at = received_at
+        supplier.shipping_observed_at = (
+            received_at if math.isfinite(source_shipping) and source_shipping >= 0 else None
+        )
     if source_in_stock is False:
         # Out-of-stock invalidates the shipping quote immediately. This is not
         # affirmative shipping evidence, so any shipping observation is cleared

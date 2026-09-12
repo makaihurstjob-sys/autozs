@@ -11,6 +11,9 @@ that specific field.
 """
 
 import time
+from datetime import datetime
+
+import pytest
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
@@ -19,6 +22,8 @@ from sqlalchemy.pool import StaticPool
 from app import main as app_main
 from app.core.database import Base
 from app.services import importer
+from app.models.domain import EbayListing
+from app.services.ebay_revisions import stock_restoration_block
 
 # Small, real sleep between captures so successive datetime.utcnow() stamps are
 # guaranteed to differ even on coarser Windows clock resolutions.
@@ -298,3 +303,42 @@ def test_migration_adds_columns_leaves_existing_rows_null_and_is_idempotent(monk
         assert row_again[2] is None
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize('price', [0.0, -1.0, float('nan'), float('inf'), -float('inf')])
+def test_invalid_capture_clears_previous_price_evidence(price):
+    db = _session()
+    try:
+        product = importer.import_captured_product(db, source_url='https://www.homedepot.com/p/Invalid/990001', title='Widget', source_price=10.0, source_shipping=0.0, source_in_stock=True)
+        listing = EbayListing(product_id=product.id, listing_id='900001', status='active', price=20.0, quantity=0)
+        db.add(listing)
+        db.commit()
+        supplier = product.supplier_products[0]
+        assert stock_restoration_block(db, listing, supplier) is None
+        importer._apply_supplier_capture(supplier, source_price=price, source_shipping=None, source_in_stock=None, source_price_unavailable=None, received_at=datetime.utcnow())
+        assert supplier.price_observed_at is None
+        assert stock_restoration_block(db, listing, supplier) is not None
+    finally:
+        db.close()
+
+@pytest.mark.parametrize('shipping', [-1.0, float('nan'), float('inf'), -float('inf')])
+def test_invalid_shipping_capture_clears_previous_evidence(shipping):
+    supplier = importer.SupplierProduct(last_price=10.0, last_shipping=0.0, shipping_observed_at=datetime.utcnow())
+    importer._apply_supplier_capture(supplier, source_price=None, source_shipping=shipping, source_in_stock=None, source_price_unavailable=None, received_at=datetime.utcnow())
+    assert supplier.shipping_observed_at is None
+
+
+def test_bulk_refresh_invalidates_overwritten_capture_evidence(monkeypatch):
+    db = _session()
+    try:
+        url = 'https://www.homedepot.com/p/Bulk-Overwrite/990002'
+        product = importer.import_captured_product(db, source_url=url, title='Widget', source_price=10.0, source_shipping=0.0, source_in_stock=True)
+        monkeypatch.setattr(importer, 'extract_product_data', lambda source, source_price_override=None: importer.ImportedProductData(source_url=source, supplier='home_depot', supplier_sku='990002', title='Widget', source_price=0.0, description='', image_urls=[], warnings=[]))
+        importer.import_products(db, [url], source_shipping_override=2.0)
+        supplier = product.supplier_products[0]
+        db.refresh(supplier)
+        assert supplier.price_observed_at is None
+        assert supplier.shipping_observed_at is None
+        assert supplier.stock_observed_at is None
+    finally:
+        db.close()

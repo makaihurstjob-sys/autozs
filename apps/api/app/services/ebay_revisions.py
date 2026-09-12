@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
@@ -202,6 +203,8 @@ def _stale_observation_reason(label: str, observed_at: datetime | None, now: dat
     stale one: both fail the freshness check rather than being grandfathered in."""
     if observed_at is None:
         return f"the supplier {label} has never been confirmed"
+    if observed_at > now:
+        return f"the supplier {label} observation is in the future"
     if observed_at < now - RESTOCK_EVIDENCE_FRESHNESS:
         return f"the supplier {label} was last confirmed more than 24 hours ago"
     return None
@@ -230,6 +233,10 @@ def stock_restoration_block(db: Session, listing: EbayListing | None, supplier: 
         return unavailable
     if supplier.last_price is None:
         return "the supplier price is missing"
+    if not math.isfinite(supplier.last_price) or supplier.last_price <= 0:
+        return "the supplier price is invalid"
+    if supplier.last_shipping is None or not math.isfinite(supplier.last_shipping) or supplier.last_shipping < 0:
+        return "the supplier shipping price is invalid"
     now = _now()
     for label, observed_at in (
         ("stock", supplier.stock_observed_at),
