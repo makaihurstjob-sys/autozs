@@ -120,6 +120,7 @@
   function listingIdentity(url) {
     try {
       const parsed = new URL(url, location.origin);
+      if (parsed.origin !== "https://www.depop.com") return null;
       const match = parsed.pathname.match(/^\/products\/([^/]+)(?:\/manage)?\/?$/i);
       if (!match || ["create", "edit"].includes(match[1].toLowerCase())) return null;
       return { id: match[1], url: `${parsed.origin}/products/${match[1]}/` };
@@ -128,25 +129,19 @@
     }
   }
 
-  function findPublishedListing(pending) {
-    const current = listingIdentity(location.href);
-    if (current) return current;
-
-    const color = String(pending.color || "").trim().toLowerCase();
-    const price = Number(pending.price || 0).toFixed(2);
-    const candidates = [...document.querySelectorAll('a[href*="/products/"]')]
-      .map((anchor) => {
-        const identity = listingIdentity(anchor.href);
-        const text = String(anchor.innerText || anchor.closest("article,li,div")?.innerText || "")
-          .replace(/\s+/g, " ").trim().toLowerCase();
-        let score = 0;
-        if (identity && color && text.includes(color)) score += 2;
-        if (identity && price !== "0.00" && text.includes(price)) score += 1;
-        return { identity, score };
-      })
-      .filter((candidate) => candidate.identity);
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates[0]?.score >= 2 ? candidates[0].identity : null;
+  function findPublishedListing(pending, resumed = false) {
+    // A similarly coloured item in the seller hub is not publication evidence.
+    // Only follow the originating tab's immediate create -> product navigation.
+    const age = Date.now() - Date.parse(pending.postClickedAt);
+    if (!Number.isFinite(age) || age < 0 || age > 120000) return null;
+    if (!pending.tabToken || sessionStorage.getItem(PENDING_PUBLICATION_KEY) !== pending.tabToken) return null;
+    if (resumed) {
+      try {
+        const referrer = new URL(document.referrer);
+        if (referrer.origin !== location.origin || !/^\/products\/create\/?$/.test(referrer.pathname)) return null;
+      } catch { return null; }
+    }
+    return listingIdentity(location.href);
   }
 
   async function confirmPublication(pending, identity) {
@@ -160,14 +155,15 @@
       }),
     });
     await storageRemove(PENDING_PUBLICATION_KEY);
+    sessionStorage.removeItem(PENDING_PUBLICATION_KEY);
     showStatus("AutoZS confirmed this Depop listing as published.");
   }
 
-  async function watchForPublishedDestination(pending, timeoutMs = 30000) {
+  async function watchForPublishedDestination(pending, timeoutMs = 30000, resumed = false) {
     if (!pending?.postClickedAt) return false;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const identity = findPublishedListing(pending);
+      const identity = findPublishedListing(pending, resumed);
       if (identity) {
         await confirmPublication(pending, identity);
         return true;
@@ -178,7 +174,17 @@
   }
 
   async function armPublicationConfirmation(pkg) {
+    if (!globalThis.chrome?.storage?.local || !globalThis.sessionStorage) {
+      throw new Error("Publication tracking storage is unavailable");
+    }
+    const existing = await storageGet(PENDING_PUBLICATION_KEY);
+    if (existing && (existing.postClickedAt || String(existing.jobId) !== String(jobId))) {
+      throw new Error("Another Depop draft or uncertain publication needs review before filling this job");
+    }
+    const tabToken = crypto.randomUUID();
+    sessionStorage.setItem(PENDING_PUBLICATION_KEY, tabToken);
     const pending = {
+      tabToken,
       jobId: String(jobId),
       variantId: pkg.variant_id,
       title: pkg.title || "",
@@ -201,7 +207,10 @@
 
   async function resumePublicationConfirmation() {
     const pending = await storageGet(PENDING_PUBLICATION_KEY);
-    if (pending?.postClickedAt) await watchForPublishedDestination(pending, 15000);
+    if (pending?.postClickedAt) {
+      const identity = findPublishedListing(pending, true);
+      if (identity) await confirmPublication(pending, identity);
+    }
   }
 
   function metricNumber(element) {
@@ -284,10 +293,32 @@
   async function run() {
     showStatus("AutoZS is loading this Depop draft…");
     const pkg = await apiRequest(`/depop/jobs/${encodeURIComponent(jobId)}`);
-    await armPublicationConfirmation(pkg);
+    if (pkg.status !== "running" || pkg.depop_listing_id) {
+      throw new Error("This job is not an active unpublished Depop draft");
+    }
+    if (!pkg.account_key || params.get("autozs_account_key") !== pkg.account_key) {
+      throw new Error("Depop runner account does not match the assigned job");
+    }
     if (!(await waitForElement("upload-input__input"))) {
       throw new Error("Depop listing form did not finish loading");
     }
+
+    const accounts = await apiRequest("/depop/accounts");
+    const account = accounts.find((item) => item.key === pkg.account_key);
+    const expectedUsername = String(account?.username || "").replace(/^@/, "").toLowerCase();
+    const profileLinks = [...document.querySelectorAll('header a[aria-label="Likes"], nav a[aria-label="Likes"]')];
+    const observedUsernames = new Set(profileLinks.map((link) => {
+      try {
+        const url = new URL(link.href, location.origin);
+        return url.origin === "https://www.depop.com" ? url.pathname.match(/^\/([^/]+)\/likes\/?$/)?.[1]?.toLowerCase() : null;
+      } catch { return null; }
+    }).filter(Boolean));
+    if (!account?.enabled || !account.writes_enabled || !expectedUsername
+      || observedUsernames.size !== 1 || !observedUsernames.has(expectedUsername)) {
+      throw new Error("Depop signed-in username does not match the enabled listing account");
+    }
+
+    await armPublicationConfirmation(pkg);
 
     // Uploading photos makes Depop rerender the form. Do that first so it
     // cannot erase controlled values written below.

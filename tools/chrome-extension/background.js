@@ -27,6 +27,9 @@ const EBAY_TRAFFIC_ALARM = "autozs-ebay-traffic-poll";
 const EBAY_TRAFFIC_LAST_OPENED_KEY = "autozsEbayTrafficLastOpened";
 const EBAY_ACTIVE_LISTINGS_ALARM = "autozs-ebay-active-listings-poll";
 const EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY = "autozsEbayActiveListingsLastOpened";
+const DEPOP_SCHEDULER_ALARM = "autozs-depop-scheduler-poll";
+const DEPOP_SCHEDULER_KEY = "autozsDepopScheduler";
+let depopSchedulerBusy = false;
 const DEPOP_METRICS_ALARM = "autozs-depop-metrics-poll";
 const EBAY_ORDER_ALARM = "autozs-ebay-order-poll";
 const EBAY_ORDER_LAST_OPENED_KEY = "autozsEbayOrderLastOpened";
@@ -68,6 +71,40 @@ function isDepopMetricsUrl(url) {
       && redirect.startsWith("/sellinghub/selling/active");
   } catch {
     return false;
+  }
+}
+
+async function pollDepopScheduledJob() {
+  if (depopSchedulerBusy || !(await canRunAutozsWorkerJobs())) return;
+  depopSchedulerBusy = true;
+  try {
+    const stored = await chrome.storage.local.get([DEPOP_SCHEDULER_KEY, "autozsDepopPendingPublication"]);
+    const settings = stored?.[DEPOP_SCHEDULER_KEY];
+    if (settings?.enabled !== true || !String(settings.accountKey || "").trim()) return;
+    if (stored.autozsDepopPendingPublication) return;
+    const tabs = await chrome.tabs.query({});
+    if (tabs.some((tab) => {
+      try {
+        const url = new URL(tab.pendingUrl || tab.url || "");
+        return url.hostname === "www.depop.com" && url.pathname.startsWith("/products/create");
+      } catch { return false; }
+    })) return;
+    const accounts = await localApiJson("/depop/accounts");
+    const account = accounts.find((item) => item.key === settings.accountKey);
+    if (!account?.enabled || !account.writes_enabled) return;
+    const result = await localApiJson(`/depop/jobs/next?account_key=${encodeURIComponent(settings.accountKey)}`, { method: "POST" });
+    const job = result?.job;
+    if (job?.status !== "running" || job.account_key !== settings.accountKey) return;
+    const runner = new URL(job.runner_url);
+    if (runner.origin !== "https://www.depop.com" || runner.pathname !== "/products/create/"
+      || runner.searchParams.get("autozs_job_id") !== String(job.id)
+      || runner.searchParams.get("autozs_account_key") !== settings.accountKey
+      || runner.searchParams.get("autozs_fill") !== "1") return;
+    // A failed/uncertain tab creation leaves the job running for review. Never
+    // requeue it automatically: the tab may have opened before Chrome errored.
+    await chrome.tabs.create({ url: runner.href, active: false });
+  } finally {
+    depopSchedulerBusy = false;
   }
 }
 
@@ -2438,6 +2475,7 @@ const AUTOZS_ALARM_SCHEDULE = [
   [EBAY_REVISION_BATCH_ALARM, 1, 2],
   [EBAY_ACTIVE_LISTINGS_ALARM, 1, 2],
   [DEPOP_METRICS_ALARM, 0.5, 5],
+  [DEPOP_SCHEDULER_ALARM, 1, 1],
   [EBAY_TRAFFIC_ALARM, 1, 2],
   [EBAY_ORDER_ALARM, 1, 2],
   ["autozs-profit-reconciliation", 1, 2],
@@ -2519,6 +2557,7 @@ if (chrome.alarms) {
     if (alarm?.name === EBAY_REVISION_ALARM) openNextEbayRevisionJob().catch(() => {});
     if (alarm?.name === EBAY_REVISION_BATCH_ALARM) openNextEbayRevisionBatch().catch(() => {});
     if (alarm?.name === EBAY_ACTIVE_LISTINGS_ALARM) openNextEbayActiveListingsSync().catch(() => {});
+    if (alarm?.name === DEPOP_SCHEDULER_ALARM) pollDepopScheduledJob().catch(() => {});
     if (alarm?.name === DEPOP_METRICS_ALARM) ensureDepopMetricsTab().catch(() => {});
     if (alarm?.name === EBAY_TRAFFIC_ALARM) openNextEbayTrafficSync().catch(() => {});
     if (alarm?.name === "autozs-supplier-receipts") reconcileNextSupplierReceipt().catch(() => {});
