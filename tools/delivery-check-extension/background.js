@@ -15,9 +15,25 @@ function lease(state) { return { worker_id: state.workerId, lease_token: state.j
 async function page(state, action) {
   await chrome.scripting.executeScript({ target: { tabId: state.tabId }, files: ['cart-quotes.js', 'page.js'] });
   const result = await chrome.scripting.executeScript({ target: { tabId: state.tabId }, args: [action, state.job],
-    func: (action, job) => autozsDeliveryPage(action, job) });
-  if (result.length !== 1 || !result[0].result) throw Error('Missing delivery page evidence');
-  return result[0].result;
+    func: async (action, job) => {
+      // Chrome can discard a thrown page error and return an empty result.
+      // Carry errors explicitly so supplier refresh failures retain their retry policy.
+      try { return { ok: true, evidence: await autozsDeliveryPage(action, job) }; }
+      catch (error) { return { ok: false, message: String(error?.message || error).slice(0, 500) }; }
+    } });
+  if (!Array.isArray(result) || result.length !== 1) throw Error('Missing delivery page evidence');
+  const frame = result[0];
+  if (!frame || typeof frame !== 'object') throw Error('Missing delivery page evidence');
+  if (frame.error) throw Error(String(frame.error.message || frame.error));
+  const response = frame.result;
+  if (response?.ok === false) throw Error(response.message || 'Delivery page action failed');
+  const evidence = response?.evidence;
+  const flag = { prepare_product: 'prepared', add: 'added', zip: 'changed', remove: 'removed' }[action];
+  const valid = action === 'inspect'
+    ? evidence && typeof evidence.empty === 'boolean' && typeof evidence.cartMatches === 'boolean'
+    : flag && evidence?.[flag] === true;
+  if (response?.ok !== true || !valid) throw Error('Missing delivery page evidence');
+  return evidence;
 }
 async function transition(state, phase) { state.phase = phase; state.phaseAt = Date.now(); await save(state); }
 
