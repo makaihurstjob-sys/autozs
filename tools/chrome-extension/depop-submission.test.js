@@ -37,6 +37,10 @@ async function main() {
   images=[{complete:true,naturalWidth:100,src:'https://media-photos.depop.com/photo.jpg'}];assert.equal(context.photosReady(1),true);
   busy=true;assert.equal(context.photosReady(1),false);busy=false;
   assert.equal(context.photosReady(2),false);
+  const uploadSource = source.slice(source.indexOf('  async function uploadImages'), source.indexOf('  function photoRegion'));
+  const uploadContext={document:{getElementById:()=>({})},photoRegion:()=>({querySelectorAll:()=>[{}]}),imageFile:()=>{throw Error('must not fetch');}};
+  vm.createContext(uploadContext);vm.runInContext(uploadSource,uploadContext);
+  await assert.rejects(()=>uploadContext.uploadImages(['image.jpg']),/Existing draft photos/);
   const trigger = source.slice(source.indexOf('    const scheduler = await storageGet("autozsDepopScheduler")'), source.indexOf('\n  const task =')).replace(/\n  }\s*$/, '');
   for (const settings of [null, {enabled:true,accountKey:'m4coq'}, {enabled:true,autoPublish:true,accountKey:'other'}, {enabled:true,autoPublish:true,accountKey:'m4coq'}]) {
     let clicks=0;
