@@ -29,12 +29,12 @@ async function main() {
     handlers.click(event);await new Promise(resolve=>setImmediate(resolve));
     assert.equal(order.filter(x=>x==='click').length,failure==='none'?1:0,'uncertainty cannot retry');
   }
-  const photoSource=source.slice(source.indexOf('  function photosReady'),source.indexOf('  async function patchJob'));
+  const photoSource=source.slice(source.indexOf('  function photoRegion'),source.indexOf('  async function patchJob'));
   let images=[],busy=false;
   const context={document:{getElementById:()=>({closest:()=>({querySelector:()=>busy?{}:null,querySelectorAll:()=>images})})}};
   vm.createContext(context);vm.runInContext(photoSource,context);
   images=[{complete:true,naturalWidth:100,src:'blob:preview'}];assert.equal(context.photosReady(1),false);
-  images=[{complete:true,naturalWidth:100,src:'https://images.example/photo.jpg'}];assert.equal(context.photosReady(1),true);
+  images=[{complete:true,naturalWidth:100,src:'https://media-photos.depop.com/photo.jpg'}];assert.equal(context.photosReady(1),true);
   busy=true;assert.equal(context.photosReady(1),false);busy=false;
   assert.equal(context.photosReady(2),false);
   const trigger = source.slice(source.indexOf('    const scheduler = await storageGet("autozsDepopScheduler")'), source.indexOf('\n  const task =')).replace(/\n  }\s*$/, '');

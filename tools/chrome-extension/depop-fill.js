@@ -90,6 +90,9 @@
   async function uploadImages(paths) {
     const input = document.getElementById("upload-input__input");
     if (!input || !paths.length) return 0;
+    const region = photoRegion();
+    if (!region) throw new Error("Photo upload region could not be verified");
+    if (region.querySelectorAll('img').length) throw new Error("Existing draft photos need review before uploading this job");
     const files = await Promise.all(paths.slice(0, 4).map(imageFile));
     const transfer = new DataTransfer();
     files.forEach((file) => transfer.items.add(file));
@@ -99,14 +102,17 @@
     return files.length;
   }
 
+  function photoRegion() {
+    return document.getElementById("upload-input__input")?.closest?.('[data-testid="image-upload"], [class*="ImageUpload"], [class*="imageUpload"], [class*="thumbnailContainer"]');
+  }
+
   function photosReady(expected) {
-    const input = document.getElementById("upload-input__input");
-    const region = input?.closest?.('[data-testid="image-upload"], [class*="ImageUpload"], [class*="imageUpload"]');
+    const region = photoRegion();
     if (!region || expected < 1) return false;
     if (region.querySelector('[role="progressbar"], [aria-busy="true"], [role="alert"]')) return false;
     // Local blob previews only prove selection, never completed server upload.
     const sources = new Set([...region.querySelectorAll('img')]
-      .filter((img) => img.complete && img.naturalWidth > 0 && /^https:\/\//i.test(img.currentSrc || img.src || ""))
+      .filter((img) => img.complete && img.naturalWidth > 0 && /^https:\/\/media-photos\.depop\.com\//i.test(img.currentSrc || img.src || ""))
       .map((img) => img.currentSrc || img.src));
     return sources.size === expected;
   }
