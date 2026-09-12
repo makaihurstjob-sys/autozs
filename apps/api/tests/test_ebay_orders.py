@@ -16,6 +16,7 @@ def _captured_product(client):
             "title": "First Real Sale Product",
             "source_price": 12.0,
             "source_shipping": 0.0,
+            "source_in_stock": True,
             "description": "A product used to test Seller Hub order imports.",
             "image_urls": "https://images.thdstatic.com/productImages/first-sale.jpg",
         },

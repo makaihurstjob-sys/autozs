@@ -420,7 +420,12 @@ def _queue_replacement_publish(
         or supplier.last_price is None
         or supplier.last_shipping is None
         or float(supplier.last_shipping) < 0
-        or (require_confirmed_stock and supplier.updated_at < checked_at - timedelta(hours=24))
+        or (require_confirmed_stock and any(
+            observed_at is None or not checked_at - timedelta(hours=24) <= observed_at <= checked_at
+            for observed_at in (
+                supplier.stock_observed_at, supplier.price_observed_at, supplier.shipping_observed_at
+            )
+        ))
     ):
         return False
     another_sellable_listing = db.scalar(
