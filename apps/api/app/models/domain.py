@@ -213,6 +213,13 @@ class SupplierProduct(Base, TimestampMixin):
     minimum_order_quantity: Mapped[int] = mapped_column(Integer, default=1)
     in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
     price_unavailable: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Per-field observation timestamps: set only when a capture supplies explicit
+    # evidence for that field (see app/services/importer.py::_apply_supplier_capture).
+    # No column default and no ORM onupdate -- a title-only or price-only capture
+    # must not make stale stock/price/shipping evidence look fresh.
+    stock_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    price_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    shipping_observed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     product: Mapped[Product] = relationship(back_populates="supplier_products")
 

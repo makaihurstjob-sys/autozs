@@ -1,6 +1,7 @@
 import html
 import base64
 import json
+import math
 import re
 import zipfile
 from dataclasses import dataclass
@@ -533,6 +534,11 @@ def import_products(
             supplier = SupplierProduct(product_id=product.id, supplier=data.supplier, source_url=data.source_url)
             supplier.last_shipping = -1.0
             db.add(supplier)
+        # Bulk/URL import never carries explicit per-field capture evidence (its
+        # in_stock=True below is a default, not an observation), so none of the
+        # three observation timestamps are ever stamped here -- only cleared if
+        # the source identity itself changed.
+        _reset_observations_on_source_change(supplier, data.source_url)
         supplier.source_url = data.source_url
         supplier.supplier_sku = data.supplier_sku
         if data.source_price is not None:
@@ -658,27 +664,23 @@ def import_captured_product(
             last_shipping=-1.0,
         )
         db.add(supplier)
+    _reset_observations_on_source_change(supplier, source_url)
     supplier.source_url = source_url
     supplier.supplier_sku = _sku_from_url(source_url)
-    if source_price is not None:
-        supplier.last_price = source_price
-        supplier.price_unavailable = False
-    elif source_price_unavailable is True:
-        supplier.last_price = None
-        supplier.price_unavailable = True
-    elif source_price_unavailable is False:
-        supplier.price_unavailable = False
-    if source_shipping is not None:
-        supplier.last_shipping = source_shipping
-    if source_in_stock is False:
-        supplier.last_shipping = -1.0
+    received_at = datetime.utcnow()
+    _apply_supplier_capture(
+        supplier,
+        source_price=source_price,
+        source_shipping=source_shipping,
+        source_in_stock=source_in_stock,
+        source_price_unavailable=source_price_unavailable,
+        received_at=received_at,
+    )
     if subscription_discount_percent is not None:
         supplier.subscription_discount_percent = subscription_discount_percent
     if minimum_order_quantity is not None:
         supplier.minimum_order_quantity = normalize_minimum_order_quantity(minimum_order_quantity)
-    if source_in_stock is not None:
-        supplier.in_stock = source_in_stock
-    supplier.updated_at = datetime.utcnow()
+    supplier.updated_at = received_at
     effective_source_price = source_price if source_price is not None else supplier.last_price
     effective_minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity)
     _log_supplier_snapshot(
@@ -763,26 +765,21 @@ def update_product_from_capture(
         product.competitor_price = competitor_price
 
     supplier = product.supplier_products[0] if product.supplier_products else None
-    if supplier and source_price is not None:
-        supplier.last_price = source_price
-        supplier.price_unavailable = False
-    elif supplier and source_price_unavailable is True:
-        supplier.last_price = None
-        supplier.price_unavailable = True
-    elif supplier and source_price_unavailable is False:
-        supplier.price_unavailable = False
-    if supplier and source_shipping is not None:
-        supplier.last_shipping = source_shipping
-    if supplier and source_in_stock is False:
-        supplier.last_shipping = -1.0
-    if supplier and source_in_stock is not None:
-        supplier.in_stock = source_in_stock
-    if supplier and subscription_discount_percent is not None:
-        supplier.subscription_discount_percent = subscription_discount_percent
-    if supplier and minimum_order_quantity is not None:
-        supplier.minimum_order_quantity = normalize_minimum_order_quantity(minimum_order_quantity)
     if supplier:
-        supplier.updated_at = datetime.utcnow()
+        received_at = datetime.utcnow()
+        _apply_supplier_capture(
+            supplier,
+            source_price=source_price,
+            source_shipping=source_shipping,
+            source_in_stock=source_in_stock,
+            source_price_unavailable=source_price_unavailable,
+            received_at=received_at,
+        )
+        if subscription_discount_percent is not None:
+            supplier.subscription_discount_percent = subscription_discount_percent
+        if minimum_order_quantity is not None:
+            supplier.minimum_order_quantity = normalize_minimum_order_quantity(minimum_order_quantity)
+        supplier.updated_at = received_at
     effective_source_price = source_price if source_price is not None else (supplier.last_price if supplier else None)
     effective_source_shipping = source_shipping if source_shipping is not None else (supplier.last_shipping if supplier else -1.0)
     effective_minimum_order_quantity = normalize_minimum_order_quantity(supplier.minimum_order_quantity if supplier else 1)
@@ -997,6 +994,61 @@ def _sync_product_images(db: Session, product_id: int, image_urls: list[str]) ->
             existing_image.sort_order = index
             if existing_image.local_path is None:
                 existing_image.local_path = _download_image(product_id, image_url, index)
+
+
+def _reset_observations_on_source_change(supplier: SupplierProduct, new_source_url: str) -> None:
+    """Clear per-field observation timestamps when the supplier source identity
+    changes (new source URL/listing for the same product row). Evidence gathered
+    against the old source must not be treated as evidence for the new one."""
+    if supplier.source_url and supplier.source_url != new_source_url:
+        supplier.stock_observed_at = None
+        supplier.price_observed_at = None
+        supplier.shipping_observed_at = None
+
+
+def _apply_supplier_capture(
+    supplier: SupplierProduct,
+    *,
+    source_price: float | None,
+    source_shipping: float | None,
+    source_in_stock: bool | None,
+    source_price_unavailable: bool | None,
+    received_at: datetime,
+) -> None:
+    """Apply one capture event's explicit field values to a SupplierProduct.
+
+    `received_at` is a single shared server receipt time for the whole capture
+    event. Each observation timestamp is only stamped when this capture actually
+    supplied explicit evidence for that specific field -- a title-only or
+    price-only capture must never make stale stock/shipping evidence look fresh,
+    and vice versa.
+    """
+    if source_price is not None:
+        supplier.last_price = source_price
+        supplier.price_unavailable = False
+        if math.isfinite(source_price) and source_price > 0:
+            supplier.price_observed_at = received_at
+    elif source_price_unavailable is True:
+        supplier.last_price = None
+        supplier.price_unavailable = True
+        supplier.price_observed_at = received_at
+    elif source_price_unavailable is False:
+        # An absent/false price-unavailable flag alone is not an observation.
+        supplier.price_unavailable = False
+
+    if source_shipping is not None:
+        supplier.last_shipping = source_shipping
+        supplier.shipping_observed_at = received_at
+    if source_in_stock is False:
+        # Out-of-stock invalidates the shipping quote immediately. This is not
+        # affirmative shipping evidence, so any shipping observation is cleared
+        # rather than stamped.
+        supplier.last_shipping = -1.0
+        supplier.shipping_observed_at = None
+
+    if source_in_stock is not None:
+        supplier.in_stock = source_in_stock
+        supplier.stock_observed_at = received_at
 
 
 def _log_supplier_snapshot(db: Session, product_id: int, price: float | None, shipping: float | None, message: str) -> None:

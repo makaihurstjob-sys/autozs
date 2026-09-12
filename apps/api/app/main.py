@@ -122,6 +122,12 @@ def _ensure_lightweight_columns() -> None:
             "subscription_discount_percent": "FLOAT",
             "minimum_order_quantity": "INTEGER DEFAULT 1 NOT NULL",
             "price_unavailable": "BOOLEAN DEFAULT 0 NOT NULL",
+            # Additive only: no backfill from updated_at/PriceSnapshot/refresh
+            # completion and no migration-time stamping. Existing rows must stay
+            # NULL here until a fresh, explicit capture actually observes them.
+            "stock_observed_at": "DATETIME",
+            "price_observed_at": "DATETIME",
+            "shipping_observed_at": "DATETIME",
         },
         "supplier_orders": {
             "approved_total": "FLOAT DEFAULT 0 NOT NULL",
