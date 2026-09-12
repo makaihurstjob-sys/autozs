@@ -12,7 +12,7 @@ from app.models.domain import (
     ListingDraft,
     SupplierProduct,
 )
-from app.services.ebay_revisions import STOCK_ACTION_QUANTITY
+from app.services.ebay_revisions import STOCK_ACTION_QUANTITY, restock_job_block
 
 
 HEADER_ALIASES = {
@@ -77,6 +77,9 @@ def build_ebay_price_revision_csv(
         if job is None:
             raise ValueError(f"eBay revision job {job_id} was not found")
         _validate_job(job, account_key)
+        restoration_block = restock_job_block(db, job)
+        if restoration_block:
+            raise ValueError(f"Job {job.id} cannot restore stock: {restoration_block}")
         listing = db.get(EbayListing, job.ebay_listing_id)
         listing_id = str(listing.listing_id if listing is not None else "").strip()
         if not (listing_id.isdigit() and len(listing_id) == 12):

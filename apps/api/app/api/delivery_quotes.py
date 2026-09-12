@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -7,7 +9,7 @@ from app.services.delivery_quotes import record_cart_quote, product_delivery_quo
 from app.services import delivery_checks
 from app.models.domain import DeliveryCheckJob
 from sqlalchemy import select
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 router = APIRouter(prefix="/delivery-quotes", tags=["delivery-quotes"])
 
@@ -33,9 +35,21 @@ def read_product_quotes(product_id: int, db: Session = Depends(get_db)):
     return product_delivery_quotes(db, product_id)
 
 
+class CheckTrial(BaseModel):
+    supplier_product_id: int = Field(strict=True, gt=0)
+    postal_code: str = Field(pattern=r"^[0-9]{5}$")
+
+
 class CheckPolicy(BaseModel):
     enabled: bool
+    trial: CheckTrial | None = None
     postal_codes: list[str] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def trial_requires_broad_disabled(self):
+        if self.enabled and self.trial:
+            raise ValueError("Disable broad checks before configuring a bounded trial")
+        return self
 
     @field_validator("postal_codes")
     @classmethod
@@ -44,6 +58,26 @@ class CheckPolicy(BaseModel):
         if len(set(values)) != len(values) or any(not re.fullmatch(r"[0-9]{5}", v) for v in values):
             raise ValueError("Provide unique five-digit ZIP codes")
         return values
+
+
+class LiveListingAudit(BaseModel):
+    account_id: str = Field(min_length=1, max_length=128)
+    listing_ids: list[Annotated[int, Field(strict=True, gt=0)]] = Field(min_length=1, max_length=100)
+
+    @field_validator("listing_ids")
+    @classmethod
+    def unique_listing_ids(cls, values):
+        if len(set(values)) != len(values) or any(v <= 0 for v in values):
+            raise ValueError("Provide unique positive listing row IDs")
+        return values
+
+
+@router.post("/audits/live-listings")
+def enroll_live_listing_audit(payload: LiveListingAudit, db: Session = Depends(get_db)):
+    try:
+        return delivery_checks.enroll_live_listings(db, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class WorkerClaim(BaseModel):
@@ -71,7 +105,10 @@ def read_check_policy(db: Session = Depends(get_db)):
 
 @router.put("/policy")
 def save_check_policy(payload: CheckPolicy, db: Session = Depends(get_db)):
-    return delivery_checks.write_policy(db, payload.model_dump())
+    try:
+        return delivery_checks.write_policy(db, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/jobs")

@@ -5,6 +5,7 @@ import csv
 from datetime import date, datetime, timedelta
 from io import BytesIO, StringIO, TextIOWrapper
 import json
+import math
 import re
 from typing import Any
 from zipfile import BadZipFile, ZipFile
@@ -253,8 +254,12 @@ def import_traffic_report(
         metric_values = item.get("metricValues") if isinstance(item.get("metricValues"), list) else []
         metrics: dict[str, float] = {}
         for index, key in enumerate(metric_keys):
-            value = metric_values[index].get("value") if index < len(metric_values) and isinstance(metric_values[index], dict) else None
-            metrics[key] = _metric_number(value)
+            entry = metric_values[index] if index < len(metric_values) else None
+            if not isinstance(entry, dict) or entry.get("applicable") is False:
+                continue
+            value = entry.get("value")
+            if _valid_traffic_count(value):
+                metrics[key] = float(value)
         record_start = _parse_traffic_datetime(item.get("startDate"))
         record_end = _parse_traffic_datetime(item.get("endDate"))
         if detected_dimension.upper() == "DAY":
@@ -444,6 +449,58 @@ def backfill_listing_views_from_traffic(db: Session, *, account_key: str | None 
     return updated
 
 
+def _valid_traffic_count(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value)) and float(value) >= 0
+    except (ValueError, TypeError):
+        return False
+
+
+def traffic_account_freshness(
+    db: Session, *, records: list[EbayTrafficRecord] | None = None,
+    account: str = "all", active_only: bool = False, now: datetime | None = None,
+) -> dict[str, datetime | None]:
+    """Report observations per account; row edits and view-only scrapes are not reports.
+
+    A zero metric is valid evidence, but a missing metric is not. This describes
+    account report freshness, not complete coverage of every active listing.
+    """
+    checked_at = now or datetime.utcnow()
+    aliases = {}
+    for configured in db.scalars(select(EbayAccount)).all():
+        aliases[configured.key] = configured.key
+        if configured.account_id:
+            aliases[configured.account_id] = configured.key
+    canonical = lambda value: aliases.get(value, value or "manual")
+    selected = canonical(account)
+    active = {canonical(value) for value in db.scalars(
+        select(EbayListing.account_id).where(
+            EbayListing.status.in_(("active", "listed", "live", "scheduled"))
+        )
+    ).all()}
+    if records is None:
+        records = list(db.scalars(select(EbayTrafficRecord)).all())
+    expected = active if active_only else active | {canonical(row.account_key or row.account_id) for row in records}
+    if account != "all":
+        expected = expected & {selected} if active_only else {selected}
+    result = {key: None for key in expected}
+    for row in records:
+        key = canonical(row.account_key or row.account_id)
+        if key not in result or row.last_updated_at is None or row.last_updated_at > checked_at:
+            continue
+        metrics = json.loads(row.raw_metrics_json or "{}")
+        if not any(_valid_traffic_count(metrics.get(name)) for name in ("TOTAL_IMPRESSION_TOTAL", "LISTING_IMPRESSION_TOTAL")):
+            continue
+        if not _valid_traffic_count(metrics.get("LISTING_VIEWS_TOTAL")):
+            continue
+        previous = result[key]
+        if previous is None or row.last_updated_at > previous:
+            result[key] = row.last_updated_at
+    return result
+
+
 def traffic_overview(
     db: Session,
     *,
@@ -566,10 +623,13 @@ def traffic_overview(
         key=lambda item: item["opportunity_score"],
         reverse=True,
     )[:10]
-    last_updated = max(
-        [value for record in records for value in (record.last_updated_at, record.updated_at) if value]
-        + ([latest_scrape] if latest_scrape else []),
-        default=None,
+    account_freshness = traffic_account_freshness(db, records=records, account=selected_account)
+    # The aggregate is only fresh if every represented/active account has a
+    # recent report with both impressions and views. Missing evidence stays null.
+    last_updated = (
+        min(account_freshness.values())
+        if account_freshness and all(value is not None for value in account_freshness.values())
+        else None
     )
     available_metrics = sorted(
         {
@@ -892,7 +952,7 @@ def _seller_hub_row_metrics(row: dict[str, str]) -> dict[str, float]:
 
     for metric_key, aliases in SELLER_HUB_CANONICAL_ALIASES.items():
         value = _first_traffic_value(row, *aliases)
-        if value:
+        if _looks_like_traffic_number(value):
             is_rate = metric_key in {"CLICK_THROUGH_RATE", "SALES_CONVERSION_RATE"}
             metrics[metric_key] = _seller_hub_number(value, rate=is_rate)
 

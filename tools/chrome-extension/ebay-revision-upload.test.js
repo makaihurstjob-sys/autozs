@@ -186,10 +186,52 @@ async function runNeedsReviewRetryTest() {
   if (!downloadOutputLink.clicked) throw new Error("Expected a needs-review retry to download the existing eBay result.");
 }
 
+async function runRejectedUploadTest() {
+  const filename = "autozs-restock-guard.csv";
+  const upload = new FakeElement({ text: "Upload", tagName: "BUTTON" });
+  const input = { files: [{ name: filename }] };
+  const patches = [];
+  const context = {
+    console, setTimeout, URLSearchParams,
+    API: "http://127.0.0.1:8000",
+    location: { search: "?autozs_revision_batch=9&autozs_account_key=seller", pathname: "/sh/reports/uploads" },
+    window: {},
+    document: {
+      querySelector() { return input; },
+      querySelectorAll(selector) {
+        return selector === 'button, a, [role="button"], label' ? [upload] : [];
+      },
+    },
+    chrome: { runtime: { async sendMessage() { return { ok: true }; } } },
+    reportEbayBrowserAccount: async () => ({ can_list: true }),
+    fetch: async (url, options = {}) => {
+      if (!String(url).endsWith("/ebay/revision-batches/9")) throw new Error(`Unexpected fetch: ${url}`);
+      if (options.method === "PATCH") {
+        const patch = JSON.parse(options.body);
+        patches.push(patch);
+        if (patch.status === "uploading") {
+          return { ok: false, text: async () => "Supplier evidence is stale" };
+        }
+        return { ok: true, json: async () => ({ id: 9, ...patch }) };
+      }
+      return { ok: true, json: async () => ({ id: 9, status: "prepared", filename, csv_content: "Quantity\n1" }) };
+    },
+  };
+  vm.createContext(context);
+  await vm.runInContext(source, context);
+  if (!patches.some((patch) => patch.status === "uploading")) throw new Error("Expected pre-upload backend check.");
+  if (upload.clicked) throw new Error("Rejected restoration must never click Upload.");
+  if (patches.some((patch) => patch.status === "waiting_results")) throw new Error("Rejected upload must not wait for results.");
+  if (!patches.some((patch) => patch.status === "needs_review" && patch.message.includes("Supplier evidence is stale"))) {
+    throw new Error("Expected the backend rejection to be retained for review.");
+  }
+}
+
 runLogoAssetTest();
 
 runRenamedUploadResultTest()
   .then(runNeedsReviewRetryTest)
+  .then(runRejectedUploadTest)
   .then(() => console.log("ebay revision upload tests ok"))
   .catch((error) => {
     console.error(error);

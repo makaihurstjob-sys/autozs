@@ -26,6 +26,7 @@ def create_ready_product(
             "title": title,
             "source_price": source_price,
             "source_shipping": 0.0,
+            "source_in_stock": True,
             "competitor_price": competitor_price,
             "description": "Captured details for queue testing",
             "image_urls": PNG_DATA_URL,

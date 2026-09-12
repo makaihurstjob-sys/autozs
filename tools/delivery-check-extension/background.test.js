@@ -23,6 +23,20 @@ function harness(options = {}) {
       if (url.endsWith('/failed') && options.loseFailureResponse) throw Error('connection lost');
       return { ok: true, json: async () => ({ status: 'needs_review' }) };
     },
+    autozsDeliveryPage: action => {
+      if (options.supplierError) throw Error('Transient supplier page error: Home Depot requested a refresh');
+      if (options.pageError) throw Error(options.pageError);
+      if (action === 'inspect') return options.missingInspect ? undefined : {
+        empty: options.foreignCart ? false : empty,
+        cartMatches: !empty,
+        quote: empty ? null : { source_url: job.source_url, postal_code: job.postal_code, quantity: 1, delivery_charge: 35 },
+      };
+      if (action === 'add') { addCount++; empty = false; }
+      if (action === 'remove') empty = true;
+      if (options.missingAction === action) return undefined;
+      if (options.errorAfterAction === action) throw Error('Transient supplier page error: uncertain mutation');
+      return { [{ prepare_product: 'prepared', add: 'added', zip: 'changed', remove: 'removed' }[action]]: true };
+    },
     chrome: {
       storage: { local: {
         get: async () => structuredClone(storage),
@@ -38,15 +52,10 @@ function harness(options = {}) {
       scripting: { executeScript: async request => {
         if (request.files) return [];
         const action = request.args[0]; actions.push(action);
-        if (options.supplierError) throw Error('Transient supplier page error: Home Depot requested a refresh');
-        if (action === 'inspect') return [{ result: {
-          empty: options.foreignCart ? false : empty,
-          cartMatches: !empty,
-          quote: empty ? null : { source_url: job.source_url, postal_code: job.postal_code, quantity: 1, delivery_charge: 35 },
-        } }];
-        if (action === 'add') { addCount++; empty = false; }
-        if (action === 'remove') empty = true;
-        return [{ result: { ok: true } }];
+        if (options.frameError) return [{ error: { message: options.frameError } }];
+        if (options.missingFrame) return [];
+        if (options.nullFrame) return [null];
+        return [{ result: await request.func(...request.args) }];
       } },
       alarms: { create() {}, onAlarm: { addListener() {} } },
       runtime: { onStartup: { addListener() {} }, onInstalled: { addListener() {} } },
@@ -148,3 +157,48 @@ test('uncertain failure report preserves state instead of claiming another job',
   assert.equal(h.addCount, 0);
   assert.equal(h.calls.filter(c => c.url.endsWith('/claim')).length, 1);
 });
+
+
+test('injected page exceptions retain the actual failure reason', async () => {
+  const h = harness({ pageError: 'Signed-out guest session could not be verified' });
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.message, h.options.pageError);
+  assert.equal(h.calls.at(-1).body.message, h.options.pageError);
+});
+
+test('frame execution errors retain their failure reason', async () => {
+  const h = harness({ frameError: 'Page script failed' });
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.message, 'Page script failed');
+});
+
+for (const option of ['missingInspect', 'missingFrame', 'nullFrame']) {
+  test(option + ' remains a hard evidence failure', async () => {
+    const h = harness({ [option]: true });
+    await h.tick(); await h.tick();
+    assert.equal(h.storage.deliveryCheckState.message, 'Missing delivery page evidence');
+    assert.equal(h.addCount, 0);
+    assert.equal(h.complete, false);
+  });
+}
+
+for (const action of ['prepare_product', 'add', 'remove']) {
+  test('missing ' + action + ' acknowledgement never repeats the action', async () => {
+    const h = harness({ missingAction: action });
+    for (let i = 0; i < 12; i++) await h.tick();
+    h.restart(); await h.tick();
+    assert.equal(h.storage.deliveryCheckState.paused, true);
+    assert.equal(h.actions.filter(a => a === action).length, 1);
+    assert.equal(h.complete, false);
+  });
+}
+
+for (const action of ['add', 'remove']) {
+  test('transient error after ' + action + ' reconciles without replay', async () => {
+    const h = harness({ errorAfterAction: action });
+    for (let i = 0; i < 12 && !h.complete; i++) await h.tick();
+    assert.equal(h.complete, true);
+    assert.equal(h.actions.filter(a => a === action).length, 1);
+    assert.equal(h.addCount, 1);
+  });
+}

@@ -12,6 +12,8 @@ from app.models.domain import (
     EbayRevisionBatchStatus,
     EbayRevisionJob,
     EbayRevisionJobStatus,
+    EbaySyncRun,
+    EbaySyncRunStatus,
     ListingJob,
     ListingJobStatus,
     OperationalAlert,
@@ -30,6 +32,8 @@ ACTIVE_STATUSES = {OperationalAlertStatus.open.value, OperationalAlertStatus.ack
 VISIBLE_STATUSES = ACTIVE_STATUSES | {OperationalAlertStatus.dismissed.value}
 STALE_JOB_AFTER = timedelta(minutes=45)
 STALE_BATCH_AFTER = timedelta(minutes=45)
+STALE_TRAFFIC_DATA_AFTER = timedelta(hours=26)
+STUCK_TRAFFIC_SYNC_AFTER = timedelta(hours=2)
 
 
 def refresh_operational_alerts(db: Session, now: datetime | None = None) -> list[OperationalAlert]:
@@ -146,6 +150,7 @@ def _build_alert_specs(db: Session, now: datetime) -> list[dict[str, Any]]:
     specs.extend(_listing_job_alert_specs(db, now))
     specs.extend(_ebay_takedown_alert_specs(db))
     specs.extend(_supplier_alert_specs(db))
+    specs.extend(_ebay_traffic_alert_specs(db, now))
     return specs
 
 
@@ -385,6 +390,62 @@ def _supplier_alert_specs(db: Session) -> list[dict[str, Any]]:
                 title=f"Supplier product may be out of stock: {_title(product, supplier.product_id)}",
                 message=f"{supplier.supplier} source is marked out of stock.",
                 product_id=supplier.product_id,
+            )
+        )
+    return specs
+
+
+def _ebay_traffic_alert_specs(db: Session, now: datetime) -> list[dict[str, Any]]:
+    """Catch impressions/views going stale silently.
+
+    The mobile stats page only surfaces `stale` when someone opens it. The API sync
+    loop falls back to queuing a Chrome-extension traffic report when no production
+    access token is available, and that queued run just sits forever if the
+    extension/browser isn't actually running to claim it. Surface both symptoms
+    (stale data) and cause (an unclaimed/unfinished sync run) as real alerts.
+    """
+    from app.services.ebay_traffic import traffic_account_freshness
+
+    specs: list[dict[str, Any]] = []
+    for account_key, freshest in traffic_account_freshness(db, active_only=True, now=now).items():
+        if freshest is not None and freshest >= now - STALE_TRAFFIC_DATA_AFTER:
+            continue
+        specs.append(
+            _spec(
+                key=f"ebay-traffic:stale:{account_key}",
+                severity=OperationalAlertSeverity.warning.value,
+                source="ebay-traffic",
+                title=f"eBay impressions/views are stale for {account_key}",
+                message=(
+                    f"Last report observed {freshest.isoformat()}Z, over {STALE_TRAFFIC_DATA_AFTER.total_seconds() / 3600:.0f}h ago."
+                    if freshest
+                    else "No confirmed report with both impressions and views is available."
+                ),
+                action_url="/mobile.html?view=stats",
+            )
+        )
+
+    stuck_runs = db.scalars(
+        select(EbaySyncRun).where(
+            EbaySyncRun.report_type == "traffic",
+            EbaySyncRun.status.in_((EbaySyncRunStatus.queued.value, EbaySyncRunStatus.running.value)),
+            EbaySyncRun.updated_at < now - STUCK_TRAFFIC_SYNC_AFTER,
+        )
+    ).all()
+    for run in stuck_runs:
+        specs.append(
+            _spec(
+                key=f"ebay-traffic:stuck:{run.account_key}",
+                severity=OperationalAlertSeverity.warning.value,
+                source="ebay-traffic",
+                title=f"eBay traffic sync stuck for {run.account_key}",
+                message=(
+                    run.message
+                    or "The Chrome extension has not picked up or finished the Seller Hub traffic report."
+                ),
+                job_type="ebay-sync-run",
+                job_id=run.id,
+                action_url="/mobile.html?view=stats",
             )
         )
     return specs

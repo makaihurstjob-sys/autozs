@@ -6,6 +6,10 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
 from app.models.domain import (
+    EbayListing,
+    EbayTrafficRecord,
+    EbaySyncRun,
+    EbaySyncRunStatus,
     OperationalAlertStatus,
     Product,
     SourceRefreshJob,
@@ -158,6 +162,85 @@ def test_alert_routes_return_operational_feed(client) -> None:
     summary = client.get("/alerts/summary")
     assert summary.status_code == 200
     assert "active" in summary.json()
+
+
+def test_stale_traffic_data_creates_alert_only_with_active_listings() -> None:
+    db = make_session()
+    product = add_product(db, sku="TRAFFIC-STALE")
+    now = datetime.utcnow()
+    listing = EbayListing(
+        product_id=product.id,
+        listing_id="900111222333",
+        account_id="a.m.anim-59",
+        status="active",
+        price=12.0,
+        views_measured_at=now - timedelta(hours=40),
+    )
+    db.add(listing)
+    db.commit()
+
+    alerts = refresh_operational_alerts(db, now=now)
+    traffic_alerts = [alert for alert in alerts if alert.key.startswith("ebay-traffic:stale:")]
+
+    assert len(traffic_alerts) == 1
+    assert "stale" in traffic_alerts[0].title.lower()
+
+
+def test_fresh_traffic_data_does_not_alert() -> None:
+    db = make_session()
+    product = add_product(db, sku="TRAFFIC-FRESH")
+    now = datetime.utcnow()
+    listing = EbayListing(
+        product_id=product.id,
+        listing_id="900111222334",
+        account_id="a.m.anim-59",
+        status="active",
+        price=12.0,
+        views_measured_at=now - timedelta(hours=1),
+    )
+    db.add(listing)
+    db.add(EbayTrafficRecord(
+        account_key="a.m.anim-59", dimension="DAY", dimension_value="today",
+        period_start=now - timedelta(days=1), period_end=now,
+        last_updated_at=now - timedelta(hours=1),
+        raw_metrics_json='{"TOTAL_IMPRESSION_TOTAL": 0, "LISTING_VIEWS_TOTAL": 0}',
+    ))
+    db.commit()
+
+    alerts = refresh_operational_alerts(db, now=now)
+    traffic_alerts = [alert for alert in alerts if alert.source == "ebay-traffic"]
+
+    assert traffic_alerts == []
+
+
+def test_traffic_stale_alert_skipped_without_any_active_listings() -> None:
+    db = make_session()
+
+    alerts = refresh_operational_alerts(db)
+    traffic_alerts = [alert for alert in alerts if alert.key.startswith("ebay-traffic:stale:")]
+
+    assert traffic_alerts == []
+
+
+def test_stuck_unclaimed_traffic_sync_run_creates_alert() -> None:
+    db = make_session()
+    now = datetime.utcnow()
+    run = EbaySyncRun(
+        account_key="a.m.anim-59",
+        status=EbaySyncRunStatus.queued.value,
+        report_type="traffic",
+        message="Queued for the Chrome extension to download the Seller Hub Active listings traffic report.",
+    )
+    db.add(run)
+    db.commit()
+    run.updated_at = now - timedelta(hours=3)
+    db.commit()
+
+    alerts = refresh_operational_alerts(db, now=now)
+    stuck_alerts = [alert for alert in alerts if alert.key == f"ebay-traffic:stuck:{run.account_key}"]
+
+    assert len(stuck_alerts) == 1
+    assert stuck_alerts[0].job_id == run.id
 
 
 def test_replacing_a_revision_job_reuses_one_alert_per_listing() -> None:

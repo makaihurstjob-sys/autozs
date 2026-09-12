@@ -1,3 +1,4 @@
+from math import isfinite
 import csv
 from datetime import datetime, timedelta
 from io import BytesIO, StringIO, TextIOWrapper
@@ -305,16 +306,16 @@ def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None
     checked_at = now or datetime.utcnow()
     from app.services.ebay_revisions import enqueue_ebay_stock_revisions
 
-    sold_product_ids = set(
-        db.scalars(
-            select(OrderItem.product_id)
-            .join(Order, Order.id == OrderItem.order_id)
-            .where(OrderItem.product_id.is_not(None), Order.status != "cancelled")
-        ).all()
-    )
+    sold_product_accounts = db.execute(
+        select(OrderItem.product_id, Order.account_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.product_id.is_not(None), Order.status != "cancelled")
+        .distinct()
+    ).all()
+    sold_product_ids = {product_id for product_id, _account_key in sold_product_accounts}
     enqueue_ebay_stock_revisions(db, product_ids=list(sold_product_ids))
     result = {"candidates": 0, "queued": 0, "awaiting_confirmation": 0, "confirmed_active": 0}
-    for product_id in sold_product_ids:
+    for product_id, account_key in sold_product_accounts:
         product = db.get(Product, product_id)
         if product is None or product.status == ProductStatus.deleted.value:
             continue
@@ -322,6 +323,8 @@ def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None
             select(EbayListing)
             .where(
                 EbayListing.product_id == product_id,
+                # A sale authorizes repair only for the account that sold it.
+                EbayListing.account_id == account_key,
                 # Seller Hub continues to call out-of-stock fixed-price items
                 # active. The durable sale plus quantity zero is the signal;
                 # requiring status=ended strands them after the next report sync.
@@ -334,7 +337,6 @@ def reconcile_sold_listing_replacements(db: Session, now: datetime | None = None
         if sold_out_listing is None:
             continue
         result["candidates"] += 1
-        account_key = sold_out_listing.account_id
         live_replacement = db.scalar(
             select(EbayListing.id).where(
                 EbayListing.product_id == product_id,
@@ -417,9 +419,17 @@ def _queue_replacement_publish(
         or (require_confirmed_stock and supplier.in_stock is not True)
         or (require_confirmed_stock and supplier.price_unavailable is True)
         or supplier.last_price is None
+        or not isfinite(float(supplier.last_price))
+        or float(supplier.last_price) <= 0
         or supplier.last_shipping is None
+        or not isfinite(float(supplier.last_shipping))
         or float(supplier.last_shipping) < 0
-        or (require_confirmed_stock and supplier.updated_at < checked_at - timedelta(hours=24))
+        or (require_confirmed_stock and any(
+            observed_at is None or not checked_at - timedelta(hours=24) <= observed_at <= checked_at
+            for observed_at in (
+                supplier.stock_observed_at, supplier.price_observed_at, supplier.shipping_observed_at
+            )
+        ))
     ):
         return False
     another_sellable_listing = db.scalar(

@@ -2104,6 +2104,7 @@
       revision_completed: false,
       order_sold: true,
       worker_attention: true,
+      traffic_attention: true,
       delivery_mode: "individual",
     };
 
@@ -2357,6 +2358,10 @@
         <section class="notification-group">
           <div><h3>Worker health</h3><small>Windows worker availability</small></div>
           ${preferenceToggle("worker_attention", "Offline or stale", preferences)}
+        </section>
+        <section class="notification-group">
+          <div><h3>Traffic sync</h3><small>Impressions/views stale or stuck syncing</small></div>
+          ${preferenceToggle("traffic_attention", "Stale or stuck", preferences)}
         </section>
         <section class="notification-group">
           <div><h3>Delivery</h3><small>Choose one alert per job or a compact status update</small></div>

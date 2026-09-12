@@ -629,6 +629,9 @@ async function closeCompletedForeignListingRunner(tab, job) {
 
 async function reopenOrphanedListingJob(job) {
   if (!job?.id || !job?.assistant_url) return false;
+  const submissionKey = `autozsListingSubmission:job:${job?.id}`;
+  const submissionState = await chrome.storage.local.get(submissionKey);
+  if (submissionState[submissionKey]) return false;
   // Never reopen a runner that just reported progress. Reopening destroys the
   // in-flight editor and restarts the workflow from the top, and the description
   // step runs near the end -- so a job that is mid-fill gets restarted before it

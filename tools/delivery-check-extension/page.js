@@ -19,7 +19,7 @@ function autozsDeliveryPage(action, job) {
   if (/verify you are human|pardon our dust|access denied|verify your identity/i.test(text)) throw Error('Browser verification requires review');
   const allButtons = buttons(document);
   // Do not use a signed-in cart, even in the dedicated profile.
-  const guest = allButtons.some(el => /^(sign in|sign in to your account)$/i.test(label(el)));
+  const guest = allButtons.some(el => /^(sign in|sign in to your account|log in|log in to your account)$/i.test(label(el)));
   if (!guest) throw Error('Signed-out guest session could not be verified');
   const rows = [...document.querySelectorAll('[data-testid="cart-item"], [data-testid="cartItem"], .cart-item')];
   const productId = value => {
@@ -48,10 +48,12 @@ function autozsDeliveryPage(action, job) {
     const count = document.querySelector('[data-testid="header-cart-count"]');
     if (!count || String(count.textContent).trim() !== '0') throw Error('Cannot confirm an empty cart before adding');
     if (action === 'prepare_product') {
-      const delivery = unique(allButtons, /^delivery(?:\s.*)?$/i);
-      delivery.click();
+      // Fulfillment selection is the exact Delivery control, not delivery
+      // details/help links or a Delivering to ZIP control. Never pick the first match.
+      const delivery = unique(allButtons, /^delivery$/i);
       const quantities = [...document.querySelectorAll('input[name*="quantity" i], input[aria-label*="quantity" i]')].filter(visible);
       if (quantities.length !== 1) throw Error('Product quantity is ambiguous');
+      delivery.click();
       setValue(quantities[0], '1');
       return { prepared: true };
     }

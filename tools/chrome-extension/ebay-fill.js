@@ -70,7 +70,7 @@
     if (typeof reportEbayBrowserAccount === "function") reportEbayBrowserAccount("manual").catch(() => {});
     if (
       Boolean(detectEbayPublishConfirmation()) ||
-      (activeWorkflow?.mode === "create_draft" && activeWorkflow?.phase === "submitting") ||
+      (activeWorkflow?.mode === "create_draft" && ["submitting", "confirmation_pending"].includes(activeWorkflow?.phase)) ||
       params.get("autozs_reconcile_listing") === "1"
     ) {
       startEbayPublishSuccessReporter();
@@ -728,6 +728,8 @@ async function reportEbayPublishConfirmation() {
       ebay_draft_id: draftId || null,
     });
   }
+  // Keep a confirmed tombstone for this job; later replacement jobs remain eligible.
+  if (jobId) await reconcileListingSubmissionAttempt({ productId, jobId, accountKey }, confirmation);
   writeAutoWorkflowState({
     phase: "completed",
     status: "completed",
@@ -922,6 +924,10 @@ function escapeHtmlAttribute(value) {
 }
 
 async function fillEbayListingDraft(pkg, onProgress = () => {}) {
+  const submissionWorkflow = readAutoWorkflowState();
+  if (submissionWorkflow?.mode === "create_draft" && submissionWorkflow?.jobId && await readListingSubmissionAttempt()) {
+    throw new Error(pendingListingSubmissionResult().message);
+  }
   const results = [];
   const tryFill = async (label, value, filler) => {
     const ok = value !== null && value !== undefined && String(value).trim() && (await filler(value));
@@ -1172,6 +1178,20 @@ async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
     writeAutoWorkflowState({ phase: "failed", status: "failed", draftId: "", listingId: "" });
     return { lines: ["Review stale eBay listing page"], message, terminal: true };
   }
+  // Check durable history before any editor changes, even after URL startup
+  // overwrites the shared workflow state or the backend requeues this job.
+  try {
+    const attempt = await readListingSubmissionAttempt();
+    if (attempt) {
+      const result = pendingListingSubmissionResult("", attempt);
+      if (attempt.status === "confirmed") return { lines: [], message: result.message, terminal: true };
+      writeAutoWorkflowState({ phase: "confirmation_pending", status: "running" });
+      if (currentWorkflowJobId()) await updateListingJob(currentWorkflowJobId(), { status: "needs_review", message: result.message });
+      return { lines: [], message: result.message, terminal: true };
+    }
+  } catch {
+    return { lines: [], message: "Could not verify submission history; automatic editing is held.", terminal: true };
+  }
   if (isEbayDraftsPage() && workflow.phase === "saving") {
     return finalizeSavedDraftWorkflow(pkg, workflow);
   }
@@ -1300,7 +1320,7 @@ async function runAutoDraftWorkflow(pkg, onProgress = () => {}) {
           message: submitResult.message,
         });
       }
-      writeAutoWorkflowState({ phase: "needs_review", status: "failed", draftId: draftId || "" });
+      writeAutoWorkflowState({ phase: submitResult.pending ? "confirmation_pending" : "needs_review", status: submitResult.pending ? "running" : "failed", draftId: draftId || "" });
       return { lines, message: submitResult.message, terminal: true };
     }
     writeAutoWorkflowState({ phase: "submitting", status: "running", draftId: draftId || "" });
@@ -1628,7 +1648,68 @@ function findFinalScheduleButton() {
   return null;
 }
 
+function listingSubmissionIdentity() {
+  const workflow = readAutoWorkflowState() || {};
+  const params = readAutozsParams();
+  return {
+    ...workflow,
+    productId: params.get("autozs_product_id") || workflow.productId,
+    jobId: params.get("autozs_job_id") || workflow.jobId,
+    accountKey: params.get("autozs_account_key") || workflow.accountKey || "manual",
+  };
+}
+
+function listingSubmissionKeys(workflow = listingSubmissionIdentity()) {
+  if (!workflow.productId || !workflow.jobId) throw new Error("Listing submission requires product and job identity.");
+  return [
+    `autozsListingSubmission:product:${encodeURIComponent(workflow.accountKey || "manual")}:${encodeURIComponent(workflow.productId)}`,
+    `autozsListingSubmission:job:${workflow.jobId}`,
+  ];
+}
+
+async function readListingSubmissionAttempt() {
+  const identity = listingSubmissionIdentity();
+  const keys = listingSubmissionKeys(identity);
+  const stored = await chrome.storage.local.get(keys);
+  return keys.map((key) => stored[key]).find((attempt) => attempt && (attempt.status !== "confirmed" || String(attempt.jobId) === String(identity.jobId))) || null;
+}
+
+async function persistListingSubmissionAttempt() {
+  const workflow = listingSubmissionIdentity();
+  const keys = listingSubmissionKeys(workflow);
+  const attempt = { jobId: workflow.jobId, productId: workflow.productId, accountKey: workflow.accountKey || "manual", draftId: readDraftIdFromUrl() || workflow.draftId || "", attemptedAt: new Date().toISOString() };
+  await chrome.storage.local.set(Object.fromEntries(keys.map((key) => [key, attempt])));
+  const saved = await chrome.storage.local.get(keys);
+  if (!keys.every((key) => saved[key]?.attemptedAt === attempt.attemptedAt)) throw new Error("Submission marker could not be verified.");
+  if (!writeAutoWorkflowState({ phase: "confirmation_pending", status: "running", draftId: attempt.draftId })) throw new Error("Submission workflow could not be saved.");
+  return attempt;
+}
+
+async function reconcileListingSubmissionAttempt(identity, confirmation) {
+  const keys = listingSubmissionKeys(identity);
+  const stored = await chrome.storage.local.get(keys);
+  const updates = {};
+  for (const key of keys) {
+    const attempt = stored[key];
+    if (attempt && String(attempt.jobId) === String(identity.jobId) && String(attempt.productId) === String(identity.productId)) {
+      updates[key] = { ...attempt, status: "confirmed", listingId: confirmation.listingId, confirmedAt: new Date().toISOString() };
+    }
+  }
+  if (Object.keys(updates).length) await chrome.storage.local.set(updates);
+}
+
+function pendingListingSubmissionResult(detail = "", attempt = null) {
+  if (attempt?.status === "confirmed") return { ok: false, pending: true, message: `This job already published eBay listing ${attempt.listingId}. AutoZS will not submit it again.` };
+  return { ok: false, pending: true, message: `The previous eBay submission outcome is unverified. AutoZS will not submit again until it is reconciled.${detail ? ` ${detail}` : ""}` };
+}
+
 async function submitScheduledListing(pkg, interactionTimeoutMs = 8000) {
+  try {
+    const attempt = await readListingSubmissionAttempt();
+    if (attempt) return pendingListingSubmissionResult("", attempt);
+  } catch {
+    return { ok: false, message: "Could not verify submission history; AutoZS did not submit." };
+  }
   if (!pkg.listing_schedule_at) return { ok: false, message: "A scheduled start is required for automatic submission." };
   if (!(await ensureListingScheduleStable(pkg))) {
     return { ok: false, message: "The eBay schedule date and time could not be verified after eBay finished rendering, so AutoZS did not submit." };
@@ -1683,34 +1764,25 @@ async function submitScheduledListing(pkg, interactionTimeoutMs = 8000) {
   if (!button) return { ok: false, message: "Could not find eBay's final Schedule/List button. AutoZS did not submit." };
   button.scrollIntoView?.({ block: "center", inline: "center" });
   await delay(250);
-  const pageUrl = location.href;
-  const advanced = await clickPrelistElementAndWait(button, () => {
-    return location.href !== pageUrl || !isVisible(button) || Boolean(detectEbayPublishConfirmation()) || Boolean(detectEbaySubmissionIssue());
-  }, interactionTimeoutMs);
-  const postClickIssue = detectEbaySubmissionIssue();
-  if (postClickIssue) return { ok: false, message: postClickIssue };
-  if (!advanced) {
-    return { ok: false, message: "eBay did not respond to the final List button, so AutoZS left the listing open for review." };
+  try {
+    await persistListingSubmissionAttempt();
+  } catch {
+    return pendingListingSubmissionResult("Submission history could not be saved; no click was made in this run.");
   }
-  // A vanished button is not proof eBay accepted the listing: a re-render
-  // alone used to be reported as success, so the job sat "waiting for
-  // confirmation" while the item stayed in Drafts until the stale sweep
-  // killed it. Require an actual confirmation before claiming submission.
-  const confirmed = await waitForCondition(
-    () => Boolean(detectEbayPublishConfirmation()) || !isEbayListingEditorPage(),
-    Math.max(200, interactionTimeoutMs * 3),
-    Math.max(50, Math.min(500, interactionTimeoutMs))
-  );
-  if (!confirmed) {
-    // Capture what eBay actually showed so the next failure explains itself
-    // instead of needing a live browser session to diagnose.
-    const shown = describeUnconfirmedSubmission(pkg);
-    return {
-      ok: false,
-      message: `eBay never confirmed the scheduled listing after the final click, so it is still a draft.${shown ? ` eBay showed: ${shown}` : " eBay showed no visible error."} Review the draft and retry.`,
-    };
+  try {
+    // Final submission is irreversible: never fall back to a second click
+    // when the page fails to acknowledge the first one.
+    button.click();
+    const confirmed = await waitForCondition(
+      () => Boolean(detectEbayPublishConfirmation()),
+      Math.max(200, interactionTimeoutMs * 3),
+      Math.max(50, Math.min(500, interactionTimeoutMs))
+    );
+    if (confirmed) return { ok: true, message: "eBay confirmed the scheduled listing." };
+    return pendingListingSubmissionResult(describeUnconfirmedSubmission(pkg));
+  } catch {
+    return pendingListingSubmissionResult("The browser stopped responding after the attempt was recorded.");
   }
-  return { ok: true, message: "eBay accepted the final scheduled-listing click." };
 }
 
 function listingDescriptionIsEmpty() {

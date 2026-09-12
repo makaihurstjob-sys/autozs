@@ -54,3 +54,20 @@ Previous agents are absent; replaced with explicit assignments. Live resources r
 - Coordinator additional acceptance: integration checkout tools/chrome-extension/ebay-revision-upload.test.js regression proving backend pre-upload rejection prevents the Upload click.
 - /root/activation_review follow-up: agents/fallback-actions-20260911 at C:/AutoZS/worktrees/fallback-actions-20260911, base 9e96c49. Restrict browser fallback lease selection to supported price actions in ebay_revisions.py; regressions in new apps/api/tests/test_ebay_revision_fallback.py and docs/agents/fallback-actions.md. Preserve unsupported queued actions for bulk processing; no live resources. Coordinator resolves restock overlap serially.
 - /root/restock_review follow-up: existing restock-review checkout base 092b393, report-only docs/agents/supplier-freshness-followup.md. Trace existing stock/price observation timestamps and propose smallest evidence-preserving fix with migration implications. No implementation or live resources in this assignment.
+
+## Session resumed 2026-09-11 (new environment, prior background agents not carried over)
+
+Prior session's background agent processes did not persist across the session boundary; TaskList showed none running. Their worktrees retained uncommitted in-progress work, so the coordinator (Benny) inspected each worktree directly, verified against docs/agents/readiness-20260912.md, committed the finished diffs, and integrated:
+- publish-numeric-20260912 (5709b6d, uncommitted -> committed) -> integration 7662184: closes readiness finding #3 (finite positive price / nonnegative shipping enforced at both the sale-replacement gate and the rotation eligibility helper, independent of observation timestamps). 44 targeted tests passed standalone.
+- traffic-alerts-20260912 (c7f8253, uncommitted -> committed) -> integration a2ef366: closes readiness findings #1 and #2 (per-account freshness via `traffic_account_freshness`, keyed on source `last_updated_at` with valid-metric checks, not the ORM `updated_at` that any metadata flush advances). 28 targeted tests passed standalone.
+- delivery-evidence-20260912 (91fbfa5) and live-listing-audit-20260912 (5388460) were already committed and already present in this integration branch (4416b1d, 7139d97, facab86).
+
+Combined full backend suite on integration HEAD: 505 passed, 1 failed (apps/api/tests/test_ebay_report_files.py::test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_scheduled — pre-existing hardcoded-timezone fixture mismatch, same class of failure documented in earlier rounds, not a regression from this round's changes).
+
+Readiness findings #4 and #5 (traffic alerts are detection not repair; capture/final-action freshness has a queue-time-not-submit-time boundary) remain open as scoped caveats, not blocking bugs — no code change proposed for them yet.
+
+Not done this session: nothing has been promoted to the operational checkout (C:/AutoZS/repo, currently 18f18fb with its own uncommitted traffic-alert edits predating this fix). Live activation prerequisites from docs/agents/readiness-20260912.md (schema activation, worker/browser ownership, backup, one coordinated live delivery-cycle validation) remain outstanding and were not attempted.
+
+## Merged into operational 2026-09-11
+
+Merge commit combines operational HEAD 18f18fb with agents/integration-20260911 07e8472; only conflict was this file's trailing section, resolved by keeping both. The superseded pre-fix traffic-alert draft that was sitting uncommitted in the operational checkout (global-max freshness, no per-account scoping) was stashed rather than discarded — see stash "superseded pre-fix traffic alert draft (replaced by integration a2ef366)" — and replaced by the merged fix. Owner authorized proceeding with live-activation prerequisites next; none have been executed yet as of this commit.
