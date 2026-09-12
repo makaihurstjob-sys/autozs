@@ -1,3 +1,4 @@
+from math import isfinite
 import csv
 from datetime import datetime, timedelta
 from io import BytesIO, StringIO, TextIOWrapper
@@ -418,7 +419,10 @@ def _queue_replacement_publish(
         or (require_confirmed_stock and supplier.in_stock is not True)
         or (require_confirmed_stock and supplier.price_unavailable is True)
         or supplier.last_price is None
+        or not isfinite(float(supplier.last_price))
+        or float(supplier.last_price) <= 0
         or supplier.last_shipping is None
+        or not isfinite(float(supplier.last_shipping))
         or float(supplier.last_shipping) < 0
         or (require_confirmed_stock and any(
             observed_at is None or not checked_at - timedelta(hours=24) <= observed_at <= checked_at

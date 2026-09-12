@@ -1,3 +1,4 @@
+from math import isfinite
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import json
@@ -247,6 +248,9 @@ def queue_zero_view_listing_rotations(
         .order_by(SupplierProduct.stock_observed_at.desc(), Product.id.asc())
     ).all()
     for product in products:
+        # SQL comparisons admit infinity; validate the selected supplier before queueing.
+        if _supplier_delivery_unavailable(product):
+            continue
         if product.id in active_product_ids or any(token in product.title.lower() for token in ROTATION_HIGH_RISK_TITLE_TOKENS):
             continue
         if db.scalar(select(ListingJob.id).where(
@@ -916,7 +920,10 @@ def _supplier_delivery_unavailable(product: Product) -> bool:
         supplier.in_stock is not True
         or supplier.price_unavailable is True
         or supplier.last_price is None
+        or not isfinite(float(supplier.last_price))
+        or float(supplier.last_price) <= 0
         or supplier.last_shipping is None
+        or not isfinite(float(supplier.last_shipping))
         or float(supplier.last_shipping) < 0
     )
 
