@@ -231,6 +231,9 @@ def test_sold_active_listing_restores_same_item_and_never_publishes(client):
         supplier = db.query(SupplierProduct).one()
         supplier.in_stock = True
         supplier.updated_at = datetime.utcnow()
+        supplier.stock_observed_at = datetime.utcnow()
+        supplier.price_observed_at = datetime.utcnow()
+        supplier.shipping_observed_at = datetime.utcnow()
         db.commit()
         reconcile_sold_listing_replacements(db)
         jobs = db.query(EbayRevisionJob).filter_by(action='restore_stock').all()
@@ -263,7 +266,13 @@ def test_sold_stock_restoration_requires_fresh_stock_and_no_duplicate(client, bl
         supplier = db.query(SupplierProduct).one()
         supplier.in_stock = True
         supplier.updated_at = datetime.utcnow()
-        if block == 'stale': supplier.updated_at -= timedelta(days=2)
+        supplier.stock_observed_at = datetime.utcnow()
+        supplier.price_observed_at = datetime.utcnow()
+        supplier.shipping_observed_at = datetime.utcnow()
+        if block == 'stale':
+            supplier.stock_observed_at -= timedelta(days=2)
+            supplier.price_observed_at -= timedelta(days=2)
+            supplier.shipping_observed_at -= timedelta(days=2)
         if block == 'unknown': supplier.last_price = None
         if block == 'out_of_stock': supplier.in_stock = False
         if block == 'paused': db.get(Product, listing.product_id).status = 'paused'
@@ -289,6 +298,9 @@ def test_multiple_sold_out_items_queue_only_one_restore(client):
         supplier = db.query(SupplierProduct).one()
         supplier.in_stock = True
         supplier.updated_at = datetime.utcnow()
+        supplier.stock_observed_at = datetime.utcnow()
+        supplier.price_observed_at = datetime.utcnow()
+        supplier.shipping_observed_at = datetime.utcnow()
         db.add(EbayListing(product_id=listing.product_id, account_id=listing.account_id,
                            listing_id='800123456790', status='active', quantity=0))
         db.commit()

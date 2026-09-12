@@ -726,6 +726,11 @@ def _sourced_product(
             last_shipping=shipping,
             in_stock=in_stock,
             price_unavailable=price_unavailable,
+            # Fresh explicit evidence by default; individual tests invalidate specific
+            # fields (see _invalidate_restock) to exercise the freshness guard.
+            stock_observed_at=datetime.utcnow(),
+            price_observed_at=datetime.utcnow(),
+            shipping_observed_at=datetime.utcnow(),
         )
     )
     db.add(
@@ -861,7 +866,9 @@ def _invalidate_restock(db, product, listing, condition):
     from app.models.domain import ListingJob
     supplier = db.query(SupplierProduct).one()
     if condition == "stale":
-        supplier.updated_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.stock_observed_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.price_observed_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.shipping_observed_at = datetime.utcnow() - timedelta(hours=25)
     elif condition == "missing_price":
         supplier.last_price = None
     elif condition in {"paused", "deleted"}:
@@ -957,7 +964,9 @@ def test_invalid_restock_does_not_block_zero_quantity_batch():
         _, zero_listing = _sourced_product(db, shipping=-1.0)
         assert enqueue_ebay_stock_revisions(db) == (1, 0)
         supplier = db.query(SupplierProduct).filter_by(product_id=product.id).one()
-        supplier.updated_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.stock_observed_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.price_observed_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.shipping_observed_at = datetime.utcnow() - timedelta(hours=25)
         db.commit()
         save_ebay_revision_template(db, account_key=listing.account_id, filename="test.csv",
                                    template_csv="Action,Item number,Start price,Quantity\n")
@@ -1174,7 +1183,9 @@ def test_invalid_prepared_restock_releases_safe_rows_for_next_batch():
         original = prepare_next_ebay_revision_batch(db, account_key=listing.account_id)
         assert original.rows_total == 2
         supplier = db.query(SupplierProduct).filter_by(product_id=product.id).one()
-        supplier.updated_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.stock_observed_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.price_observed_at = datetime.utcnow() - timedelta(hours=25)
+        supplier.shipping_observed_at = datetime.utcnow() - timedelta(hours=25)
         db.commit()
         with pytest.raises(ValueError, match="cannot restore stock"):
             prepare_next_ebay_revision_batch(db, account_key=listing.account_id)

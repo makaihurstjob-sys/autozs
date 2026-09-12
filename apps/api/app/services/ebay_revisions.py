@@ -43,6 +43,12 @@ OUT_OF_STOCK_ACTION = "mark_out_of_stock"
 RESTOCK_ACTION = "restore_stock"
 RETIRE_ZERO_VIEW_ACTION = "retire_zero_view"
 RETIRE_DUPLICATE_ACTION = "retire_duplicate"
+# A positive restoration requires each of stock/price/shipping to have been explicitly
+# observed within this window. There is no fallback to updated_at: updated_at bumps on
+# unrelated metadata edits (see docs/agents/supplier-freshness-followup.md), so it cannot
+# prove any of these three claims are current. Legacy rows without these observation
+# timestamps therefore always fail this check rather than being grandfathered in.
+RESTOCK_EVIDENCE_FRESHNESS = timedelta(hours=24)
 STOCK_ACTIONS = {OUT_OF_STOCK_ACTION, RESTOCK_ACTION, RETIRE_ZERO_VIEW_ACTION, RETIRE_DUPLICATE_ACTION}
 STOCK_ACTION_QUANTITY = {
     OUT_OF_STOCK_ACTION: 0,
@@ -189,6 +195,18 @@ def supplier_availability_block(supplier: SupplierProduct | None) -> str | None:
     return None
 
 
+def _stale_observation_reason(label: str, observed_at: datetime | None, now: datetime) -> str | None:
+    """None if ``observed_at`` is explicit, genuine evidence captured within the last
+    24 hours; otherwise a reason string. A missing timestamp -- whether the row predates
+    this feature or the field was simply never captured -- is treated identically to a
+    stale one: both fail the freshness check rather than being grandfathered in."""
+    if observed_at is None:
+        return f"the supplier {label} has never been confirmed"
+    if observed_at < now - RESTOCK_EVIDENCE_FRESHNESS:
+        return f"the supplier {label} was last confirmed more than 24 hours ago"
+    return None
+
+
 def stock_restoration_block(db: Session, listing: EbayListing | None, supplier: SupplierProduct | None = None) -> str | None:
     """Current eligibility for increasing quantity, independent of why it was zeroed."""
     from app.services.listing_exclusions import listing_exclusion_reason
@@ -212,8 +230,15 @@ def stock_restoration_block(db: Session, listing: EbayListing | None, supplier: 
         return unavailable
     if supplier.last_price is None:
         return "the supplier price is missing"
-    if supplier.updated_at is None or supplier.updated_at < _now() - timedelta(hours=24):
-        return "supplier evidence is older than 24 hours"
+    now = _now()
+    for label, observed_at in (
+        ("stock", supplier.stock_observed_at),
+        ("price", supplier.price_observed_at),
+        ("shipping", supplier.shipping_observed_at),
+    ):
+        reason = _stale_observation_reason(label, observed_at, now)
+        if reason:
+            return reason
     return None
 
 

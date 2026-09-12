@@ -18,7 +18,14 @@ def db(monkeypatch):
     with sessionmaker(bind=engine)() as session:
         session.add(Product(id=1, sku="FALLBACK-1", title="Plant food", status="monitoring"))
         session.add(EbayListing(id=1, product_id=1, listing_id="800123456789", account_id="test-seller", status="active", price=29.99, quantity=0))
-        session.add(SupplierProduct(product_id=1, supplier="home_depot", source_url="https://example.com/item", last_price=10.0, last_shipping=0.0, in_stock=True, price_unavailable=False, updated_at=datetime.utcnow()))
+        session.add(SupplierProduct(
+            product_id=1, supplier="home_depot", source_url="https://example.com/item",
+            last_price=10.0, last_shipping=0.0, in_stock=True, price_unavailable=False,
+            updated_at=datetime.utcnow(),
+            stock_observed_at=datetime.utcnow(),
+            price_observed_at=datetime.utcnow(),
+            shipping_observed_at=datetime.utcnow(),
+        ))
         session.commit()
         yield session
     engine.dispose()
