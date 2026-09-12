@@ -148,3 +148,29 @@ def test_api_returns_audit_and_maps_policy_error(db):
         response = client.post('/delivery-quotes/audits/live-listings', json=payload)
         assert response.status_code == 200
         assert response.json()['enrolled'][0]['listing_id'] == row.id
+
+@pytest.mark.parametrize('new_state', ['running', 'completed'])
+def test_stale_enrollment_cannot_overwrite_new_lease_or_completion(db, new_state):
+    row, _ = listing(db)
+    enable(db)
+    checks.enroll_live_listings(db, 'owner', [row.id])
+    job = db.scalar(select(DeliveryCheckJob))
+    job.status = 'completed'
+    job.completed_at = datetime.utcnow() - timedelta(days=2)
+    job.delivery_charge = 0
+    db.commit()
+    with Session(db.get_bind(), expire_on_commit=False) as stale:
+        old_job = stale.get(DeliveryCheckJob, job.id)
+        assert old_job.status == 'completed'
+        checks.enroll_live_listings(db, 'owner', [row.id])
+        claimed = checks.claim_check(db, 'new-browser')
+        if new_state == 'completed':
+            job.status, job.completed_at, job.delivery_charge = 'completed', datetime.utcnow(), 7
+            db.commit()
+        db.refresh(job)
+        expected = (job.status, job.lease_token, job.lease_expires_at, job.completed_at, job.delivery_charge)
+        checks.enroll_live_listings(stale, 'owner', [row.id])
+        db.refresh(job)
+        assert (job.status, job.lease_token, job.lease_expires_at, job.completed_at, job.delivery_charge) == expected
+        assert old_job.status == new_state
+        assert job.lease_token == claimed['lease_token']

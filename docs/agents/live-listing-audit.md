@@ -22,3 +22,5 @@ Limitations and activation:
 - Sequential retry is idempotent; existing unique supplier/ZIP database constraint prevents duplicate records. Concurrent first-time enrollments retain the existing ensure_checks transaction behavior and may require caller retry after a uniqueness conflict.
 - Missing evidence requires review or bounded existing retry; this endpoint does not automatically reset review holds or translate failures into unavailable stock. Confirmed removal decisions remain a separate coordinator workflow.
 - This proves queue enrollment and mocked behavior, not deliverability to 84532 or nationwide availability.
+
+Independent review follow-up: stale ORM snapshots could overwrite a newly claimed lease when two callers requeued the same old completed check. Requeue now uses a conditional database UPDATE matching completed status, original completion timestamp and original source URL, then refreshes the returned row. A stale enrollment cannot reset a concurrent running lease or newer completion. Added two-session regressions for both outcomes. Combined delivery/audit suite rerun: 33 passed in 10.41s; existing deprecation warnings only.

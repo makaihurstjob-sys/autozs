@@ -96,10 +96,20 @@ def ensure_checks(db: Session, product_id: int) -> list[DeliveryCheckJob]:
         elif job.status == "completed" and (not job.completed_at
                 or job.completed_at < datetime.utcnow() - timedelta(hours=FRESH_HOURS)
                 or home_depot_item_id(job.source_url) != home_depot_item_id(supplier.source_url)):
-            job.status, job.attempts, job.source_url = "queued", 0, supplier.source_url
-            job.completed_at, job.delivery_charge = None, None
-            job.retry_at, job.lease_token, job.lease_expires_at = None, "", None
-            job.message = "Delivery evidence expired or supplier product changed"
+            # A concurrent enrollment may already have requeued this completion,
+            # and a browser may now own it. Never flush a stale ORM snapshot over
+            # that lease (or over a newer completion).
+            db.execute(update(DeliveryCheckJob).where(
+                DeliveryCheckJob.id == job.id,
+                DeliveryCheckJob.status == "completed",
+                DeliveryCheckJob.completed_at == job.completed_at,
+                DeliveryCheckJob.source_url == job.source_url,
+            ).values(status="queued", attempts=0, source_url=supplier.source_url,
+                     completed_at=None, delivery_charge=None, retry_at=None,
+                     lease_token="", lease_expires_at=None,
+                     message="Delivery evidence expired or supplier product changed"),
+                execution_options={"synchronize_session": False})
+            db.refresh(job)
         result.append(job)
     db.commit()
     return result
