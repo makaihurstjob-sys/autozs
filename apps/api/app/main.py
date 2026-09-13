@@ -78,6 +78,9 @@ def _ensure_lightweight_columns() -> None:
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME", "cancellation_scope": "VARCHAR(32) DEFAULT 'product' NOT NULL"},
         "depop_listing_variants": {
+            "shipping_method": "VARCHAR(128) DEFAULT '' NOT NULL",
+            "packed_weight_lb": "FLOAT",
+            "supplier_weight_lb": "FLOAT",
             "views_count": "INTEGER DEFAULT 0 NOT NULL",
             "clicks_count": "INTEGER DEFAULT 0 NOT NULL",
             "likes_count": "INTEGER DEFAULT 0 NOT NULL",

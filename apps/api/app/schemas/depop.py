@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DepopAccountUpsert(BaseModel):
@@ -25,26 +25,32 @@ class DepopVariantCreate(BaseModel):
     variant_key: str = Field(min_length=1, max_length=128)
     title: str = Field(min_length=1, max_length=512)
     description: str = ""
-    price: float = Field(gt=0)
+    price: float = Field(gt=0, allow_inf_nan=False)
     image_ids: list[int] = Field(default_factory=list, max_length=4)
     size: str = ""
     brand: str = ""
     category: str = ""
-    condition: str = ""
+    condition: str = "Brand new"
     color: str = ""
+    shipping_method: str = ""
+    packed_weight_lb: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    supplier_weight_lb: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class DepopVariantUpdate(BaseModel):
     account_key: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{1,127}$")
     title: str | None = Field(default=None, min_length=1, max_length=512)
     description: str | None = None
-    price: float | None = Field(default=None, gt=0)
+    price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     image_ids: list[int] | None = Field(default=None, max_length=4)
     size: str | None = None
     brand: str | None = None
     category: str | None = None
     condition: str | None = None
     color: str | None = None
+    shipping_method: str | None = None
+    packed_weight_lb: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    supplier_weight_lb: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     status: str | None = None
     depop_listing_id: str | None = None
     published_at: datetime | None = None
@@ -70,6 +76,9 @@ class DepopVariantRead(BaseModel):
     category: str
     condition: str
     color: str
+    shipping_method: str
+    packed_weight_lb: float | None = None
+    supplier_weight_lb: float | None = None
     status: str
     depop_listing_id: str | None = None
     published_at: datetime | None = None
@@ -180,11 +189,30 @@ class DepopJobCreate(BaseModel):
     scheduled_for: datetime | None = None
 
 
+    @field_validator("scheduled_for")
+    @classmethod
+    def normalize_schedule_utc(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+
 class DepopJobUpdate(BaseModel):
+    scheduled_for: datetime | None = None
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def normalize_schedule_utc(cls, value: datetime | None) -> datetime | None:
+        return DepopJobCreate.normalize_schedule_utc(value)
+
     status: str | None = Field(default=None, pattern=r"^(queued|running|needs_review|completed|cancelled)$")
     progress: int | None = Field(default=None, ge=0, le=100)
     message: str | None = None
     runner_url: str | None = None
+
+
+class DepopSubmissionBegin(BaseModel):
+    account_key: str = Field(min_length=1, max_length=128)
 
 
 class DepopPublicationConfirm(BaseModel):
@@ -222,6 +250,8 @@ class DepopJobRead(BaseModel):
     condition: str = ""
     color: str = ""
     shipping_method: str = ""
+    shipping_weight_lb: float | None = None
+    shipping_weight_source: str = ""
     depop_listing_id: str | None = None
     model_config = ConfigDict(from_attributes=True)
 
@@ -245,6 +275,8 @@ class DepopListingPackage(BaseModel):
     condition: str = ""
     color: str = ""
     shipping_method: str = ""
+    shipping_weight_lb: float | None = None
+    shipping_weight_source: str = ""
 
 
 class DepopJobRunResult(BaseModel):
@@ -255,7 +287,7 @@ class DepopJobRunResult(BaseModel):
 class DepopApprovedBatchScheduleRequest(BaseModel):
     account_key: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,127}$")
     timezone: str = "America/Chicago"
-    daily_hours: list[int] = Field(default_factory=lambda: [12, 20], min_length=1, max_length=8)
+    daily_hours: list[int] = Field(default_factory=lambda: list(range(0, 24, 2)), min_length=1, max_length=24)
     photos_per_listing: int = Field(default=4, ge=4, le=4)
 
 

@@ -70,6 +70,7 @@ from app.schemas.depop import (
     DepopJobRunResult,
     DepopJobUpdate,
     DepopPublicationConfirm,
+    DepopSubmissionBegin,
     DepopListingPackage,
     DepopPhotoDecision,
     DepopPhotoQueueItem,
@@ -81,6 +82,8 @@ from app.schemas.depop import (
 )
 from app.services.depop_jobs import (
     build_depop_listing_package,
+    depop_listing_problem,
+    lock_depop_queue,
     schedule_approved_photo_batches,
     serialize_depop_job,
     start_next_depop_job,
@@ -895,6 +898,9 @@ def _depop_variant_read(variant: DepopListingVariant) -> DepopVariantRead:
         category=variant.category,
         condition=variant.condition,
         color=variant.color,
+        shipping_method=variant.shipping_method,
+        packed_weight_lb=variant.packed_weight_lb,
+        supplier_weight_lb=variant.supplier_weight_lb,
         status=variant.status,
         depop_listing_id=variant.depop_listing_id,
         published_at=variant.published_at,
@@ -1413,6 +1419,9 @@ def create_depop_variant(payload: DepopVariantCreate, db: Session = Depends(get_
         category=payload.category,
         condition=payload.condition,
         color=payload.color,
+        shipping_method=payload.shipping_method,
+        packed_weight_lb=payload.packed_weight_lb,
+        supplier_weight_lb=payload.supplier_weight_lb,
         status="ready" if 3 <= len(image_ids) <= 4 else "draft",
     )
     db.add(variant)
@@ -1438,6 +1447,15 @@ def update_depop_variant(
     variant = db.get(DepopListingVariant, variant_id)
     if variant is None:
         raise HTTPException(status_code=404, detail="Depop variant not found")
+    lock_depop_queue(db)
+    content_fields = {"account_key", "title", "description", "price", "image_ids", "size", "brand", "category", "condition", "color", "shipping_method", "packed_weight_lb", "supplier_weight_lb"}
+    unresolved = db.scalar(select(DepopListingJob).where(
+        DepopListingJob.variant_id == variant_id,
+        DepopListingJob.attempts > 0,
+        DepopListingJob.status != "completed",
+    ))
+    if unresolved is not None and content_fields.intersection(payload.model_fields_set):
+        raise HTTPException(status_code=409, detail="Resolve the attempted Depop job before changing listing contents")
     changes = payload.model_dump(exclude_unset=True)
     account_key = changes.get("account_key")
     if account_key is not None:
@@ -1464,7 +1482,7 @@ def update_depop_variant(
         variant.image_ids_json = json.dumps(image_ids)
     for field, value in changes.items():
         setattr(variant, field, value)
-    if "status" not in changes:
+    if "status" not in changes and not variant.depop_listing_id:
         count = len(json.loads(variant.image_ids_json or "[]"))
         variant.status = "ready" if 3 <= count <= 4 else "draft"
     db.commit()
@@ -1517,8 +1535,8 @@ def read_depop_job(job_id: int, db: Session = Depends(get_db)) -> DepopJobRead:
 
 
 @router.post("/depop/jobs/next", response_model=DepopJobRunResult)
-def run_next_depop_job(db: Session = Depends(get_db)) -> DepopJobRunResult:
-    job = start_next_depop_job(db)
+def run_next_depop_job(account_key: str | None = None, db: Session = Depends(get_db)) -> DepopJobRunResult:
+    job = start_next_depop_job(db, account_key=account_key)
     if job is None:
         raise HTTPException(status_code=404, detail="No queued Depop jobs are due")
     package = None
@@ -1532,6 +1550,7 @@ def run_next_depop_job(db: Session = Depends(get_db)) -> DepopJobRunResult:
 
 @router.post("/depop/jobs", response_model=DepopJobRead)
 def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) -> DepopJobRead:
+    lock_depop_queue(db)
     variant = db.get(DepopListingVariant, payload.variant_id)
     if variant is None:
         raise HTTPException(status_code=404, detail="Depop variant not found")
@@ -1540,13 +1559,15 @@ def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) ->
         raise HTTPException(status_code=400, detail="Depop account is unavailable")
     if not account.writes_enabled:
         raise HTTPException(status_code=409, detail="Enable Depop browser writes before queueing")
-    image_count = len(json.loads(variant.image_ids_json or "[]"))
-    if image_count < 3 or image_count > 4:
-        raise HTTPException(status_code=400, detail="Depop variants require 3 or 4 original images")
+    if payload.action != "create" or variant.depop_listing_id:
+        raise HTTPException(status_code=409, detail="Only unpublished Depop create jobs are supported")
+    problem = depop_listing_problem(db, variant)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
     existing = db.scalar(
         select(DepopListingJob).where(
             DepopListingJob.variant_id == variant.id,
-            DepopListingJob.status.in_(["queued", "running"]),
+            or_(DepopListingJob.status != "cancelled", DepopListingJob.attempts > 0),
         )
     )
     if existing is not None:
@@ -1570,11 +1591,50 @@ def enqueue_depop_job(payload: DepopJobCreate, db: Session = Depends(get_db)) ->
 def update_depop_job(
     job_id: int, payload: DepopJobUpdate, db: Session = Depends(get_db)
 ) -> DepopJobRead:
+    lock_depop_queue(db)
     job = db.get(DepopListingJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Depop job not found")
+    if payload.status == "running" and job.status != "running":
+        raise HTTPException(status_code=409, detail="Claim Depop jobs through the due-job queue")
+    if payload.status == "completed" and job.status != "completed":
+        raise HTTPException(status_code=409, detail="Confirm a Depop listing ID to complete a job")
+    if "scheduled_for" in payload.model_fields_set:
+        if job.status in {"running", "completed"} or job.attempts > 0:
+            raise HTTPException(status_code=409, detail="Only unattempted jobs may be rescheduled")
+    if payload.status == "queued" and (job.attempts > 0 or job.status == "completed"):
+        raise HTTPException(status_code=409, detail="Review attempted Depop jobs before retrying")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(job, field, value)
+    db.commit()
+    db.refresh(job)
+    return DepopJobRead(**serialize_depop_job(db, job))
+
+
+@router.post("/depop/jobs/{job_id}/begin-submission", response_model=DepopJobRead)
+def begin_depop_submission(
+    job_id: int, payload: DepopSubmissionBegin, db: Session = Depends(get_db)
+) -> DepopJobRead:
+    lock_depop_queue(db)
+    job = db.get(DepopListingJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Depop job not found")
+    if job.status != "running" or job.attempts < 1 or job.account_key != payload.account_key:
+        raise HTTPException(status_code=409, detail="Depop submission is not owned by this running job/account")
+    variant = db.get(DepopListingVariant, job.variant_id)
+    account = db.scalar(select(DepopAccount).where(DepopAccount.key == job.account_key))
+    if (variant is None or variant.account_key != job.account_key or variant.depop_listing_id
+            or account is None or not account.enabled or not account.writes_enabled
+            or job.action != "create"):
+        raise HTTPException(status_code=409, detail="Depop listing/account is no longer eligible")
+    problem = depop_listing_problem(db, variant)
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
+    # Persist an irreversible retry hold before the browser's final click.
+    # A crash or lost response must reconcile the listing, never click again.
+    job.status = "needs_review"
+    job.progress = 95
+    job.message = "Submission started; outcome requires listing confirmation before any retry."
     db.commit()
     db.refresh(job)
     return DepopJobRead(**serialize_depop_job(db, job))
@@ -1585,12 +1645,29 @@ def confirm_depop_publication(
     job_id: int, payload: DepopPublicationConfirm, db: Session = Depends(get_db)
 ) -> DepopJobRead:
     """Atomically close a browser job and mark its variant as live."""
+    lock_depop_queue(db)
     job = db.get(DepopListingJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Depop job not found")
     variant = db.get(DepopListingVariant, job.variant_id)
     if variant is None:
         raise HTTPException(status_code=404, detail="Depop variant not found")
+
+    if job.attempts < 1 or job.action != "create" or variant.account_key != job.account_key:
+        raise HTTPException(status_code=409, detail="Only an attempted create job for this account can be confirmed")
+    if variant.depop_listing_id:
+        if variant.depop_listing_id != payload.depop_listing_id:
+            raise HTTPException(status_code=409, detail="Depop listing confirmation conflicts with the existing listing")
+        if job.status == "completed":
+            return DepopJobRead(**serialize_depop_job(db, job))
+    if job.status not in {"running", "needs_review"}:
+        raise HTTPException(status_code=409, detail="Depop job is not awaiting publication confirmation")
+    other = db.scalar(select(DepopListingVariant).where(
+        DepopListingVariant.depop_listing_id == payload.depop_listing_id,
+        DepopListingVariant.id != variant.id,
+    ))
+    if other is not None:
+        raise HTTPException(status_code=409, detail="Depop listing is already assigned to another variant")
 
     published_at = payload.published_at or datetime.utcnow()
     variant.status = "published"

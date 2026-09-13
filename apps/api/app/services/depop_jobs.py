@@ -1,9 +1,12 @@
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
+
+from app.core.config import PROJECT_ROOT
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.depop import DepopAccount, DepopListingJob, DepopListingVariant, DepopSourcePhoto
@@ -14,14 +17,39 @@ def _now_utc_naive() -> datetime:
     return datetime.utcnow()
 
 
+def depop_shipping(variant: DepopListingVariant) -> dict:
+    packed = variant.packed_weight_lb
+    supplier = variant.supplier_weight_lb
+    for value in (packed, supplier):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            return {"shipping_method": "", "shipping_weight_lb": None, "shipping_weight_source": "invalid"}
+    weight = packed if packed is not None else 2.0
+    source = "packed_weight" if packed is not None else "owner_approved_estimate"
+    if supplier is not None and supplier > weight:
+        weight, source = supplier, "supplier_weight"
+    tiers = [(0.25, "Extra extra small Under 4oz"), (0.5, "Extra small Under 8oz"),
+             (0.75, "Small Under 12oz"), (1.0, "Medium Under 1lb"),
+             (2.0, "Large Under 2lb"), (10.0, "Extra large Under 10lb")]
+    required = next((index for index, (limit, _) in enumerate(tiers) if weight < limit), None)
+    explicit = next((index for index, (_, name) in enumerate(tiers)
+                     if name.replace(" ", "").lower() == variant.shipping_method.replace(" ", "").lower()), None)
+    method = "" if required is None else tiers[max(required, explicit if explicit is not None else required)][1]
+    return {"shipping_method": method, "shipping_weight_lb": weight, "shipping_weight_source": source}
+
+
 def build_depop_listing_package(db: Session, variant: DepopListingVariant) -> dict | None:
     product = db.get(Product, variant.product_id)
     if product is None:
         return None
-    image_ids = json.loads(variant.image_ids_json or "[]")
+    try:
+        image_ids = json.loads(variant.image_ids_json or "[]")
+        if not isinstance(image_ids, list) or any(type(value) is not int for value in image_ids):
+            image_ids = []
+    except (ValueError, TypeError):
+        image_ids = []
     images_by_id = {
         image.id: image
-        for image in db.scalars(select(ProductImage).where(ProductImage.id.in_(image_ids))).all()
+        for image in db.scalars(select(ProductImage).where(ProductImage.id.in_(image_ids), ProductImage.product_id == variant.product_id)).all()
     } if image_ids else {}
     # Preserve the curated order rather than whatever order the DB returns rows in.
     ordered_images = [images_by_id[image_id] for image_id in image_ids if image_id in images_by_id]
@@ -43,9 +71,7 @@ def build_depop_listing_package(db: Session, variant: DepopListingVariant) -> di
         "category": variant.category,
         "condition": variant.condition,
         "color": variant.color,
-        # Current purse inventory weighs about 0.36 kg / 12.7 oz. Depop's
-        # matching USPS tier is Medium (under 1 lb).
-        "shipping_method": "Medium Under 1lb" if variant.category.lower() == "bags" else "",
+        **depop_shipping(variant),
     }
 
 
@@ -89,6 +115,8 @@ def serialize_depop_job(db: Session, job: DepopListingJob) -> dict:
         "condition": package["condition"],
         "color": package["color"],
         "shipping_method": package["shipping_method"],
+        "shipping_weight_lb": package["shipping_weight_lb"],
+        "shipping_weight_source": package["shipping_weight_source"],
         "depop_listing_id": variant.depop_listing_id,
     }
 
@@ -102,12 +130,48 @@ def depop_runner_url(job_id: int, account_key: str) -> str:
     return f"https://www.depop.com/products/create/?{urlencode(params)}"
 
 
-def start_next_depop_job(db: Session, now: datetime | None = None) -> DepopListingJob | None:
+def lock_depop_queue(db: Session) -> None:
+    # SQLite serializes writers; PostgreSQL locks the account rows. Acquire
+    # before reading queue state so concurrent pollers/enrollers cannot race.
+    db.execute(update(DepopAccount).values(
+        enabled=DepopAccount.enabled, updated_at=DepopAccount.updated_at,
+    ))
+
+
+def depop_listing_problem(db: Session, variant: DepopListingVariant) -> str | None:
+    package = build_depop_listing_package(db, variant)
+    if package is None or not math.isfinite(variant.price) or variant.price <= 0:
+        return "Depop listing needs a positive finite price and an existing product."
+    if any(not getattr(variant, field).strip() for field in ("title", "description", "brand", "category", "condition")):
+        return "Depop listing needs a title, description, brand, category, condition, and shipping method."
+    if not package["shipping_method"]:
+        return "Depop listing weight does not fit a supported shipping tier."
+    try:
+        selected = json.loads(variant.image_ids_json or "[]")
+        valid_selection = isinstance(selected, list) and len(set(selected)) == len(selected) == len(package["image_urls"])
+    except (ValueError, TypeError):
+        valid_selection = False
+    if not valid_selection:
+        return "Every selected Depop image must be unique and belong to this product."
+    if len(package["image_urls"]) not in (3, 4) or len(package["local_image_paths"]) != len(package["image_urls"]):
+        return "Depop listing needs 3 or 4 downloaded product images."
+    root = (PROJECT_ROOT / "downloads").resolve()
+    for value in package["local_image_paths"]:
+        path = (PROJECT_ROOT / value.lstrip("/\\")).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            return "Depop listing image file is missing or outside the downloads folder."
+    return None
+
+
+def start_next_depop_job(db: Session, now: datetime | None = None, account_key: str | None = None) -> DepopListingJob | None:
     """Claim the oldest due queued job for the extension's single dedicated
     Depop Chrome profile. Only one job may run at a time -- there is one
     browser profile, so a second concurrent runner would just fight the first
     one over the same tab."""
+    lock_depop_queue(db)
     now = now or _now_utc_naive()
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
     if db.scalar(select(DepopListingJob).where(DepopListingJob.status == "running")) is not None:
         return None
     stmt = (
@@ -116,6 +180,8 @@ def start_next_depop_job(db: Session, now: datetime | None = None) -> DepopListi
         .where(or_(DepopListingJob.scheduled_for.is_(None), DepopListingJob.scheduled_for <= now))
         .order_by(DepopListingJob.scheduled_for.asc().nullsfirst(), DepopListingJob.created_at.asc(), DepopListingJob.id.asc())
     )
+    if account_key is not None:
+        stmt = stmt.where(DepopListingJob.account_key == account_key)
     job = db.scalar(stmt)
     if job is None:
         return None
@@ -127,6 +193,20 @@ def start_next_depop_job(db: Session, now: datetime | None = None) -> DepopListi
         db.commit()
         db.refresh(job)
         return job
+    if (variant.account_key != job.account_key or job.action != "create"
+            or variant.depop_listing_id or variant.status in {"published", "active"}):
+        job.status = "needs_review"
+        job.message = "Depop job account/action changed or the variant is already published."
+        db.commit()
+        db.refresh(job)
+        return job
+    problem = depop_listing_problem(db, variant)
+    if problem:
+        job.status = "needs_review"
+        job.message = problem
+        db.commit()
+        db.refresh(job)
+        return job
     job.status = "running"
     job.attempts += 1
     job.progress = 0
@@ -135,16 +215,6 @@ def start_next_depop_job(db: Session, now: datetime | None = None) -> DepopListi
     db.commit()
     db.refresh(job)
     return job
-
-
-def _listing_description(variant: DepopListingVariant) -> str:
-    if variant.description.strip():
-        return variant.description.strip()
-    color = variant.color.strip() or "This"
-    return (
-        f"{color} handbag with multiple pockets and a comfortable shoulder/crossbody design. "
-        "A practical everyday bag for travel, work, and casual use. Brand new condition."
-    )
 
 
 def _next_schedule_slots(now_utc: datetime, timezone_name: str, hours: list[int]):
@@ -161,8 +231,12 @@ def _next_schedule_slots(now_utc: datetime, timezone_name: str, hours: list[int]
     while True:
         for hour in normalized_hours:
             local_slot = datetime(day.year, day.month, day.day, hour, tzinfo=local_zone)
-            if local_slot > local_now:
-                yield local_slot.astimezone(timezone.utc).replace(tzinfo=None)
+            utc_slot = local_slot.astimezone(timezone.utc)
+            # A nonexistent spring-forward wall hour must not silently shift.
+            if utc_slot.astimezone(local_zone).replace(tzinfo=None) != local_slot.replace(tzinfo=None):
+                continue
+            if utc_slot > aware_now:
+                yield utc_slot.replace(tzinfo=None)
         day += timedelta(days=1)
 
 
@@ -176,6 +250,7 @@ def schedule_approved_photo_batches(
 ) -> tuple[list[DepopListingJob], int, int, int]:
     """Turn every complete group of four approved photos into an idempotent
     listing variant and queue it at the next noon/evening slot."""
+    lock_depop_queue(db)
     account = db.scalar(select(DepopAccount).where(DepopAccount.key == account_key))
     if account is None or not account.enabled or not account.writes_enabled:
         raise ValueError("Depop account is unavailable or browser writes are disabled.")
@@ -186,7 +261,21 @@ def schedule_approved_photo_batches(
         .where(~DepopListingVariant.variant_key.contains("::batch-"))
         .order_by(DepopListingVariant.product_id, DepopListingVariant.id)
     ).all())
-    slot_iter = _next_schedule_slots(now or _now_utc_naive(), timezone_name, daily_hours or [12, 20])
+    slot_iter = _next_schedule_slots(now or _now_utc_naive(), timezone_name, daily_hours if daily_hours is not None else list(range(0, 24, 2)))
+    occupied_slots = {
+        job.scheduled_for
+        for job in db.scalars(select(DepopListingJob).where(
+            DepopListingJob.account_key == account_key, DepopListingJob.status != "cancelled",
+        )).all()
+        if job.scheduled_for is not None
+    }
+
+    def next_free_slot() -> datetime:
+        for candidate in slot_iter:
+            if candidate not in occupied_slots:
+                occupied_slots.add(candidate)
+                return candidate
+
     jobs: list[DepopListingJob] = []
     created = used = remaining = 0
 
@@ -216,13 +305,24 @@ def schedule_approved_photo_batches(
                 DepopListingVariant.product_id == base.product_id,
                 DepopListingVariant.variant_key == f"{base.variant_key}::batch-{batch_index}",
             ))
+            if variant is not None and variant.depop_listing_id:
+                used += 4
+                continue
+            if variant is not None:
+                existing = db.scalar(select(DepopListingJob).where(
+                    DepopListingJob.variant_id == variant.id,
+                    or_(DepopListingJob.status != "cancelled", DepopListingJob.attempts > 0),
+                ))
+                if existing is not None:
+                    used += 4
+                    continue
             if batch_index > 1 and variant is None:
                 variant = DepopListingVariant(
                     product_id=base.product_id,
                     account_key=base.account_key,
                     variant_key=f"{base.variant_key}::batch-{batch_index}",
                     title=base.title,
-                    description=_listing_description(base),
+                    description=base.description,
                     price=base.price,
                     image_ids_json=json.dumps(image_ids),
                     size=base.size,
@@ -230,34 +330,29 @@ def schedule_approved_photo_batches(
                     category=base.category or "Bags",
                     condition=base.condition or "Brand new",
                     color=base.color,
+                    shipping_method=base.shipping_method,
+                    packed_weight_lb=base.packed_weight_lb,
+                    supplier_weight_lb=base.supplier_weight_lb,
                     status="ready",
                 )
                 db.add(variant)
                 db.flush()
                 created += 1
-            elif variant is not None and not variant.depop_listing_id:
+            else:
                 variant.image_ids_json = json.dumps(image_ids)
-                variant.description = _listing_description(variant)
                 variant.brand = variant.brand or "Other"
                 variant.category = variant.category or "Bags"
                 variant.condition = variant.condition or "Brand new"
                 variant.status = "ready"
-            if variant is None or variant.depop_listing_id:
-                used += 4
-                continue
-            existing = db.scalar(select(DepopListingJob).where(
-                DepopListingJob.variant_id == variant.id,
-                DepopListingJob.status.in_(["queued", "running", "completed"]),
-            ))
-            if existing is not None:
-                used += 4
-                continue
+            problem = depop_listing_problem(db, variant)
+            if problem:
+                raise ValueError(problem)
             job = DepopListingJob(
                 variant_id=variant.id,
                 account_key=variant.account_key,
                 action="create",
                 status="queued",
-                scheduled_for=next(slot_iter),
+                scheduled_for=next_free_slot(),
                 message="Scheduled from an approved four-photo batch.",
             )
             variant.status = "queued"

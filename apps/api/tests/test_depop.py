@@ -1,4 +1,4 @@
-def test_depop_account_variant_and_isolated_worker_queue(client) -> None:
+def test_depop_account_variant_and_isolated_worker_queue(client, monkeypatch, tmp_path) -> None:
     account = client.post(
         "/depop/accounts",
         json={
@@ -46,6 +46,8 @@ def test_depop_account_variant_and_isolated_worker_queue(client) -> None:
             "image_ids": [image["id"] for image in product_body["images"][:3]],
             "size": "M",
             "condition": "Good",
+            "brand": "Other",
+            "shipping_method": "Medium Under 1lb",
             "color": "Blue",
             "category": "Bags",
         },
@@ -64,6 +66,18 @@ def test_depop_account_variant_and_isolated_worker_queue(client) -> None:
     product_after = client.get("/products").json()[0]
     assert {draft["marketplace"] for draft in product_after["listing_drafts"]} >= {"ebay", "depop"}
 
+    # The real browser consumes downloaded files, not remote source URLs.
+    from app.core.database import get_db
+    from app.main import app
+    from app.models.domain import ProductImage
+    monkeypatch.setattr("app.services.depop_jobs.PROJECT_ROOT", tmp_path)
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads" / "image.jpg").write_bytes(b"test image")
+    database = next(app.dependency_overrides[get_db]())
+    for image in database.query(ProductImage).all():
+        image.local_path = "downloads/image.jpg"
+    database.commit()
+    database.close()
     job = client.post("/depop/jobs", json={"variant_id": variant.json()["id"], "action": "create"})
     assert job.status_code == 200
     assert job.json()["status"] == "queued"
@@ -85,7 +99,7 @@ def test_depop_account_variant_and_isolated_worker_queue(client) -> None:
     assert run_body["package"]["title"] == "Vintage denim jacket"
     assert run_body["package"]["price"] == 42
     assert len(run_body["package"]["image_urls"]) == 3
-    assert run_body["package"]["shipping_method"] == "Medium Under 1lb"
+    assert run_body["package"]["shipping_method"] == "Extra large Under 10lb"
 
     assert client.get("/depop/jobs?status=running").json()[0]["id"] == job.json()["id"]
 
@@ -125,7 +139,7 @@ def test_depop_jobs_next_returns_404_when_queue_is_empty(client) -> None:
     assert client.post("/depop/jobs/next").status_code == 404
 
 
-def test_schedule_approved_photos_creates_idempotent_four_photo_batches(client, monkeypatch) -> None:
+def test_schedule_approved_photos_creates_idempotent_four_photo_batches(client, monkeypatch, tmp_path) -> None:
     import httpx
 
     def fail_image_download(*args, **kwargs):
@@ -169,6 +183,19 @@ def test_schedule_approved_photos_creates_idempotent_four_photo_batches(client, 
             json={"status": "approved", "variant_id": variant["id"]},
         )
         assert decision.status_code == 200
+
+    from app.core.database import get_db
+    from app.main import app
+    from app.models.domain import ProductImage
+    monkeypatch.setattr("app.services.depop_jobs.PROJECT_ROOT", tmp_path)
+    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads" / "image.jpg").write_bytes(b"test image")
+    database = next(app.dependency_overrides[get_db]())
+    for image in database.query(ProductImage).all():
+        image.local_path = "downloads/image.jpg"
+    database.commit()
+    database.close()
+    client.patch(f"/depop/variants/{variant['id']}", json={"description": "My bag", "brand": "Other", "category": "Bags", "shipping_method": "Medium Under 1lb"})
 
     scheduled = client.post(
         "/depop/jobs/schedule-approved",
