@@ -107,6 +107,7 @@ class DepopListingJob(Base, TimestampMixin):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(Text, default="")
     runner_url: Mapped[str] = mapped_column(Text, default="")
+    submission_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(256), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     variant: Mapped[DepopListingVariant] = relationship(back_populates="jobs")

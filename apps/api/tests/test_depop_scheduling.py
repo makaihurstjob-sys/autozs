@@ -250,3 +250,47 @@ def test_invalid_batch_never_queued(db):
         schedule(db)
     db.rollback()
     assert db.query(DepopListingJob).count() == 0
+
+
+def test_pending_publication_survives_session_loss_and_blocks_next_claim(db):
+    from fastapi import HTTPException
+    from app.api.routes import begin_depop_submission, confirm_depop_publication, update_depop_job
+    from app.schemas.depop import DepopSubmissionBegin, DepopPublicationConfirm, DepopJobUpdate
+    seed(db, count=8)
+    jobs = schedule(db)
+    first_id, next_id = jobs[0].id, jobs[1].id
+    start_next_depop_job(db, now=datetime(2026, 9, 13))
+    pending = begin_depop_submission(first_id, DepopSubmissionBegin(account_key="closet"), db)
+    assert pending.submission_started_at is not None
+    with pytest.raises(HTTPException):
+        update_depop_job(first_id, DepopJobUpdate(status="cancelled"), db)
+    db.rollback()
+    # A fresh session has no browser-local state or identity-map history.
+    with Session(db.get_bind()) as recovered:
+        assert start_next_depop_job(recovered, now=datetime(2026, 9, 13)) is None
+        recovered.rollback()
+        confirm_depop_publication(first_id, DepopPublicationConfirm(depop_listing_id="closet-blue"), recovered)
+        assert start_next_depop_job(recovered, now=datetime(2026, 9, 13)).id == next_id
+
+
+def test_legacy_depop_migration_idempotent_and_preserves_submission_hold(tmp_path, monkeypatch):
+    from sqlalchemy import text, inspect
+    from app import main
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE depop_listing_variants (id INTEGER PRIMARY KEY, title TEXT)"))
+        connection.execute(text("INSERT INTO depop_listing_variants VALUES (1, 'Original bag')"))
+        connection.execute(text("CREATE TABLE depop_listing_jobs (id INTEGER PRIMARY KEY, attempts INTEGER, status TEXT, message TEXT, updated_at DATETIME)"))
+        connection.execute(text("INSERT INTO depop_listing_jobs VALUES (1, 1, 'needs_review', :message, '2026-09-12 12:00:00')"),
+                           {"message": "Submission started; outcome requires listing confirmation before any retry."})
+        connection.execute(text("INSERT INTO depop_listing_jobs VALUES (2, 0, 'queued', '', '2026-09-12 12:00:00')"))
+    monkeypatch.setattr(main, "engine", engine)
+    main._ensure_lightweight_columns()
+    main._ensure_lightweight_columns()
+    with engine.connect() as connection:
+        row = connection.execute(text("SELECT title, shipping_method, packed_weight_lb, supplier_weight_lb FROM depop_listing_variants")).one()
+        assert tuple(row) == ("Original bag", "", None, None)
+        holds = connection.execute(text("SELECT submission_started_at FROM depop_listing_jobs ORDER BY id")).scalars().all()
+        assert holds == ["2026-09-12 12:00:00", None]
+    assert "submission_started_at" in {col["name"] for col in inspect(engine).get_columns("depop_listing_jobs")}
+    engine.dispose()

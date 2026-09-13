@@ -228,6 +228,7 @@ class DepopJobRead(BaseModel):
     action: str
     status: str
     scheduled_for: datetime | None = None
+    submission_started_at: datetime | None = None
     attempts: int
     progress: int
     message: str

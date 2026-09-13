@@ -77,6 +77,7 @@ def _ensure_lightweight_columns() -> None:
             "relist_blocked": "BOOLEAN DEFAULT 0 NOT NULL",
         },
         "listing_jobs": {"listing_schedule_at": "DATETIME", "cancellation_scope": "VARCHAR(32) DEFAULT 'product' NOT NULL"},
+        "depop_listing_jobs": {"submission_started_at": "DATETIME"},
         "depop_listing_variants": {
             "shipping_method": "VARCHAR(128) DEFAULT '' NOT NULL",
             "packed_weight_lb": "FLOAT",
@@ -160,6 +161,13 @@ def _ensure_lightweight_columns() -> None:
             for name, definition in columns.items():
                 if name not in existing_columns:
                     connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+        if "depop_listing_jobs" in existing_tables:
+            connection.execute(text(
+                "UPDATE depop_listing_jobs SET submission_started_at = updated_at "
+                "WHERE submission_started_at IS NULL AND attempts > 0 "
+                "AND status != 'completed' AND message = "
+                "'Submission started; outcome requires listing confirmation before any retry.'"
+            ))
         if "ebay_revision_jobs" in existing_tables:
             connection.execute(
                 text(

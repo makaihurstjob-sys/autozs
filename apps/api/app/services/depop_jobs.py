@@ -84,6 +84,7 @@ def serialize_depop_job(db: Session, job: DepopListingJob) -> dict:
         "status": job.status,
         "scheduled_for": job.scheduled_for,
         "attempts": job.attempts,
+        "submission_started_at": job.submission_started_at,
         "progress": job.progress,
         "message": job.message,
         "runner_url": job.runner_url,
@@ -172,7 +173,10 @@ def start_next_depop_job(db: Session, now: datetime | None = None, account_key: 
     now = now or _now_utc_naive()
     if now.tzinfo is not None:
         now = now.astimezone(timezone.utc).replace(tzinfo=None)
-    if db.scalar(select(DepopListingJob).where(DepopListingJob.status == "running")) is not None:
+    if db.scalar(select(DepopListingJob).where(or_(
+        DepopListingJob.status == "running",
+        (DepopListingJob.submission_started_at.is_not(None) & (DepopListingJob.status != "completed")),
+    ))) is not None:
         return None
     stmt = (
         select(DepopListingJob)

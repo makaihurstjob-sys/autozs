@@ -1595,6 +1595,8 @@ def update_depop_job(
     job = db.get(DepopListingJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Depop job not found")
+    if job.submission_started_at is not None and payload.status is not None and payload.status != job.status:
+        raise HTTPException(status_code=409, detail="Confirm the pending Depop publication before changing its status")
     if payload.status == "running" and job.status != "running":
         raise HTTPException(status_code=409, detail="Claim Depop jobs through the due-job queue")
     if payload.status == "completed" and job.status != "completed":
@@ -1634,6 +1636,7 @@ def begin_depop_submission(
     # A crash or lost response must reconcile the listing, never click again.
     job.status = "needs_review"
     job.progress = 95
+    job.submission_started_at = datetime.utcnow()
     job.message = "Submission started; outcome requires listing confirmation before any retry."
     db.commit()
     db.refresh(job)
