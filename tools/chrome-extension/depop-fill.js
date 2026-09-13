@@ -179,13 +179,17 @@
   }
 
   async function confirmPublication(pending, identity) {
+    // Keep actual observed evidence across a lost API response or browser restart.
+    // Retrying this acknowledgement never clicks Post again.
+    pending.publicationEvidence = { ...identity, observedAt: pending.publicationEvidence?.observedAt || new Date().toISOString() };
+    await storageSet(PENDING_PUBLICATION_KEY, pending);
     await apiRequest(`/depop/jobs/${encodeURIComponent(pending.jobId)}/published`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         depop_listing_id: identity.id,
         listing_url: identity.url,
-        published_at: new Date().toISOString(),
+        published_at: pending.publicationEvidence.observedAt,
       }),
     });
     await storageRemove(PENDING_PUBLICATION_KEY);
@@ -281,8 +285,16 @@
   async function resumePublicationConfirmation() {
     const pending = await storageGet(PENDING_PUBLICATION_KEY);
     if (pending?.postClickedAt) {
-      const identity = findPublishedListing(pending, true);
-      if (identity) await confirmPublication(pending, identity);
+      if (!pending.tabToken || sessionStorage.getItem(PENDING_PUBLICATION_KEY) !== pending.tabToken) return;
+      const evidence = pending.publicationEvidence;
+      const identity = evidence && listingIdentity(evidence.url);
+      if (identity && identity.id === evidence.id && Number.isFinite(Date.parse(evidence.observedAt))) {
+        await confirmPublication(pending, identity);
+        return;
+      }
+      // Product pages hydrate after the content script runs. A single DOM read
+      // misses valid hard-navigation outcomes and leaves the entire queue held.
+      await watchForPublishedDestination(pending, 30000, true);
     }
   }
 

@@ -77,6 +77,7 @@ async function run() {
 
   let confirmedPath = "";
   let removedPending = false;
+  let recoveryNow = Date.now();
   const activeContext = {
     URL,
     URLSearchParams,
@@ -86,8 +87,8 @@ async function run() {
       origin: "https://www.depop.com",
     },
     globalThis: {},
-    setTimeout: (fn) => { fn(); return 1; },
-    Date,
+    setTimeout: (fn, ms) => { recoveryNow += ms; fn(); return 1; },
+    Date: class extends Date { static now() { return recoveryNow; } },
     sessionStorage: context.sessionStorage,
     document: {
       getElementById: () => null,
@@ -105,6 +106,7 @@ async function run() {
           jobId: "7", tabToken: "tab-7", username: "m4coq", title: "Red purse", color: "Red", price: 41.6, postClickedAt: new Date().toISOString(),
         } }),
         remove: async () => { removedPending = true; },
+        set: async () => {},
       } },
       runtime: { sendMessage: async (message) => {
         confirmedPath = message.path;
