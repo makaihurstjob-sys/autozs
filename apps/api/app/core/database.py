@@ -1,6 +1,8 @@
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -16,8 +18,19 @@ def _connect_args(url: str) -> dict:
     return {}
 
 
+def _engine_options(url: str) -> dict:
+    options = {"connect_args": _connect_args(url)}
+    parsed = make_url(url)
+    if parsed.get_backend_name() == "sqlite" and parsed.database not in (None, "", ":memory:"):
+        # File SQLite connections are inexpensive. A small QueuePool can strand
+        # request workers waiting for connections held by other requests.
+        # Close each connection on return; retain SQLite's default memory pool.
+        options["poolclass"] = NullPool
+    return options
+
+
 settings = get_settings()
-engine = create_engine(settings.database_url, connect_args=_connect_args(settings.database_url))
+engine = create_engine(settings.database_url, **_engine_options(settings.database_url))
 
 
 if settings.database_url.startswith("sqlite"):
