@@ -197,6 +197,10 @@ async function runNativePcInputTest() {
     },
   };
 
+  context.verifyLiveEbaySupplierOrder = async candidate => {
+    if (!candidate) throw new Error("Missing verification candidate");
+    fetched.push({ url: "mock-live-ebay-verification", options: {} });
+  };
   vm.createContext(context);
   vm.runInContext(source, context);
   if (!listener) throw new Error("Expected background message listener to be registered.");
@@ -634,6 +638,9 @@ async function runNativePcInputTest() {
   if (!fetched.some((request) => request.url.endsWith("/supplier-orders/next") && request.options.method === "POST")) {
     throw new Error(`Expected supplier-order queue claim, got ${JSON.stringify(fetched)}`);
   }
+  const verifiedIndex = fetched.findIndex(request => request.url === "mock-live-ebay-verification");
+  const claimedIndex = fetched.findIndex(request => request.url.endsWith("/supplier-orders/next"));
+  if (verifiedIndex < 0 || claimedIndex < verifiedIndex) throw new Error("Claim must follow live eBay verification");
   if (createdTabs.length !== 1 || !context.isSupplierOrderRunnerUrl(createdTabs[0].url, 14)) {
     throw new Error(`Expected one guarded Home Depot checkout tab, got ${JSON.stringify(createdTabs)}`);
   }

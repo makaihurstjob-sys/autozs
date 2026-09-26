@@ -826,6 +826,13 @@ async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
   if (!autozsCheckoutTotalsAreSafe(totals, expectedSubtotal, credential.approved_total)) {
     throw new Error(`Home Depot's final total could not be verified within the approved $${Number(credential.approved_total).toFixed(2)} ceiling.`);
   }
+  await new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "autozs-supplier-ebay-recheck", supplierOrderId: Number(supplierOrderId) }, response => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else if (!response?.ok) reject(new Error(response?.error || "Final live eBay check failed."));
+      else resolve();
+    });
+  });
   const reason = `Ready for owner review: Home Depot address, seller phone, payment, and $${totals.total.toFixed(2)} final total were verified. AUTOZS did not click Place order.`;
   await autozsMarkCheckoutReview(supplierOrderId, reason, {
     item_subtotal: totals.subtotal, shipping_cost: totals.shipping, sales_tax: totals.tax,

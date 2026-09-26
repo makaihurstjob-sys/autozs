@@ -1,5 +1,5 @@
 if (typeof importScripts === "function") {
-  importScripts("dashboard-browser-bridge-config.js", "dashboard-browser-bridge-agent.js", "ebay-payments.js");
+  importScripts("dashboard-browser-bridge-config.js", "dashboard-browser-bridge-agent.js", "ebay-payments.js", "ebay-order-verification.js");
 }
 
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -952,10 +952,20 @@ async function readSupplierCheckoutToken(supplierOrderId) {
 }
 
 async function claimNextSupplierOrder() {
+  const candidate = await localApiJson("/supplier-orders/ebay-verification-next");
+  if (!candidate) return null;
+  await verifyLiveEbaySupplierOrder(candidate);
   return localApiJson("/supplier-orders/next", { method: "POST" });
 }
 
+let supplierOrderOpening = false;
 async function openNextSupplierOrder() {
+  if (supplierOrderOpening) return;
+  supplierOrderOpening = true;
+  try { return await openNextSupplierOrderOnce(); } finally { supplierOrderOpening = false; }
+}
+
+async function openNextSupplierOrderOnce() {
   if (!(await canRunAutozsCheckoutJobs())) return;
   const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
   if (tabs.some((tab) => isSupplierOrderRunnerUrl(tab.url))) return;
@@ -2182,6 +2192,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
+  if (message?.type === "autozs-supplier-ebay-recheck" && sender.tab?.id
+      && isSupplierOrderRunnerUrl(sender.tab.url, Number(message.supplierOrderId))) {
+    (async () => {
+      const id = Number(message.supplierOrderId);
+      if (!(await readSupplierCheckoutToken(id))) throw new Error("Checkout lease expired.");
+      await verifyLiveEbaySupplierOrder(await localApiJson(`/supplier-orders/${id}/ebay-verification-context`));
+      sendResponse({ ok: true });
+    })().catch(error => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
   if (
     message?.type === "autozs-supplier-checkout-credential" &&
     sender.tab?.id &&
@@ -2191,6 +2211,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const supplierOrderId = Number(message.supplierOrderId);
       const token = await readSupplierCheckoutToken(supplierOrderId);
       if (!token) throw new Error("The local supplier checkout lease expired.");
+      await verifyLiveEbaySupplierOrder(await localApiJson(`/supplier-orders/${supplierOrderId}/ebay-verification-context`));
       const response = await fetch(`${LOCAL_CHECKOUT_API}/supplier-orders/${supplierOrderId}/checkout-credential`, {
         method: "POST",
         cache: "no-store",
