@@ -644,6 +644,16 @@ async function runNativePcInputTest() {
   if (createdTabs.length !== 1 || !context.isSupplierOrderRunnerUrl(createdTabs[0].url, 14)) {
     throw new Error(`Expected one guarded Home Depot checkout tab, got ${JSON.stringify(createdTabs)}`);
   }
+  const originalVerifier = context.verifyLiveEbaySupplierOrder;
+  context.verifyLiveEbaySupplierOrder = async () => { throw new Error("Live eBay cancelled"); };
+  storage.autozsSupplierOrderLastOpened = 0;
+  const claimsBefore = fetched.filter(request => request.url.endsWith("/supplier-orders/next")).length;
+  try { await context.openNextSupplierOrder(); throw new Error("Cancelled verification unexpectedly passed"); }
+  catch (error) { if (!/Live eBay cancelled/.test(error.message)) throw error; }
+  if (fetched.filter(request => request.url.endsWith("/supplier-orders/next")).length !== claimsBefore) {
+    throw new Error("Failed verification must not claim supplier checkout");
+  }
+  context.verifyLiveEbaySupplierOrder = originalVerifier;
   const checkoutUrl = new URL(createdTabs[0].url);
   if (checkoutUrl.searchParams.get("autozs_checkout_canary") !== "1") {
     throw new Error(`Expected checkout canary marker, got ${createdTabs[0].url}`);
