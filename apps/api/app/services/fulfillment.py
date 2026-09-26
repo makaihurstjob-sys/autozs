@@ -564,6 +564,18 @@ def _readiness_issues(supplier_order: SupplierOrder) -> list[str]:
 
 
 def _finish_purchase_attempt(db: Session, supplier_order: SupplierOrder, status: str) -> None:
+    from app.models.domain import PurchaseReservation
+    from app.services.purchase_budget import record_outcome
+    from app.services.purchase_policy import cents
+    reservation = db.scalar(select(PurchaseReservation).where(
+        PurchaseReservation.supplier_order_id == supplier_order.id))
+    if reservation is not None:
+        if status in {"placed", "shipped", "delivered"}:
+            if cents(supplier_order.total, "Confirmed purchase total") != reservation.amount_cents:
+                raise ValueError("Confirmed purchase total differs from the budget reservation")
+            record_outcome(db, supplier_order.id, confirmation=supplier_order.external_order_id)
+        elif reservation.status != "purchased":
+            record_outcome(db, supplier_order.id)  # failed/cancelled/expired is still uncertain
     attempt = db.scalar(select(SupplierPurchaseAttempt).where(
         SupplierPurchaseAttempt.supplier_order_id == supplier_order.id,
         SupplierPurchaseAttempt.attempt_number == supplier_order.attempts,

@@ -3489,6 +3489,22 @@ def approve_order_for_supplier(supplier_order_id: int, db: Session = Depends(get
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+from app.services.purchase_submission import FinalCheckout, authorize_submission
+
+
+@router.post("/supplier-orders/{supplier_order_id}/begin-submission")
+def begin_supplier_submission(supplier_order_id: int, payload: FinalCheckout,
+                              request: Request, response: Response, db: Session = Depends(get_db)):
+    _require_local_checkout_request(request)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return authorize_submission(db, supplier_order_id,
+                                    request.headers.get("X-AutoZS-Checkout-Token", ""), payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/supplier-orders/next", response_model=SupplierOrderClaimRead | None)
 def claim_supplier_order(db: Session = Depends(get_db)) -> SupplierOrder | None:
     return claim_next_supplier_order(db)

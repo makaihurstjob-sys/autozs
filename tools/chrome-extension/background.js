@@ -2192,6 +2192,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
+  if (message?.type === "autozs-supplier-begin-submission" && sender.tab?.id
+      && isSupplierOrderRunnerUrl(sender.tab.url, Number(message.supplierOrderId))) {
+    (async () => {
+      const id = Number(message.supplierOrderId);
+      const token = await readSupplierCheckoutToken(id);
+      if (!token) throw new Error("Checkout lease expired.");
+      const response = await fetch(`${LOCAL_CHECKOUT_API}/supplier-orders/${id}/begin-submission`, {
+        method: "POST", cache: "no-store",
+        headers: { "Content-Type": "application/json", "X-AutoZS-Checkout-Token": token },
+        body: JSON.stringify({ ...message.quote, source_url: sender.tab.url }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || `Submission gate returned ${response.status}.`);
+      sendResponse({ ok: true, result });
+    })().catch(error => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
   if (message?.type === "autozs-supplier-ebay-recheck" && sender.tab?.id
       && isSupplierOrderRunnerUrl(sender.tab.url, Number(message.supplierOrderId))) {
     (async () => {

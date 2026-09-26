@@ -833,12 +833,45 @@ async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
       else resolve();
     });
   });
-  const reason = `Ready for owner review: Home Depot address, seller phone, payment, and $${totals.total.toFixed(2)} final total were verified. AUTOZS did not click Place order.`;
-  await autozsMarkCheckoutReview(supplierOrderId, reason, {
-    item_subtotal: totals.subtotal, shipping_cost: totals.shipping, sales_tax: totals.tax,
-    card_amount: totals.total, total: totals.total,
+  await autozsSubmitHomeDepotOnce(supplierOrderId);
+}
+
+async function autozsSubmitHomeDepotOnce(supplierOrderId) {
+  const marker = `autozs-final-submit:${supplierOrderId}`;
+  if (sessionStorage.getItem(marker)) throw new Error("Submission already attempted; reconcile before retrying.");
+  const findButton = () => {
+    const buttons = [...document.querySelectorAll('button')].filter(button =>
+      /^place order$/i.test(String(button.innerText || button.textContent || "").trim())
+      && !button.disabled && button.getAttribute("aria-disabled") !== "true"
+      && button.getClientRects().length > 0);
+    if (buttons.length !== 1) throw new Error("A unique enabled Place order button is required.");
+    return buttons[0];
+  };
+  findButton();
+  const totals = autozsCheckoutTotals(document.body?.innerText || "");
+  const quote = { item_subtotal: totals.subtotal, shipping: totals.shipping, tax: totals.tax,
+    total: totals.total, observed_at: new Date().toISOString() };
+  // Persist before requesting one-shot permission. A lost response never retries.
+  sessionStorage.setItem(marker, "requested");
+  const result = await new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: "autozs-supplier-begin-submission",
+      supplierOrderId: Number(supplierOrderId), quote }, response => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else if (!response?.ok) reject(new Error(response?.error || "Submission permission was not received."));
+      else resolve(response.result);
+    });
   });
-  autozsCheckoutProgress(100, reason, "complete");
+  const current = autozsCheckoutTotals(document.body?.innerText || "");
+  if (!result?.authorized || result.supplier_order_id !== Number(supplierOrderId)
+      || !Number.isInteger(result.reservation_id) || result.total_cents !== Math.round(totals.total * 100)
+      || !["subtotal", "shipping", "tax", "total"].every(key =>
+        Number.isFinite(current[key]) && current[key] === totals[key])) {
+    throw new Error("Checkout changed or submission permission was invalid; reconcile the budget hold.");
+  }
+  const button = findButton();
+  sessionStorage.setItem(marker, "submitting");
+  button.click();
+  autozsCheckoutProgress(95, "Order submitted once; waiting for supplier confirmation.");
 }
 
 function autozsHomeDepotCheckoutErrorPage(title = document.title, bodyText = document.body?.innerText || "") {

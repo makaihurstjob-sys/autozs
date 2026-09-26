@@ -258,3 +258,121 @@ require('node:test')('cart rejects equal-price substitutions, extra items, wrong
     assert.equal(context.autozsCartItemsMatch([item], observed), false);
   }
 });
+
+// Minimal stand-ins for the DOM/chrome/sessionStorage surface autozsSubmitHomeDepotOnce
+// touches. They mirror the exact selectors/shapes read in home-depot-checkout.js
+// (see autozsCheckoutOverlay/autozsCheckoutProgress) rather than a generic HTML parse,
+// so they'll need updating if that markup changes.
+function autozsMakeButton({ text = 'Place order', disabled = false, ariaDisabled = null, visible = true } = {}) {
+  return {
+    innerText: text, textContent: text, disabled, clicks: 0,
+    getAttribute: (name) => (name === 'aria-disabled' ? ariaDisabled : null),
+    getClientRects: () => (visible ? [{}] : []),
+    click() { this.clicks += 1; },
+  };
+}
+
+function autozsMakeCheckoutDocument({ buttons, bodyText }) {
+  let overlayHost = null;
+  const message = { textContent: '', style: {} };
+  const percent = { textContent: '', style: {} };
+  const bar = { style: {} };
+  const dismiss = { addEventListener() {} };
+  return {
+    body: { innerText: bodyText },
+    documentElement: { append() {} },
+    getElementById: (id) => (id === 'autozs-supplier-checkout-overlay' ? overlayHost : null),
+    createElement: (tag) => {
+      const el = {
+        tagName: tag, id: '', style: {}, innerHTML: '',
+        querySelector: (sel) => ({
+          '[data-autozs-checkout-message]': message,
+          '[data-autozs-checkout-percent]': percent,
+          '[data-autozs-checkout-bar]': bar,
+          '[data-autozs-checkout-dismiss]': dismiss,
+        }[sel] || null),
+      };
+      overlayHost = el;
+      return el;
+    },
+    querySelectorAll: (sel) => (sel === 'button' ? buttons : []),
+  };
+}
+
+function autozsMakeSessionStorage() {
+  const store = new Map();
+  return {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+  };
+}
+
+const AUTOZS_SAFE_TOTALS_TEXT = 'Subtotal $19.97 Shipping $0.00 Estimated Tax $1.60 Order Total $21.57';
+
+require('node:test')('auto-submit clicks Place order exactly once after backend authorization matches the live totals', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { lastError: null, sendMessage: (message, cb) => {
+    assert.equal(message.type, 'autozs-supplier-begin-submission');
+    cb({ ok: true, result: { authorized: true, supplier_order_id: 42, reservation_id: 7, total_cents: 2157 } });
+  } } };
+  await context.autozsSubmitHomeDepotOnce(42);
+  assert.equal(button.clicks, 1);
+  assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), 'submitting');
+});
+
+require('node:test')('auto-submit refuses a second attempt once the one-shot marker is set', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.sessionStorage.setItem('autozs-final-submit:42', 'requested');
+  context.chrome = { runtime: { sendMessage: () => { throw new Error('must not contact backend after a prior attempt'); } } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /already attempted/);
+  assert.equal(button.clicks, 0);
+});
+
+require('node:test')('auto-submit requires exactly one enabled Place order button before requesting permission', async () => {
+  const assert = require('node:assert/strict');
+  context.document = autozsMakeCheckoutDocument({ buttons: [], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { sendMessage: () => { throw new Error('must not contact backend without a unique button'); } } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /unique enabled Place order button/);
+  assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), null);
+});
+
+require('node:test')('auto-submit does not click when the backend refuses authorization', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { sendMessage: (message, cb) => cb({ ok: false, error: 'Daily budget exhausted.' }) } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /Daily budget exhausted/);
+  assert.equal(button.clicks, 0);
+});
+
+require('node:test')('auto-submit aborts if the page total changes after authorization is granted', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  const doc = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.document = doc;
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { sendMessage: (message, cb) => {
+    doc.body.innerText = 'Subtotal $19.97 Shipping $0.00 Estimated Tax $1.60 Order Total $25.00';
+    cb({ ok: true, result: { authorized: true, supplier_order_id: 42, reservation_id: 7, total_cents: 2157 } });
+  } } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /Checkout changed or submission permission was invalid/);
+  assert.equal(button.clicks, 0);
+});
+
+require('node:test')('auto-submit aborts if the authorization answers a different supplier order', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { sendMessage: (message, cb) => cb({ ok: true, result: { authorized: true, supplier_order_id: 99, reservation_id: 7, total_cents: 2157 } }) } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /Checkout changed or submission permission was invalid/);
+  assert.equal(button.clicks, 0);
+});
