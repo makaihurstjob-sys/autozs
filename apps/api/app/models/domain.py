@@ -838,6 +838,24 @@ class SupplierPurchaseAttempt(Base, TimestampMixin):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class PurchaseBudgetLock(Base):
+    __tablename__ = "purchase_budget_lock"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PurchaseReservation(Base, TimestampMixin):
+    __tablename__ = "purchase_reservations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # One marketplace order cannot be bought through two supplier drafts.
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), unique=True)
+    supplier_order_id: Mapped[int] = mapped_column(ForeignKey("supplier_orders.id"), unique=True)
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), default="reserved")
+    spent_day: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    evidence: Mapped[str] = mapped_column(Text, default="")
+
+
 class SupplierOrderItem(Base, TimestampMixin):
     __tablename__ = "supplier_order_items"
 

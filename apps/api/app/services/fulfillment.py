@@ -334,6 +334,8 @@ def approve_supplier_order(db: Session, supplier_order_id: int) -> SupplierOrder
     supplier_order = _load_supplier_order(db, supplier_order_id)
     if supplier_order is None:
         raise LookupError("Supplier order not found.")
+    from app.services.purchase_budget import require_unreserved
+    require_unreserved(db, supplier_order.order_id)
     if _purchase_recorded(supplier_order):
         raise ValueError("This supplier order already has a recorded purchase and cannot be queued again.")
     if supplier_order.order is not None and supplier_order.order.status in {"cancelled", "shipped", "delivered"}:
@@ -399,7 +401,9 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
         db.commit()
         return None
     from app.services.ebay_checkout_verification import require_fresh
+    from app.services.purchase_budget import require_unreserved
     try:
+        require_unreserved(db, supplier_order.order_id)
         require_fresh(db, supplier_order)
     except ValueError:
         db.commit()
