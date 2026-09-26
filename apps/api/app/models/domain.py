@@ -937,3 +937,16 @@ class FinanceEntry(Base, TimestampMixin):
     amount: Mapped[float] = mapped_column(Float)
     description: Mapped[str] = mapped_column(String(512), default="")
     occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class EbayCheckoutVerification(Base):
+    __tablename__ = "ebay_checkout_verifications"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_order_id: Mapped[int] = mapped_column(ForeignKey("supplier_orders.id"), index=True)
+    ebay_order_id: Mapped[str] = mapped_column(String(128))
+    account_key: Mapped[str] = mapped_column(String(128))
+    source_url: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32))
+    observed_at: Mapped[datetime] = mapped_column(DateTime)
+    verified_at: Mapped[datetime] = mapped_column(DateTime)
+    evidence: Mapped[str] = mapped_column(Text)

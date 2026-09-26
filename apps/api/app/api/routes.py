@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
+from app.services import ebay_checkout_verification as ebay_verification
+from app.services.ebay_checkout_verification import VerificationObservation
 from app.core.database import get_db
 from app.core.config import get_settings
 from app.core.config import PROJECT_ROOT
@@ -3425,6 +3427,35 @@ def store_supplier_payment_card(
     return SupplierPaymentCredentialStatus(supplier=supplier, stored=True, last_four=last_four)
 
 
+@router.get("/supplier-orders/ebay-verification-next")
+def next_ebay_verification(db: Session = Depends(get_db)):
+    return ebay_verification.next_context(db)
+
+
+@router.get("/supplier-orders/{supplier_order_id}/ebay-verification-context")
+def ebay_verification_context(supplier_order_id: int, db: Session = Depends(get_db)):
+    row = db.get(SupplierOrder, supplier_order_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    try:
+        return ebay_verification.context(row)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/supplier-orders/{supplier_order_id}/ebay-verification")
+def record_ebay_verification(supplier_order_id: int, payload: VerificationObservation,
+                            request: Request, db: Session = Depends(get_db)):
+    _require_local_checkout_request(request)
+    row = db.get(SupplierOrder, supplier_order_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    try:
+        return ebay_verification.record(db, row, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/supplier-orders/{supplier_order_id}", response_model=SupplierOrderRead)
 def read_supplier_order(supplier_order_id: int, db: Session = Depends(get_db)) -> SupplierOrder:
     orders = list_supplier_orders(db)
@@ -3484,6 +3515,12 @@ def read_supplier_checkout_credential(
         or not hmac.compare_digest(token, supplier_order.checkout_token)
     ):
         raise HTTPException(status_code=403, detail="The checkout credential lease is not valid.")
+    if supplier_order.lease_expires_at is None or supplier_order.lease_expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=403, detail="The checkout credential lease has expired.")
+    try:
+        ebay_verification.require_fresh(db, supplier_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     card = db.get(GiftCard, supplier_order.gift_card_id) if supplier_order.gift_card_id else None
     response.headers["Cache-Control"] = "no-store"
     if card is not None:

@@ -1,3 +1,4 @@
+from ebay_verification_helpers import verify_queued
 def _prepare_order(client, *, gift_card_id: int | None = None):
     product = client.post(
         "/products/import-captured",
@@ -161,6 +162,7 @@ def test_gift_card_supplier_order_flow_debits_card_once(client) -> None:
     approved = client.post(f"/supplier-orders/{prepared['id']}/approve").json()
     assert approved["status"] == "queued"
 
+    assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next").json()
     assert claimed["id"] == prepared["id"]
     assert claimed["status"] == "placing"
@@ -234,6 +236,7 @@ def test_checkout_credential_is_brokered_only_for_the_active_claim(client, monke
     prepared = _prepare_order(client, gift_card_id=card["id"]).json()
     approved = client.post(f"/supplier-orders/{prepared['id']}/approve").json()
     assert approved["approved_total"] == 20.0
+    assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next").json()
     assert claimed["checkout_token"]
 
@@ -285,6 +288,7 @@ def test_home_depot_payment_card_is_secured_and_brokered_only_to_claim(client, m
 
     prepared = _prepare_order(client).json()
     client.post(f"/supplier-orders/{prepared['id']}/approve")
+    assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next").json()
     credential = client.post(
         f"/supplier-orders/{prepared['id']}/checkout-credential",
@@ -330,6 +334,7 @@ def test_repeated_approval_and_prepare_preserve_active_checkout_lease(client):
     from app.models.domain import SupplierOrder
     prepared = _prepare_order(client).json()
     client.post(f"/supplier-orders/{prepared['id']}/approve")
+    assert verify_queued(client).status_code == 200
     claimed = client.post('/supplier-orders/next').json()
     db = next(app.dependency_overrides[get_db]())
     row = db.get(SupplierOrder, prepared['id'])
@@ -354,6 +359,7 @@ def test_expired_checkout_requires_reconciliation_not_automatic_retry(client):
     from app.models.domain import SupplierOrder
     prepared = _prepare_order(client).json()
     client.post(f"/supplier-orders/{prepared['id']}/approve")
+    assert verify_queued(client).status_code == 200
     client.post('/supplier-orders/next')
     db = next(app.dependency_overrides[get_db]())
     row = db.get(SupplierOrder, prepared['id'])

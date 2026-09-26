@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import secrets
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain import (
@@ -397,6 +397,19 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
         supplier_order.checkout_token = ""
         supplier_order.lease_expires_at = None
         db.commit()
+        return None
+    from app.services.ebay_checkout_verification import require_fresh
+    try:
+        require_fresh(db, supplier_order)
+    except ValueError:
+        db.commit()
+        return None
+    # Atomic claim: a concurrent worker cannot obtain another checkout lease.
+    claimed = db.execute(update(SupplierOrder).where(
+        SupplierOrder.id == supplier_order.id, SupplierOrder.status == "queued"
+    ).values(status="placing").execution_options(synchronize_session=False))
+    if claimed.rowcount != 1:
+        db.rollback()
         return None
     supplier_order.status = SupplierOrderStatus.placing.value
     supplier_order.attempts = int(supplier_order.attempts or 0) + 1

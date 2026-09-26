@@ -1,3 +1,4 @@
+from ebay_verification_helpers import verify_queued
 import base64
 from datetime import datetime, timezone
 
@@ -112,6 +113,7 @@ def test_finance_exposes_liquidity_bounded_profit_only_after_cost_and_fee_eviden
     }).json()
     approved = client.post(f"/supplier-orders/{prepared['id']}/approve")
     assert approved.status_code == 200, approved.text
+    assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next")
     assert claimed.status_code == 200, claimed.text
     placed = client.patch(f"/supplier-orders/{prepared['id']}", json={
