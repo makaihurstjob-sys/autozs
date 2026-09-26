@@ -164,7 +164,10 @@ def import_ebay_order_report_rows(
             if reported:
                 setattr(order, field, reported)
         order.ship_by = _minimum_date(row["ship_by"] for row in order_rows)
-        order.status = _order_status(order_rows)
+        # A partial or older report cannot reopen a verified cancellation.
+        reported_status = _order_status(order_rows)
+        if order.status != "cancelled":
+            order.status = reported_status
         reported_paid_at = _minimum_date(row["paid_on"] for row in order_rows)
         if reported_paid_at:
             order.paid_at = reported_paid_at
@@ -209,7 +212,7 @@ def import_ebay_order_report_rows(
                 if task_status == "completed"
                 else "Do not fulfill: eBay reports this order as cancelled."
                 if task_status == "blocked"
-                else "New eBay sale detected. Review supplier availability and place the supplier order."
+                else "Sale imported from eBay report; current cancellation status is not verified. Check this exact order in eBay before approving a supplier purchase."
             )
             db.add(
                 FulfillmentTask(
@@ -222,6 +225,12 @@ def import_ebay_order_report_rows(
         elif order.status == "shipped" and order.fulfillment_tasks:
             order.fulfillment_tasks[0].status = "completed"
             order.fulfillment_tasks[0].note = "eBay reports this order as shipped."
+        if order.status == "cancelled":
+            # Sessions disable autoflush; expose a newly added task before reconciliation.
+            db.flush()
+            evidence = ("eBay Orders report reports cancellation." if reported_status == "cancelled"
+                        else "Previously recorded cancellation; this report does not supersede it.")
+            reconcile_ebay_cancellation(db, order, evidence=evidence)
         upserted += 1
 
     db.flush()
@@ -252,6 +261,36 @@ def import_ebay_order_report_rows(
         )
     db.commit()
     return len(grouped), upserted, unmatched
+
+
+def reconcile_ebay_cancellation(db: Session, order: Order, *, evidence: str) -> None:
+    """Record observed eBay cancellation without pretending to cancel a supplier purchase."""
+    from app.services.fulfillment import _purchase_recorded, _finish_purchase_attempt
+
+    order.status = "cancelled"
+    note = "Do not fulfill: cancelled on eBay. " + evidence
+    tasks = list(order.fulfillment_tasks)
+    if not tasks:
+        task = FulfillmentTask(order_id=order.id)
+        db.add(task)
+        tasks.append(task)
+    for task in tasks:
+        if task.exception_reason != "Cancelled on eBay" or not task.note:
+            task.note = note
+        task.status = "blocked"
+        task.exception_reason = "Cancelled on eBay"
+    for supplier_order in order.supplier_orders:
+        if _purchase_recorded(supplier_order):
+            # The purchase still exists at the supplier; keep its confirmation and status.
+            supplier_order.failure_reason = note + " Supplier purchase exists; reconcile separately."
+            continue
+        uncertain = supplier_order.status == "placing" or bool(supplier_order.attempts)
+        _finish_purchase_attempt(db, supplier_order, "uncertain" if uncertain else "cancelled")
+        supplier_order.status = "needs_review" if uncertain else "cancelled"
+        if not str(supplier_order.failure_reason or "").startswith("Do not fulfill: cancelled on eBay."):
+            supplier_order.failure_reason = note + (" Check supplier purchase history before further action." if uncertain else "")
+        supplier_order.checkout_token = ""
+        supplier_order.lease_expires_at = None
 
 
 def _queue_automatic_restock(
@@ -502,7 +541,7 @@ def _normalize_order_row(raw: dict[str, str]) -> dict:
         "ship_by": _date(pick("Ship By Date", "Ship by date")),
         "shipped_on": _date(pick("Shipped On Date", "Shipped on Date")),
         "tracking_number": pick("Tracking Number"),
-        "raw_status": pick("Order Status", "Status", "Cancel Status"),
+        "raw_status": " | ".join(filter(None, (pick("Order Status"), pick("Status"), pick("Cancel Status")))),
     }
 
 
@@ -545,9 +584,17 @@ def _expected_order_item_profit(product: Product | None, row: dict) -> float | N
     return round(revenue - source_cost - revenue * variable_rate - float(product.fixed_costs or 0.0), 2)
 
 
+def _cancel_status(value: str) -> bool:
+    text = re.sub(r"[^a-z]+", " ", value.lower()).strip()
+    if not text or text in {"not canceled", "not cancelled", "no cancellation", "not applicable"}:
+        return False
+    if any(word in text.split() for word in ("rejected", "declined", "failed", "closed")):
+        return False
+    return bool(re.search(r"\b(cancelled|canceled|cancel|cancellation|cancelrequested|cancelpending|cancelcomplete|cancelcompleted)\b", text))
+
+
 def _order_status(rows: list[dict]) -> str:
-    status_text = " ".join(str(row["raw_status"] or "") for row in rows).lower()
-    if "cancel" in status_text:
+    if any(_cancel_status(value) for row in rows for value in str(row["raw_status"] or "").split(" | ")):
         return "cancelled"
     if any(row["shipped_on"] or row["tracking_number"] for row in rows):
         return "shipped"

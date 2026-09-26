@@ -336,10 +336,12 @@ def approve_supplier_order(db: Session, supplier_order_id: int) -> SupplierOrder
         raise LookupError("Supplier order not found.")
     if _purchase_recorded(supplier_order):
         raise ValueError("This supplier order already has a recorded purchase and cannot be queued again.")
-    if supplier_order.status in {"queued", "placing"}:
-        return supplier_order
     if supplier_order.order is not None and supplier_order.order.status in {"cancelled", "shipped", "delivered"}:
         raise ValueError("The eBay order is cancelled or already shipped; reconcile fulfillment before purchasing.")
+    if supplier_order.status == "cancelled":
+        raise ValueError("Cancelled supplier orders cannot be approved for purchase.")
+    if supplier_order.status in {"queued", "placing"}:
+        return supplier_order
     missing = _readiness_issues(supplier_order)
     if missing:
         supplier_order.status = SupplierOrderStatus.needs_review.value
