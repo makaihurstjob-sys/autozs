@@ -330,7 +330,7 @@ def prepare_supplier_order(
     return _load_supplier_order(db, supplier_order.id)
 
 
-def approve_supplier_order(db: Session, supplier_order_id: int) -> SupplierOrder:
+def approve_supplier_order(db: Session, supplier_order_id: int, *, owner_click: bool = False) -> SupplierOrder:
     supplier_order = _load_supplier_order(db, supplier_order_id)
     if supplier_order is None:
         raise LookupError("Supplier order not found.")
@@ -355,8 +355,22 @@ def approve_supplier_order(db: Session, supplier_order_id: int) -> SupplierOrder
     supplier_order.approved_at = datetime.utcnow()
     supplier_order.checkout_token = ""
     supplier_order.failure_reason = None
+    key = f"owner_place_order:{supplier_order.id}"
+    permission = db.scalar(select(AppSetting).where(AppSetting.key == key))
+    if permission is not None:
+        db.delete(permission)
+        db.flush()
+    if owner_click:
+        db.add(AppSetting(key=key, value=supplier_order.approved_at.isoformat()))
     db.commit()
     return _load_supplier_order(db, supplier_order.id)
+
+
+def require_owner_place_order(db: Session, row: SupplierOrder) -> None:
+    permission = db.scalar(select(AppSetting.value).where(
+        AppSetting.key == f"owner_place_order:{row.id}"))
+    if not row.approved_at or permission != row.approved_at.isoformat():
+        raise ValueError("Use Place Order on the dashboard to authorize this purchase")
 
 
 def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
@@ -404,6 +418,13 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
     from app.services.purchase_budget import require_unreserved
     try:
         require_unreserved(db, supplier_order.order_id)
+        try:
+            require_owner_place_order(db, supplier_order)
+        except ValueError:
+            supplier_order.status = SupplierOrderStatus.draft.value
+            supplier_order.failure_reason = "Use Place Order to authorize this purchase."
+            db.commit()
+            return None
         require_fresh(db, supplier_order)
     except ValueError:
         db.commit()

@@ -3479,6 +3479,31 @@ def prepare_order_for_supplier(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/supplier-orders/{supplier_order_id}/place-order", response_model=SupplierOrderRead)
+def place_order_for_supplier(supplier_order_id: int, request: Request,
+                             db: Session = Depends(get_db)) -> SupplierOrder:
+    _require_local_checkout_request(request)
+    # Reject remote sites even though the general API permits broad CORS.
+    from urllib.parse import urlsplit
+    origin = urlsplit(request.headers.get("Origin", ""))
+    if (origin.scheme not in {"http", "https"}
+            or origin.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or request.headers.get("X-AutoZS-Owner-Action") != "place-order"):
+        raise HTTPException(status_code=403, detail="Use Place Order from the local dashboard")
+    from app.services.purchase_budget import _lock
+    _lock(db)
+    row = db.get(SupplierOrder, supplier_order_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    if row.status != "draft":
+        raise HTTPException(status_code=409, detail="Only a reviewed draft can be placed; refresh the order")
+    try:
+        return approve_supplier_order(db, supplier_order_id, owner_click=True)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/supplier-orders/{supplier_order_id}/approve", response_model=SupplierOrderRead)
 def approve_order_for_supplier(supplier_order_id: int, db: Session = Depends(get_db)) -> SupplierOrder:
     try:

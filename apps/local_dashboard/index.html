@@ -10390,7 +10390,7 @@
             <div class="order-detail-actions">
               <button onclick="openEbayOrderRefund(${order.id})">Open eBay refund</button>
               ${!supplierOrder || ["draft", "needs_review"].includes(supplierOrder.status) ? `<button onclick="prepareSupplierOrder(${order.id})">${supplierOrder ? "Update checkout plan" : "Prepare supplier order"}</button>` : ""}
-              ${supplierOrder?.status === "draft" ? `<button onclick="approveSupplierOrder(${supplierOrder.id})">Approve checkout</button>` : ""}
+              ${supplierOrder?.status === "draft" ? `<button onclick="placeSupplierOrder(${supplierOrder.id})" title="Authorizes this purchase up to the displayed total">Place Order</button>` : ""}
               <button onclick="draftOrderUpdate(${order.id})">Draft buyer update</button>
               ${task ? `<button class="secondary" onclick="editOrderTaskNote(${order.id})">Edit fulfillment note</button>` : ""}
               ${normalizedOrderStatus(order) === "blocked" && task ? `<button class="secondary" onclick="editOrderException(${order.id})">Edit exception</button>` : ""}
@@ -10488,13 +10488,23 @@
         message(result.status === "draft" ? "Supplier order is ready for your approval." : `Checkout plan needs review: ${result.failure_reason || "missing information"}`);
       }
 
-      async function approveSupplierOrder(supplierOrderId) {
+      async function placeSupplierOrder(supplierOrderId) {
         const supplierOrder = (state.supplierOrders || []).find((entry) => Number(entry.id) === Number(supplierOrderId));
         if (!supplierOrder) return;
-        if (!confirm(`Approve a browser-assisted ${supplierOrder.supplier.replaceAll("_", " ")} checkout for up to ${money(supplierOrder.total)}? This authorizes AutoZS to queue the purchase.`)) return;
-        const approved = await request(`/supplier-orders/${supplierOrderId}/approve`, { method: "POST" });
-        await refreshAll();
-        message(`Supplier order approved and ${approved.status}. Browser checkout execution is still disabled until its canary test passes.`);
+        const button = document.querySelector(`button[onclick="placeSupplierOrder(${supplierOrderId})"]`);
+        if (button?.disabled) return;
+        if (button) button.disabled = true;
+        try {
+          await request(`/supplier-orders/${supplierOrderId}/place-order`, {
+            method: "POST", headers: { "X-AutoZS-Owner-Action": "place-order" }
+          });
+          await refreshAll();
+          message("Purchase authorized and queued. Checkout must pass the live order, price, profit and budget checks before submission.");
+        } catch (error) {
+          message(error.message || "Could not authorize purchase.");
+        } finally {
+          if (button) button.disabled = false;
+        }
       }
 
       async function updateOrderTaskStatus(orderId, status) {

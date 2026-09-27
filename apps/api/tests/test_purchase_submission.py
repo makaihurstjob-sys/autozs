@@ -36,6 +36,7 @@ def ready(engine):
             account_key="test-seller", source_url="https://www.ebay.com/mesh/ord/details?orderid=test-1",
             observed_at=now, verified_at=now, status="eligible", evidence="Paid; awaiting shipment"))
         for key, value in {"purchase_automation_enabled": "true",
+            "owner_place_order:1": row.approved_at.isoformat(),
             "profit_reconciliation:1": json.dumps({"status": "verified"}),
             "purchase_other_costs:1": json.dumps({"amount": "0", "evidence": "test all-cost review"})}.items():
             db.add(AppSetting(key=key, value=value))
@@ -110,3 +111,51 @@ def test_confirmation_cannot_change_reserved_total(ready):
                 {"status": "placed", "external_order_id": "HD-123", "total": 10.01})
         db.rollback()
         assert db.scalar(select(PurchaseReservation)).status == "submitting"
+
+
+def test_legacy_approval_cannot_submit(ready):
+    with Session(ready) as db:
+        db.delete(db.scalar(select(AppSetting).where(AppSetting.key == "owner_place_order:1")))
+        db.commit()
+        with pytest.raises(ValueError, match="Use Place Order"):
+            authorize_submission(db, 1, "test-token", quote())
+        db.rollback()
+        assert db.scalar(select(PurchaseReservation)) is None
+
+
+def test_permission_from_previous_approval_cannot_submit(ready):
+    with Session(ready) as db:
+        db.get(SupplierOrder, 1).approved_at += timedelta(seconds=1)
+        db.commit()
+        with pytest.raises(ValueError, match="Use Place Order"):
+            authorize_submission(db, 1, "test-token", quote())
+
+
+def test_place_order_click_records_permission_and_legacy_approval_does_not(ready, monkeypatch):
+    from app.services.fulfillment import approve_supplier_order, require_owner_place_order
+    monkeypatch.setattr("app.services.fulfillment._readiness_issues", lambda row: [])
+    with Session(ready) as db:
+        row = db.get(SupplierOrder, 1)
+        row.status = "draft"
+        db.commit()
+        row = approve_supplier_order(db, 1)
+        with pytest.raises(ValueError, match="Use Place Order"):
+            require_owner_place_order(db, row)
+        row.status = "draft"
+        db.commit()
+        row = approve_supplier_order(db, 1, owner_click=True)
+        require_owner_place_order(db, row)
+        assert row.status == "queued"
+
+
+def test_legacy_queue_returns_to_draft_without_checkout_lease(ready):
+    from app.services.fulfillment import claim_next_supplier_order
+    with Session(ready) as db:
+        row = db.get(SupplierOrder, 1)
+        row.status = "queued"
+        row.checkout_token = ""
+        db.delete(db.scalar(select(AppSetting).where(AppSetting.key == "owner_place_order:1")))
+        db.commit()
+        assert claim_next_supplier_order(db) is None
+        assert db.get(SupplierOrder, 1).status == "draft"
+        assert not db.get(SupplierOrder, 1).checkout_token

@@ -42,6 +42,8 @@ def authorize_submission(db: Session, supplier_order_id: int, token: str, quote:
         raise ValueError("A current checkout lease is required")
     if row.supplier != "home_depot" or len(row.items) != 1 or row.gift_card_id:
         raise ValueError("Automatic submission supports one Home Depot item paid by card")
+    from app.services.fulfillment import require_owner_place_order
+    require_owner_place_order(db, row)
     require_fresh(db, row)
     url = urlsplit(quote.source_url)
     if url.scheme != "https" or url.netloc != "www.homedepot.com" or url.path.rstrip("/") != "/checkout":
