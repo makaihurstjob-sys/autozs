@@ -652,7 +652,13 @@ def update_listing_job(
     ebay_draft_id: str | None = None,
     listing_id: str | None = None,
     message: str | None = None,
+    cancellation_scope: str | None = None,
 ) -> ListingJob:
+    if cancellation_scope is not None:
+        if cancellation_scope not in {"product", "publication_only"}:
+            raise ValueError("Invalid cancellation scope")
+        if status != "cancelled":
+            raise ValueError("Cancellation scope requires explicit cancelled status")
     scheduled_for = _naive_utc(scheduled_for)
     if status in {"queued", "running"} and listing_exclusion_reason(db, job.product_id):
         return job
@@ -670,6 +676,11 @@ def update_listing_job(
         db.refresh(job)
         return job
     if status is not None:
+        # Every new cancellation defaults to the conservative product-wide stop.
+        if status == "cancelled":
+            job.cancellation_scope = cancellation_scope or "product"
+        else:
+            job.cancellation_scope = "product"
         job.status = status
         if status in {
             ListingJobStatus.saved_draft.value,
@@ -776,6 +787,7 @@ def serialize_listing_job(db: Session, job: ListingJob) -> dict:
             "ebay_account_key": job.ebay_account_key,
             "action": job.action,
             "status": job.status,
+            "cancellation_scope": job.cancellation_scope,
             "scheduled_for": job.scheduled_for,
             "listing_schedule_at": job.listing_schedule_at,
             "started_at": job.started_at,
@@ -807,6 +819,7 @@ def serialize_listing_job(db: Session, job: ListingJob) -> dict:
         "ebay_account_key": job.ebay_account_key,
         "action": job.action,
         "status": job.status,
+        "cancellation_scope": job.cancellation_scope,
         "scheduled_for": job.scheduled_for,
         "listing_schedule_at": job.listing_schedule_at,
         "started_at": job.started_at,
@@ -847,6 +860,7 @@ def serialize_listing_job_lite(db: Session, job: ListingJob) -> dict:
         "ebay_account_key": job.ebay_account_key,
         "action": job.action,
         "status": job.status,
+        "cancellation_scope": job.cancellation_scope,
         "scheduled_for": job.scheduled_for,
         "listing_schedule_at": job.listing_schedule_at,
         "started_at": job.started_at,

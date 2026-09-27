@@ -568,6 +568,7 @@ class ListingJob(Base, TimestampMixin):
     ebay_account_key: Mapped[str] = mapped_column(String(128), default="manual", index=True)
     action: Mapped[str] = mapped_column(String(32), default=ListingJobAction.create_draft.value, index=True)
     status: Mapped[str] = mapped_column(String(32), default=ListingJobStatus.queued.value, index=True)
+    cancellation_scope: Mapped[str] = mapped_column(String(32), default="product", server_default="product")
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     listing_schedule_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

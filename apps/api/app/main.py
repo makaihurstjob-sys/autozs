@@ -76,7 +76,7 @@ def _ensure_lightweight_columns() -> None:
             "removed_at": "DATETIME",
             "relist_blocked": "BOOLEAN DEFAULT 0 NOT NULL",
         },
-        "listing_jobs": {"listing_schedule_at": "DATETIME"},
+        "listing_jobs": {"listing_schedule_at": "DATETIME", "cancellation_scope": "VARCHAR(32) DEFAULT 'product' NOT NULL"},
         "depop_listing_variants": {
             "views_count": "INTEGER DEFAULT 0 NOT NULL",
             "clicks_count": "INTEGER DEFAULT 0 NOT NULL",

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ResearchJobCreate(BaseModel):
@@ -770,12 +770,19 @@ class ListingJobCreate(BaseModel):
 
 
 class ListingJobUpdate(BaseModel):
+    cancellation_scope: str | None = Field(default=None, pattern="^(product|publication_only)$")
     status: str | None = Field(default=None, pattern="^(queued|running|needs_review|ready_to_save|saved_draft|completed|tombstoned|failed|paused|cancelled)$")
     scheduled_for: datetime | None = None
     listing_schedule_at: datetime | None = None
     ebay_draft_id: str | None = Field(default=None, max_length=128)
     listing_id: str | None = Field(default=None, max_length=128)
     message: str | None = None
+
+    @model_validator(mode="after")
+    def validate_cancellation_scope(self):
+        if self.cancellation_scope is not None and self.status != "cancelled":
+            raise ValueError("Cancellation scope requires explicit cancelled status")
+        return self
 
 
 class ListingDraftVerification(BaseModel):
@@ -786,6 +793,7 @@ class ListingDraftVerification(BaseModel):
 
 
 class ListingJobRead(BaseModel):
+    cancellation_scope: str = "product"
     id: int
     product_id: int
     sku: str

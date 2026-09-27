@@ -219,7 +219,7 @@ def stock_restoration_block(db: Session, listing: EbayListing | None, supplier: 
     product = db.get(Product, listing.product_id)
     if product is None or product.status == ProductStatus.deleted.value:
         return "the product is unavailable"
-    exclusion = listing_exclusion_reason(db, listing.product_id)
+    exclusion = listing_exclusion_reason(db, listing.product_id, for_stock_restoration=True)
     if exclusion:
         return exclusion
     if supplier is None:

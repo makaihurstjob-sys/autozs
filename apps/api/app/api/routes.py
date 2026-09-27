@@ -2692,6 +2692,7 @@ def update_listing_job_route(job_id: int, payload: ListingJobUpdate, db: Session
         db,
         job,
         status=payload.status,
+        cancellation_scope=payload.cancellation_scope,
         scheduled_for=payload.scheduled_for,
         listing_schedule_at=payload.listing_schedule_at,
         ebay_draft_id=payload.ebay_draft_id,
