@@ -2928,7 +2928,8 @@
       const ebayTabs = ["Research", "Products", "eBay Listings", "Calendar", "Stats", "Marketing", "Orders", "Customer Service", "Settings"];
       const depopTabs = ["Products", "Depop Listings", "Calendar", "Orders", "Settings"];
       let marketplaceMode = localStorage.getItem("autozsMarketplaceMode") === "depop" ? "depop" : "ebay";
-      let active = "Products";
+      const launchParams = new URLSearchParams(location.search);
+      let active = launchParams.get("tab") === "orders" ? "Orders" : "Products";
       let addProductsView = null;
       let addProductsBatchTab = "urls";
       let addProductsCsvUrls = [];
@@ -2953,6 +2954,11 @@
       let orderFilterMenuOpen = false;
       let selectedOrderIds = new Set();
       let orderDetailsOpenState = new Map();
+      const launchOrderId = Number(launchParams.get("order"));
+      if (active === "Orders" && Number.isSafeInteger(launchOrderId) && launchOrderId > 0) {
+        selectedOrderIds.add(launchOrderId);
+        orderDetailsOpenState.set(launchOrderId, true);
+      }
       let selectedConversationId = null;
       let customerTemplateDrafts = {};
       let selectedCustomerTemplateLibraryKey = "";

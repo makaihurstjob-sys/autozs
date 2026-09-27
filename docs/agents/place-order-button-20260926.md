@@ -10,3 +10,6 @@ The button queues execution by the existing browser worker; it does not bypass t
 
 Validation: 14 purchase-submission tests and 33 budget/policy tests passed (47 total). Dashboard inline JavaScript parsed with Node vm.Script; git diff --check passed. Initial combined run exposed a minimal-fixture dependency when the permission check preceded the reserved-order guard; restored reserved-order-first ordering and reran budget/policy successfully. No live browser test performed.
 
+
+Launcher continuation: added tools/Start-AUTOZS-Orders.ps1 and Open AUTOZS Orders.cmd, installed under C:/Users/macor/Downloads/dashboard, and packaged in conversation dropoff. Added tab=orders and order query handling to dashboard. Launcher uses GET only, excludes locally closed/purchased/in-flight orders, labels eligibility unverified, and refuses the legacy live flow. Live CheckOnly confirmed refusal because deployment lacks the new flow. Mock selection chose open order 10 over cancelled 11 and purchased 12; no browser opened. Dashboard JavaScript parse and diff check passed. No live services changed.
+
