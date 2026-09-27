@@ -11,8 +11,8 @@ try {
     if (-not $route -or $page.Content -notmatch 'function placeSupplierOrder' -or $page.Content -notmatch 'launchParams.get') {
         throw 'The live dashboard has not received Place Order and Orders launcher support yet. Integrate the development checkpoint first.'
     }
-    $orders = @(Invoke-RestMethod -Uri "$apiBase/orders" -Method Get -TimeoutSec 15)
-    $supplierOrders = @(Invoke-RestMethod -Uri "$apiBase/supplier-orders" -Method Get -TimeoutSec 15)
+    $orders = Invoke-RestMethod -Uri "$apiBase/orders" -Method Get -TimeoutSec 15
+    $supplierOrders = Invoke-RestMethod -Uri "$apiBase/supplier-orders" -Method Get -TimeoutSec 15
     $candidates = @($orders | Where-Object {
         $orderRow = $_
         $related = @($supplierOrders | Where-Object { $_.order_id -eq $orderRow.id })
