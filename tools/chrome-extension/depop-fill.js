@@ -44,15 +44,26 @@
 
   const selectionKey = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, "");
 
+  function depopFieldMatches(field, wanted) {
+    const input = document.getElementById(`${field}-input`);
+    if (field === "colour" && input?.parentElement?.querySelectorAll) {
+      const selected = [...input.parentElement.querySelectorAll('[class*="selectedItemLabel"]')].map(e => selectionKey(e.textContent));
+      return selected.length === 1 && selected[0] === selectionKey(wanted);
+    }
+    const expected = field === "shippingMethods" ? String(wanted).replace(/\s+Under\s+.*$/i, "") : wanted;
+    return selectionKey(input?.value) === selectionKey(expected);
+  }
+
   async function selectCombobox(idPrefix, wanted) {
     if (!wanted) return true;
     const input = document.getElementById(`${idPrefix}-input`);
     const toggle = document.getElementById(`${idPrefix}-toggle-button`);
     if (!input || !toggle) return false;
-    toggle.click();
+    input.scrollIntoView?.({block: "center"});
+    if (toggle.getAttribute?.("aria-expanded") !== "true") toggle.click();
     await wait(250);
     const target = String(wanted).trim().toLowerCase();
-    const options = [...document.querySelectorAll('[role="option"], [role="menuitem"], li, button')]
+    const options = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)]
       .filter(visible)
       .filter((element) => !element.id?.endsWith("toggle-button"));
     const exact = options.find((element) => selectionKey(optionText(element)) === selectionKey(target));
@@ -61,17 +72,17 @@
     if (choice) {
       choice.click();
       await wait(150);
-      return selectionKey(input.value) === selectionKey(target);
+      return depopFieldMatches(idPrefix, wanted);
     }
     // Searchable Depop comboboxes filter their menu from a real input event.
     setControlledValue(input, wanted);
     await wait(250);
-    const filteredOptions = [...document.querySelectorAll('[role="option"], [role="menuitem"], li')].filter(visible);
+    const filteredOptions = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)].filter(visible);
     const filtered = filteredOptions.find((element) => selectionKey(optionText(element)) === selectionKey(target))
 ;
     if (filtered) filtered.click();
     await wait(150);
-    return Boolean(filtered) && selectionKey(input.value) === selectionKey(target);
+    return Boolean(filtered) && depopFieldMatches(idPrefix, wanted);
   }
 
   function localPathToUrl(path) {
@@ -251,7 +262,7 @@
         && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
         && [["group", pkg.category], ["brand", pkg.brand], ["condition", pkg.condition],
           ["colour", pkg.color], ["shippingMethods", pkg.shipping_method]].every(([field, value]) =>
-          Boolean(value) && selectionKey(document.getElementById(`${field}-input`)?.value) === selectionKey(value));
+          Boolean(value) && depopFieldMatches(field, value));
     };
     const interceptPost = (event) => {
       const button = event.type === "submit" ? event.submitter

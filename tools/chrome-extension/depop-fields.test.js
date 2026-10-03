@@ -1,0 +1,4 @@
+﻿const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(`${__dirname}/depop-fill.js`,'utf8');let selected=['Black'],shipping='Extra large';
+const c={selectionKey:s=>String(s||'').toLowerCase().replace(/\s+/g,''),document:{getElementById:id=>id==='colour-input'?{parentElement:{querySelectorAll:()=>selected.map(textContent=>({textContent}))}}:{value:shipping}}};vm.createContext(c);vm.runInContext(source.slice(source.indexOf('  function depopFieldMatches'),source.indexOf('  async function selectCombobox')),c);
+assert.equal(c.depopFieldMatches('colour','Black'),true);selected=['Grey','Black'];assert.equal(c.depopFieldMatches('colour','Black'),false);assert.equal(c.depopFieldMatches('shippingMethods','Extra large Under 10lb'),true);shipping='Large';assert.equal(c.depopFieldMatches('shippingMethods','Extra large Under 10lb'),false);console.log('Depop selected-field tests passed');
