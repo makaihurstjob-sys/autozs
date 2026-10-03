@@ -59,6 +59,13 @@
     const input = document.getElementById(`${idPrefix}-input`);
     const toggle = document.getElementById(`${idPrefix}-toggle-button`);
     if (!input || !toggle) return false;
+    if (idPrefix === "colour") {
+      for (const button of input.parentElement?.querySelectorAll?.('button[aria-label^="Remove "]') || []) {
+        if (selectionKey(button.getAttribute("aria-label").slice(7)) !== selectionKey(wanted)) button.click();
+      }
+      await wait(150);
+      if (depopFieldMatches(idPrefix, wanted)) return true;
+    }
     input.scrollIntoView?.({block: "center"});
     if (toggle.getAttribute?.("aria-expanded") !== "true") toggle.click();
     await wait(250);
