@@ -294,3 +294,35 @@ def test_legacy_depop_migration_idempotent_and_preserves_submission_hold(tmp_pat
         assert holds == ["2026-09-12 12:00:00", None]
     assert "submission_started_at" in {col["name"] for col in inspect(engine).get_columns("depop_listing_jobs")}
     engine.dispose()
+
+
+def test_explicit_resume_keeps_attempts_and_selects_exact_job(db):
+    from app.services.depop_jobs import resume_unsubmitted_depop_job
+    variant = seed(db)
+    jobs = [DepopListingJob(variant_id=variant.id, account_key='closet', status=status, attempts=attempts) for status, attempts in [('queued', 0), ('needs_review', 1)]]
+    images = list(db.query(ProductImage).all())
+    variant.image_ids_json = json.dumps([i.id for i in images])
+    db.add_all(jobs); db.commit()
+    resumed = resume_unsubmitted_depop_job(db, jobs[1].id)
+    assert resumed.id == jobs[1].id and resumed.status == 'running' and resumed.attempts == 2
+    assert jobs[0].status == 'queued' and jobs[0].attempts == 0
+
+
+@pytest.mark.parametrize('pending', [False, True])
+def test_resume_refuses_running_or_pending_peer(db, pending):
+    from app.services.depop_jobs import resume_unsubmitted_depop_job
+    variant = seed(db)
+    target = DepopListingJob(variant_id=variant.id, account_key='closet', status='needs_review', attempts=1)
+    peer = DepopListingJob(variant_id=variant.id, account_key='closet', status='needs_review' if pending else 'running', submission_started_at=datetime(2026, 10, 3) if pending else None)
+    db.add_all([target, peer]); db.commit()
+    with pytest.raises(ValueError): resume_unsubmitted_depop_job(db, target.id)
+    assert target.status == 'needs_review'
+
+
+def test_resume_refuses_own_pending_submission(db):
+    from app.services.depop_jobs import resume_unsubmitted_depop_job
+    variant = seed(db)
+    target = DepopListingJob(variant_id=variant.id, account_key='closet', status='needs_review', attempts=1, submission_started_at=datetime(2026, 10, 3))
+    db.add(target); db.commit()
+    with pytest.raises(ValueError): resume_unsubmitted_depop_job(db, target.id)
+    assert target.attempts == 1

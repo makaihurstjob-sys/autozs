@@ -81,6 +81,7 @@ from app.schemas.depop import (
     DepopVariantUpdate,
 )
 from app.services.depop_jobs import (
+    resume_unsubmitted_depop_job,
     build_depop_listing_package,
     depop_listing_problem,
     lock_depop_queue,
@@ -1610,6 +1611,15 @@ def update_depop_job(
         setattr(job, field, value)
     db.commit()
     db.refresh(job)
+    return DepopJobRead(**serialize_depop_job(db, job))
+
+
+@router.post("/depop/jobs/{job_id}/resume", response_model=DepopJobRead)
+def resume_depop_job(job_id: int, db: Session = Depends(get_db)) -> DepopJobRead:
+    try:
+        job = resume_unsubmitted_depop_job(db, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return DepopJobRead(**serialize_depop_job(db, job))
 
 

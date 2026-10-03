@@ -164,7 +164,7 @@ def depop_listing_problem(db: Session, variant: DepopListingVariant) -> str | No
     return None
 
 
-def start_next_depop_job(db: Session, now: datetime | None = None, account_key: str | None = None) -> DepopListingJob | None:
+def start_next_depop_job(db: Session, now: datetime | None = None, account_key: str | None = None, job_id: int | None = None) -> DepopListingJob | None:
     """Claim the oldest due queued job for the extension's single dedicated
     Depop Chrome profile. Only one job may run at a time -- there is one
     browser profile, so a second concurrent runner would just fight the first
@@ -184,6 +184,8 @@ def start_next_depop_job(db: Session, now: datetime | None = None, account_key: 
         .where(or_(DepopListingJob.scheduled_for.is_(None), DepopListingJob.scheduled_for <= now))
         .order_by(DepopListingJob.scheduled_for.asc().nullsfirst(), DepopListingJob.created_at.asc(), DepopListingJob.id.asc())
     )
+    if job_id is not None:
+        stmt = stmt.where(DepopListingJob.id == job_id)
     if account_key is not None:
         stmt = stmt.where(DepopListingJob.account_key == account_key)
     job = db.scalar(stmt)
@@ -368,3 +370,19 @@ def schedule_approved_photo_batches(
     for job in jobs:
         db.refresh(job)
     return jobs, created, used, remaining
+
+
+def resume_unsubmitted_depop_job(db: Session, job_id: int) -> DepopListingJob:
+    """Explicitly resume one reviewed attempt; never replay a submission."""
+    lock_depop_queue(db)
+    job = db.get(DepopListingJob, job_id)
+    if job is None or job.status != "needs_review" or job.submission_started_at is not None:
+        raise ValueError("Only a reviewed, unsubmitted Depop job can resume")
+    if db.scalar(select(DepopListingJob).where(or_(
+        DepopListingJob.status == "running",
+        (DepopListingJob.submission_started_at.is_not(None) & (DepopListingJob.status != "completed")),
+    ))) is not None:
+        raise ValueError("Another Depop attempt or unresolved submission is active")
+    job.status = "queued"
+    db.flush()
+    return start_next_depop_job(db, job_id=job.id)

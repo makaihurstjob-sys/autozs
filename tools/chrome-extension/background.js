@@ -1813,6 +1813,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // returns 200 in ~200ms from a Home Depot page never leaves the network stack
   // on amazon.com. Service-worker fetches are not bound by the page's policy, so
   // Amazon capture proxies its API traffic through here.
+  if (message?.type === "autozs-depop-image") {
+    (async () => {
+      const url = new URL(sender.tab?.url || "");
+      if (url.origin !== "https://www.depop.com" || url.pathname !== "/products/create/") throw new Error("Depop image requests require the listing form");
+      sendResponse({ ok: true, ...await readDepopImage(message.path) });
+    })().catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message?.type === "autozs-api-proxy") {
     (async () => {
       const path = String(message.path || "");
@@ -2614,3 +2622,13 @@ async function syncEbayListingAllowance() {
   } finally { await chrome.tabs.remove(tab.id).catch(()=>{}); }
 }
 
+async function readDepopImage(path) {
+  if (!/^downloads\/product_images\/\d+\/[a-zA-Z0-9_-]+\.(jpg|jpeg|png)$/.test(String(path || ""))) throw new Error("Invalid Depop local image path");
+  const response = await fetch(`${LOCAL_API}/${path}`, {cache: "no-store", signal: AbortSignal.timeout(15000)});
+  if (!response.ok) throw new Error(`Depop image returned ${response.status}`);
+  const content = new Uint8Array(await response.arrayBuffer());
+  if (!content.length || content.length > 10 * 1024 * 1024) throw new Error("Depop image size is invalid");
+  const mime = response.headers.get("content-type")?.split(";")[0];
+  if (!['image/jpeg', 'image/png'].includes(mime)) throw new Error("Depop image type is invalid");
+  return {base64: bytesToBase64(content), mime};
+}

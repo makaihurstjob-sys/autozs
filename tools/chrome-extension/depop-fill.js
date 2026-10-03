@@ -80,9 +80,17 @@
   }
 
   async function imageFile(path, index) {
-    const response = await fetch(localPathToUrl(path), { cache: "no-store" });
-    if (!response.ok) throw new Error(`image ${index + 1} returned ${response.status}`);
-    const blob = await response.blob();
+    let blob;
+    if (globalThis.chrome?.runtime?.sendMessage && !/^https?:\/\//i.test(path)) {
+      const result = await chrome.runtime.sendMessage({ type: "autozs-depop-image", path });
+      if (!result?.ok) throw new Error(result?.error || "Depop image transfer failed");
+      const bytes = Uint8Array.from(atob(result.base64), char => char.charCodeAt(0));
+      blob = new Blob([bytes], { type: result.mime });
+    } else {
+      const response = await fetch(localPathToUrl(path), { cache: "no-store" });
+      if (!response.ok) throw new Error(`image ${index + 1} returned ${response.status}`);
+      blob = await response.blob();
+    }
     const original = String(path).split(/[\\/]/).pop() || `depop-${index + 1}.jpg`;
     return new File([blob], original, { type: blob.type || "image/jpeg" });
   }
