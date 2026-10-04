@@ -42,7 +42,7 @@ async function run() {
     document: {
       getElementById: (id) => fields.get(id) || null,
       querySelectorAll: (selector) => selector === 'form h2'
-        ? [{textContent: 'Boost your listing', parentElement: {querySelectorAll: () => [{checked: false, isConnected: true}]}}]
+        ? [{textContent: 'Boost your listing', parentElement: {textContent: 'Pay an extra 12% fee, only if you sell.', querySelectorAll: () => [{checked: true, isConnected: true}]}}]
         : selector.includes("aria-label") ? [{href: "https://www.depop.com/m4coq/likes/"}] : [],
       addEventListener: () => {},
       createElement: () => new Field("badge", "DIV"),

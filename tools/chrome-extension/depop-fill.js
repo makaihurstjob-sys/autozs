@@ -277,25 +277,28 @@
     const headings = [...document.querySelectorAll('form h2')]
       .filter((element) => element.textContent.trim() === "Boost your listing");
     if (headings.length !== 1) return null;
+    // Owner approved Depop's 12% fee; fail closed if the displayed rate changes.
+    const rates = [...headings[0].parentElement.textContent.matchAll(/(\d+(?:\.\d+)?)\s*%/g)];
+    if (rates.length !== 1 || Number(rates[0][1]) !== 12) return null;
     const controls = headings[0].parentElement.querySelectorAll('input[type="checkbox"][data-testid="switch"]');
     return controls.length === 1 ? controls[0] : null;
   }
 
-  function boostingDisabled() {
+  function boostingEnabledAtApprovedRate() {
     const control = boostControl();
     return Boolean(control && control.isConnected && !control.disabled
-      && !control.indeterminate && control.checked === false);
+      && !control.indeterminate && control.checked === true);
   }
 
-  async function disableBoosting() {
+  async function enableBoosting() {
     const control = boostControl();
     if (!control || control.disabled || control.indeterminate) return false;
-    if (control.checked) {
+    if (!control.checked) {
       control.click();
       await wait(300);
     }
-    // Re-read after React rerenders; an absent control is not proof of opt-out.
-    return boostingDisabled();
+    // Re-read after React rerenders; an absent control is not proof of the approved boost state.
+    return boostingEnabledAtApprovedRate();
   }
 
   async function armPublicationConfirmation(pkg) {
@@ -325,7 +328,7 @@
     let expectedPhotos = 0;
     const fieldsStillMatch = () => {
       const description = [pkg.title, pkg.description && pkg.description !== pkg.title ? pkg.description : ""].filter(Boolean).join("\n\n");
-      return boostingDisabled() && Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
+      return boostingEnabledAtApprovedRate() && Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
         && document.getElementById("description")?.value === description
         && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
         && [["group", pkg.category], ["brand", pkg.brand], ["condition", pkg.condition],
@@ -342,7 +345,7 @@
       event.stopImmediatePropagation();
       if (submitting) return;
       if (!ready || !fieldsStillMatch() || !photosReady(expectedPhotos) || !button || button.disabled) {
-        showStatus("Post blocked: boosting must be off, and listing fields and completed photo uploads need verification.", true);
+        showStatus("Post blocked: boosting must be on at the approved 12% fee, and listing fields and completed photo uploads need verification.", true);
         return;
       }
       submitting = true;
@@ -523,7 +526,7 @@
     if (usps && !usps.checked) usps.click();
     await wait(200);
     results.push(await selectCombobox("shippingMethods", pkg.shipping_method));
-    if (!(await disableBoosting())) throw new Error("Boosting could not be verified off; Post is blocked");
+    if (!(await enableBoosting())) throw new Error("Boosting could not be verified on at the approved 12% fee; Post is blocked");
     await wait(300);
     const requiredValuesPersisted = Boolean(
       document.getElementById("description")?.value?.trim()
