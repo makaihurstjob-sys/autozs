@@ -176,6 +176,20 @@
     }
   }
 
+  function successListingDestination(pending) {
+    const page = new URL(location.href);
+    const age = Date.now() - Date.parse(pending.postClickedAt);
+    if (page.origin !== "https://www.depop.com" || !/^\/products\/create\/success\/$/.test(page.pathname)
+      || !/^\d+$/.test(page.searchParams.get("productId") || "")
+      || !Number.isFinite(age) || age < 0 || age > 120000
+      || !pending.tabToken || sessionStorage.getItem(PENDING_PUBLICATION_KEY) !== pending.tabToken) return null;
+    const main = document.querySelector('main');
+    if (!/Nice!\s*It['’]s listed/i.test(main?.textContent || "")) return null;
+    const links = [...main.querySelectorAll('a[href]')].filter(link =>
+      String(link.textContent || "").trim().toLowerCase() === "view listing");
+    return links.length === 1 ? listingIdentity(links[0].href) : null;
+  }
+
   function findPublishedListing(pending, resumed = false) {
     // A similarly coloured item in the seller hub is not publication evidence.
     // Only follow the originating tab's immediate create -> product navigation.
@@ -185,7 +199,7 @@
     if (resumed) {
       try {
         const referrer = new URL(document.referrer);
-        if (referrer.origin !== location.origin || !/^\/products\/create\/?$/.test(referrer.pathname)) return null;
+        if (referrer.origin !== location.origin || !/^\/products\/create\/(?:success\/)?$/.test(`${referrer.pathname.replace(/\/$/, "")}/`)) return null;
       } catch { return null; }
     }
     const identity = listingIdentity(location.href);
@@ -227,6 +241,14 @@
     if (!pending?.postClickedAt) return false;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      // The success screen has no product schema. Follow its single listing
+      // link, then verify seller, title and price on the actual product page.
+      // Navigation is read-only and never acknowledges the success screen alone.
+      const destination = successListingDestination(pending);
+      if (destination) {
+        location.assign(destination.url);
+        return false;
+      }
       const identity = findPublishedListing(pending, resumed);
       if (identity) {
         await confirmPublication(pending, identity);

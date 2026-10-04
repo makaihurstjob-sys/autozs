@@ -37,6 +37,28 @@ async function main() {
   await context.resumePublicationConfirmation();assert.equal(acknowledgements,0,'untrusted evidence rejected');
   pending={...original,tabToken:'other-tab'};const before=waits;
   await context.resumePublicationConfirmation();assert.equal(waits,before,'other tabs cannot reconcile');
+  now=Date.parse(original.postClickedAt);
+  pending=structuredClone(original);
+  context.location.href='https://www.depop.com/products/create/success/?productId=938270465';
+  let links=[{textContent:'View listing',href:'https://www.depop.com/products/new-bag/manage/'}];
+  context.document.querySelector=()=>({textContent:"Nice! It's listed",querySelectorAll:()=>links});
+  let destination=null;
+  context.location.assign=url=>{destination=url;};
+  await context.watchForPublishedDestination(pending);
+  assert.equal(destination,'https://www.depop.com/products/new-bag/');
+  assert.equal(acknowledgements,0,'success screen alone cannot acknowledge publication');
+  links.push(links[0]);assert.equal(context.successListingDestination(pending),null,'ambiguous links rejected');
+  links=[{textContent:'View listing',href:'https://evil.example/products/new-bag/'}];
+  assert.equal(context.successListingDestination(pending),null,'foreign destination rejected');
+  links=[{textContent:'View listing',href:'https://www.depop.com/products/new-bag/'}];
+  assert.equal(context.successListingDestination({...pending,tabToken:'other'}),null,'tab guard retained');
+  now+=120001;assert.equal(context.successListingDestination(pending),null,'stale success rejected');
+  now=Date.parse(original.postClickedAt);
+  context.location.href='https://www.depop.com/products/new-bag/';
+  context.document.referrer='https://www.depop.com/products/create/success/?productId=938270465';
+  context.document.querySelector=()=>({querySelector:selector=>selector.includes('name')?{textContent:'Bag'}:{getAttribute:()=> '30'}});
+  assert.equal(context.findPublishedListing(pending,true)?.id,'new-bag','success-to-product recovery verifies schema');
+  pending.price=31;assert.equal(context.findPublishedListing(pending,true),null,'wrong price held');
   console.log('Depop recovery tests passed.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
