@@ -259,6 +259,31 @@
     return false;
   }
 
+  function boostControl() {
+    const headings = [...document.querySelectorAll('form h2')]
+      .filter((element) => element.textContent.trim() === "Boost your listing");
+    if (headings.length !== 1) return null;
+    const controls = headings[0].parentElement.querySelectorAll('input[type="checkbox"][data-testid="switch"]');
+    return controls.length === 1 ? controls[0] : null;
+  }
+
+  function boostingDisabled() {
+    const control = boostControl();
+    return Boolean(control && control.isConnected && !control.disabled
+      && !control.indeterminate && control.checked === false);
+  }
+
+  async function disableBoosting() {
+    const control = boostControl();
+    if (!control || control.disabled || control.indeterminate) return false;
+    if (control.checked) {
+      control.click();
+      await wait(300);
+    }
+    // Re-read after React rerenders; an absent control is not proof of opt-out.
+    return boostingDisabled();
+  }
+
   async function armPublicationConfirmation(pkg) {
     if (!globalThis.chrome?.storage?.local || !globalThis.sessionStorage) {
       throw new Error("Publication tracking storage is unavailable");
@@ -286,7 +311,7 @@
     let expectedPhotos = 0;
     const fieldsStillMatch = () => {
       const description = [pkg.title, pkg.description && pkg.description !== pkg.title ? pkg.description : ""].filter(Boolean).join("\n\n");
-      return Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
+      return boostingDisabled() && Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
         && document.getElementById("description")?.value === description
         && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
         && [["group", pkg.category], ["brand", pkg.brand], ["condition", pkg.condition],
@@ -303,7 +328,7 @@
       event.stopImmediatePropagation();
       if (submitting) return;
       if (!ready || !fieldsStillMatch() || !photosReady(expectedPhotos) || !button || button.disabled) {
-        showStatus("Post blocked: listing fields and completed photo uploads need verification.", true);
+        showStatus("Post blocked: boosting must be off, and listing fields and completed photo uploads need verification.", true);
         return;
       }
       submitting = true;
@@ -484,6 +509,7 @@
     if (usps && !usps.checked) usps.click();
     await wait(200);
     results.push(await selectCombobox("shippingMethods", pkg.shipping_method));
+    if (!(await disableBoosting())) throw new Error("Boosting could not be verified off; Post is blocked");
     await wait(300);
     const requiredValuesPersisted = Boolean(
       document.getElementById("description")?.value?.trim()

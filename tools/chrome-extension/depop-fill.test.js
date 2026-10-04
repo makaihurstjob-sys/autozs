@@ -41,7 +41,9 @@ async function run() {
     HTMLTextAreaElement: class {},
     document: {
       getElementById: (id) => fields.get(id) || null,
-      querySelectorAll: (selector) => selector.includes("aria-label") ? [{href: "https://www.depop.com/m4coq/likes/"}] : [],
+      querySelectorAll: (selector) => selector === 'form h2'
+        ? [{textContent: 'Boost your listing', parentElement: {querySelectorAll: () => [{checked: false, isConnected: true}]}}]
+        : selector.includes("aria-label") ? [{href: "https://www.depop.com/m4coq/likes/"}] : [],
       addEventListener: () => {},
       createElement: () => new Field("badge", "DIV"),
       documentElement: { appendChild(element) { fields.set(element.id, element); } },
