@@ -10,7 +10,7 @@ async function main() {
   const job = {id:7,account_key:'m4coq',status:'running',runner_url:'https://www.depop.com/products/create/?autozs_fill=1&autozs_job_id=7&autozs_account_key=m4coq'};
   const context = {URL, DEPOP_SCHEDULER_KEY:'autozsDepopScheduler', depopSchedulerBusy:false,
     canRunAutozsWorkerJobs:async()=>mode,
-    chrome:{storage:{local:{get:async()=>storage}},tabs:{query:async()=>tabs,create:async(x)=>opened.push(x)}},
+    chrome:{storage:{local:{get:async()=>storage,set:async(value)=>Object.assign(storage,value)}},tabs:{query:async()=>tabs,create:async(x)=>opened.push(x)}},
     localApiJson:async(path)=>{calls.push(path);return path==='/depop/accounts'?[account]:{job};},
   };
   vm.createContext(context);
@@ -33,6 +33,17 @@ async function main() {
   assert.ok(opened[1].url.includes('autozs_job_id=8'));
   job.account_key='other';await poll();assert.equal(opened.length,2,'cross-account response never opens');job.account_key='m4coq';
   job.runner_url='https://evil.example/';await poll();assert.equal(opened.length,2,'untrusted runner rejected');
+  job.runner_url='https://www.depop.com/products/create/?autozs_fill=1&autozs_job_id=8&autozs_account_key=m4coq';
+  storage.autozsDepopScheduler={enabled:true,accountKey:'m4coq',jobId:8};
+  calls=[];opened=[];tabs=[];
+  await poll();assert.equal(opened.length,1);assert.equal(calls[1],'/depop/jobs/next?account_key=m4coq&job_id=8');
+  assert.equal(storage.autozsDepopScheduler.claimStarted,true);
+  await poll();assert.equal(opened.length,1,'durable one-shot never claims a second job');
+  storage.autozsDepopScheduler={enabled:true,accountKey:'m4coq',jobId:6};
+  await poll();assert.equal(opened.length,1,'wrong job response never opens');
+  await poll();assert.equal(opened.length,1,'wrong response remains consumed');
+  storage.autozsDepopScheduler={enabled:true,accountKey:'m4coq',jobId:0};
+  calls=[];await poll();assert.equal(calls.length,0,'invalid scope fails closed');
   console.log('Depop scheduler tests passed.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

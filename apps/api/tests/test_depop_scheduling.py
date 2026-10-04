@@ -104,6 +104,16 @@ def test_extra_photo_batch_preserves_shipping_weight_policy(db):
     assert extra.shipping_method == variant.shipping_method
 
 
+def test_route_claims_only_requested_job(db):
+    from app.api.routes import run_next_depop_job
+    seed(db, count=8)
+    jobs = schedule(db)
+    result = run_next_depop_job(account_key='closet', job_id=jobs[1].id, db=db)
+    assert result.job.id == jobs[1].id
+    assert db.get(DepopListingJob, jobs[0].id).status == 'queued'
+    assert db.get(DepopListingJob, jobs[0].id).attempts == 0
+
+
 def test_dst_missing_hour_skipped_and_fall_back_never_yields_past():
     spring = _next_schedule_slots(datetime(2026, 3, 8, 6), 'America/Chicago', [2])
     assert next(spring) == datetime(2026, 3, 9, 7)

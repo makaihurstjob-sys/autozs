@@ -1536,8 +1536,8 @@ def read_depop_job(job_id: int, db: Session = Depends(get_db)) -> DepopJobRead:
 
 
 @router.post("/depop/jobs/next", response_model=DepopJobRunResult)
-def run_next_depop_job(account_key: str | None = None, db: Session = Depends(get_db)) -> DepopJobRunResult:
-    job = start_next_depop_job(db, account_key=account_key)
+def run_next_depop_job(account_key: str | None = None, job_id: int | None = None, db: Session = Depends(get_db)) -> DepopJobRunResult:
+    job = start_next_depop_job(db, account_key=account_key, job_id=job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="No queued Depop jobs are due")
     package = None

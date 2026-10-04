@@ -81,6 +81,8 @@ async function pollDepopScheduledJob() {
     const stored = await chrome.storage.local.get([DEPOP_SCHEDULER_KEY, "autozsDepopPendingPublication"]);
     const settings = stored?.[DEPOP_SCHEDULER_KEY];
     if (settings?.enabled !== true || !String(settings.accountKey || "").trim()) return;
+    const scopedJobId = settings.jobId;
+    if (scopedJobId !== undefined && (!Number.isSafeInteger(scopedJobId) || scopedJobId <= 0 || settings.claimStarted === true)) return;
     if (stored.autozsDepopPendingPublication) return;
     const tabs = await chrome.tabs.query({});
     if (tabs.some((tab) => {
@@ -92,9 +94,13 @@ async function pollDepopScheduledJob() {
     const accounts = await localApiJson("/depop/accounts");
     const account = accounts.find((item) => item.key === settings.accountKey);
     if (!account?.enabled || !account.writes_enabled) return;
-    const result = await localApiJson(`/depop/jobs/next?account_key=${encodeURIComponent(settings.accountKey)}`, { method: "POST" });
+    // Persist before the claim: an uncertain response must never release another job.
+    if (scopedJobId !== undefined) await chrome.storage.local.set({[DEPOP_SCHEDULER_KEY]: {...settings, claimStarted: true}});
+    const scopeQuery = scopedJobId === undefined ? "" : `&job_id=${scopedJobId}`;
+    const result = await localApiJson(`/depop/jobs/next?account_key=${encodeURIComponent(settings.accountKey)}${scopeQuery}`, { method: "POST" });
     const job = result?.job;
     if (job?.status !== "running" || job.account_key !== settings.accountKey) return;
+    if (scopedJobId !== undefined && job.id !== scopedJobId) return;
     const runner = new URL(job.runner_url);
     if (runner.origin !== "https://www.depop.com" || runner.pathname !== "/products/create/"
       || runner.searchParams.get("autozs_job_id") !== String(job.id)

@@ -547,7 +547,8 @@
     showStatus(note);
     const scheduler = await storageGet("autozsDepopScheduler");
     if (!unresolved && photosVerified && scheduler?.enabled === true && scheduler?.autoPublish === true
-      && scheduler.accountKey === pkg.account_key) {
+      && scheduler.accountKey === pkg.account_key
+      && (scheduler.jobId === undefined || (Number.isSafeInteger(scheduler.jobId) && String(scheduler.jobId) === String(jobId)))) {
       const buttons = [...document.querySelectorAll('button[type="submit"], input[type="submit"]')]
         .filter((button) => visible(button) && !button.disabled && optionText(button) === "post");
       if (buttons.length !== 1) throw new Error("A unique enabled Post button was not found");
