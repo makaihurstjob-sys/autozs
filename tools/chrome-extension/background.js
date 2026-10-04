@@ -94,6 +94,28 @@ async function pollDepopScheduledJob() {
     const accounts = await localApiJson("/depop/accounts");
     const account = accounts.find((item) => item.key === settings.accountKey);
     if (!account?.enabled || !account.writes_enabled) return;
+    // A login redirect must not consume a queued job or the one-shot claim.
+    const expectedUsername = String(account.username || "").replace(/^@/, "").toLowerCase();
+    const profileTabs = tabs.filter((tab) => {
+      try { return new URL(tab.url || "").origin === "https://www.depop.com" && Number.isInteger(tab.id); }
+      catch { return false; }
+    });
+    let verifiedSession = false;
+    for (const tab of profileTabs) {
+      let timer;
+      try {
+        const profile = await Promise.race([
+          chrome.tabs.sendMessage(tab.id, {type: "autozs:depop-profile-status"}),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Depop session check timed out")), 5000); }),
+        ]);
+        if (profile?.signedIn === true && expectedUsername && profile.username === expectedUsername) {
+          verifiedSession = true;
+          break;
+        }
+      } catch { /* Loading, logged-out, or stale tabs cannot authorize a claim. */ }
+      finally { clearTimeout(timer); }
+    }
+    if (!verifiedSession) return;
     // Persist before the claim: an uncertain response must never release another job.
     if (scopedJobId !== undefined) await chrome.storage.local.set({[DEPOP_SCHEDULER_KEY]: {...settings, claimStarted: true}});
     const scopeQuery = scopedJobId === undefined ? "" : `&job_id=${scopedJobId}`;
@@ -2530,7 +2552,11 @@ async function configureAutozsAlarms() {
       await chrome.alarms.clear(name);
       continue;
     }
-    chrome.alarms.create(name, { delayInMinutes, periodInMinutes });
+    const existing = await chrome.alarms.get(name);
+    // Worker wakes are frequent; resetting a future alarm can starve its poll.
+    if (!existing || existing.periodInMinutes !== periodInMinutes) {
+      await chrome.alarms.create(name, { delayInMinutes, periodInMinutes });
+    }
   }
 }
 

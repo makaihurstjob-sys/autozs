@@ -5,12 +5,13 @@ const source = fs.readFileSync(`${__dirname}/background.js`, 'utf8');
 const start = source.indexOf('async function pollDepopScheduledJob()');
 const end = source.indexOf('\nasync function ensureDepopMetricsTab()', start);
 async function main() {
-  let storage = {}, tabs = [], calls = [], opened = [], mode = true;
-  let account = {key:'m4coq', enabled:true, writes_enabled:true};
+  let storage = {}, tabs = [{id:1,url:"https://www.depop.com/sellinghub/selling/active/"}], calls = [], opened = [], mode = true;
+  let account = {key:'m4coq',username:'m4coq', enabled:true, writes_enabled:true};
   const job = {id:7,account_key:'m4coq',status:'running',runner_url:'https://www.depop.com/products/create/?autozs_fill=1&autozs_job_id=7&autozs_account_key=m4coq'};
-  const context = {URL, DEPOP_SCHEDULER_KEY:'autozsDepopScheduler', depopSchedulerBusy:false,
+  let profile={signedIn:true,username:"m4coq"};
+  const context = {URL,setTimeout,clearTimeout, DEPOP_SCHEDULER_KEY:'autozsDepopScheduler', depopSchedulerBusy:false,
     canRunAutozsWorkerJobs:async()=>mode,
-    chrome:{storage:{local:{get:async()=>storage,set:async(value)=>Object.assign(storage,value)}},tabs:{query:async()=>tabs,create:async(x)=>opened.push(x)}},
+    chrome:{storage:{local:{get:async()=>storage,set:async(value)=>Object.assign(storage,value)}},tabs:{sendMessage:async()=>profile,query:async()=>tabs,create:async(x)=>opened.push(x)}},
     localApiJson:async(path)=>{calls.push(path);return path==='/depop/accounts'?[account]:{job};},
   };
   vm.createContext(context);
@@ -21,13 +22,14 @@ async function main() {
   mode=false;await poll(); assert.equal(calls.length,0,'viewer never claims');mode=true;
   storage.autozsDepopPendingPublication={jobId:1};await poll(); assert.equal(calls.length,0,'pending draft blocks');
   delete storage.autozsDepopPendingPublication;
-  tabs=[{url:'https://www.depop.com/products/create/'}];await poll();assert.equal(calls.length,0,'existing manual draft blocks');tabs=[];
+  tabs=[{url:'https://www.depop.com/products/create/'}];await poll();assert.equal(calls.length,0,'existing manual draft blocks');tabs=[{id:1,url:"https://www.depop.com/sellinghub/selling/active/"}];
   account.writes_enabled=false;await poll();assert.equal(opened.length,0);assert.equal(calls.length,1);account.writes_enabled=true;
+  profile={signedIn:false};calls=[];await poll();assert.equal(calls.length,1,'logged out never claims');assert.equal(opened.length,0);profile={signedIn:true,username:'wrong'};calls=[];await poll();assert.equal(calls.length,1,'wrong account never claims');profile={signedIn:true,username:'m4coq'};
   calls=[];await poll();assert.equal(opened.length,1);assert.equal(calls[1],'/depop/jobs/next?account_key=m4coq');
   storage.autozsDepopPendingPublication={jobId:7,postClickedAt:new Date().toISOString()};
   await poll();assert.equal(opened.length,1,'first submission holds the next job');
   delete storage.autozsDepopPendingPublication;
-  tabs=[{url:'https://www.depop.com/products/first-published-bag/'}];
+  tabs=[{id:1,url:'https://www.depop.com/products/first-published-bag/'}];
   job.id=8;job.runner_url=job.runner_url.replace('autozs_job_id=7','autozs_job_id=8');
   await poll();assert.equal(opened.length,2,'confirmed first listing allows unattended second job');
   assert.ok(opened[1].url.includes('autozs_job_id=8'));
@@ -35,7 +37,7 @@ async function main() {
   job.runner_url='https://evil.example/';await poll();assert.equal(opened.length,2,'untrusted runner rejected');
   job.runner_url='https://www.depop.com/products/create/?autozs_fill=1&autozs_job_id=8&autozs_account_key=m4coq';
   storage.autozsDepopScheduler={enabled:true,accountKey:'m4coq',jobId:8};
-  calls=[];opened=[];tabs=[];
+  calls=[];opened=[];tabs=[{id:1,url:"https://www.depop.com/sellinghub/selling/active/"}];
   await poll();assert.equal(opened.length,1);assert.equal(calls[1],'/depop/jobs/next?account_key=m4coq&job_id=8');
   assert.equal(opened[0].active,true,'Depop virtual dropdown runner must be visible');
   assert.equal(storage.autozsDepopScheduler.claimStarted,true);
