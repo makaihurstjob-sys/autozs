@@ -226,3 +226,5 @@ Owner approved automatic posting job6 only at12%. Benny no delegates. Base c0572
 Depop dropdown repair: Benny, no delegates. Base2145b1c; isolated worktree depop-visible-runner-20261003. Live job6 Brand virtual list empty with document.hidden true, options rendered immediately after Page.bringToFront. Scope foreground scheduled runner and regression test; integrate/reload with scheduler disabled, resume only authorized unsubmitted job6. Jobs7-8 untouched.
 
 Job6 continuation complete: eebb983 visible Depop runner repair loaded; five relevant browser test files pass. Exact guarded resume attempt2 automatically posted and confirmed job6. Direct live manage DOM verifies m4coq Brown37.98 Boosted. Scheduler disabled, pending absent, jobs7-8 queued attempts0. Original hidden attempt never submitted. No delegates or Master Dashboard changes.
+
+Owner authorized October3 job7 normal-poll scheduler test and go-live scheduling after success. Benny coordinator, no delegates; runtime Chrome/AUTOZS ownership through activation and verification. Test job7 only first at12%, then enable approved m4coq queue if successful. Preserve all submission guards.
