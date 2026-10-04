@@ -37,6 +37,7 @@ async function main() {
   storage.autozsDepopScheduler={enabled:true,accountKey:'m4coq',jobId:8};
   calls=[];opened=[];tabs=[];
   await poll();assert.equal(opened.length,1);assert.equal(calls[1],'/depop/jobs/next?account_key=m4coq&job_id=8');
+  assert.equal(opened[0].active,true,'Depop virtual dropdown runner must be visible');
   assert.equal(storage.autozsDepopScheduler.claimStarted,true);
   await poll();assert.equal(opened.length,1,'durable one-shot never claims a second job');
   storage.autozsDepopScheduler={enabled:true,accountKey:'m4coq',jobId:6};

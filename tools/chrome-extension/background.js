@@ -108,7 +108,8 @@ async function pollDepopScheduledJob() {
       || runner.searchParams.get("autozs_fill") !== "1") return;
     // A failed/uncertain tab creation leaves the job running for review. Never
     // requeue it automatically: the tab may have opened before Chrome errored.
-    await chrome.tabs.create({ url: runner.href, active: false });
+    // Depop virtualized dropdowns do not render options in a hidden tab.
+    await chrome.tabs.create({ url: runner.href, active: true });
   } finally {
     depopSchedulerBusy = false;
   }
