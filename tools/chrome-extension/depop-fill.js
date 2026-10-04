@@ -214,8 +214,22 @@
     const name = product?.querySelector('[itemprop="name"]')?.textContent?.trim();
     const priceNode = product?.querySelector('[itemprop="price"]');
     const price = priceNode?.getAttribute('content') || priceNode?.textContent;
-    if (!identity || name !== pending.title || Number(price) !== Number(pending.price)) return null;
-    return identity;
+    if (!identity || !Number.isFinite(Number(pending.price)) || Number(pending.price) <= 0) return null;
+    if (product) return name === pending.title && Number(price) === Number(pending.price) ? identity : null;
+    // Current Depop pages expose JSON-LD instead of microdata. The display
+    // name is truncated; the first description paragraph retains our full title.
+    const scripts = [...document.querySelectorAll('main script[type="application/ld+json"][data-testid="meta__jsonLd"]')];
+    if (scripts.length !== 1) return null;
+    try {
+      const data = JSON.parse(scripts[0].textContent);
+      const offer = data.offers;
+      const offeredIdentity = listingIdentity(offer?.url);
+      if (data['@type'] !== 'Product' || offer?.['@type'] !== 'Offer'
+          || offer.priceCurrency !== 'USD' || offeredIdentity?.id !== identity.id
+          || String(data.description || '').split(/\r?\n\r?\n/)[0] !== pending.title
+          || !Number.isFinite(Number(offer.price)) || Number(offer.price) !== Number(pending.price)) return null;
+      return identity;
+    } catch { return null; }
   }
 
   async function confirmPublication(pending, identity) {

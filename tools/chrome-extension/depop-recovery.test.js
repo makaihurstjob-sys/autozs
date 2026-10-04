@@ -59,6 +59,35 @@ async function main() {
   context.document.querySelector=()=>({querySelector:selector=>selector.includes('name')?{textContent:'Bag'}:{getAttribute:()=> '30'}});
   assert.equal(context.findPublishedListing(pending,true)?.id,'new-bag','success-to-product recovery verifies schema');
   pending.price=31;assert.equal(context.findPublishedListing(pending,true),null,'wrong price held');
+  pending=structuredClone(original);
+  context.document.querySelector=()=>null;
+  let data={ '@type':'Product', name:'Truncated...', description:'Bag\n\nFull description',
+    offers:{'@type':'Offer',url:'https://www.depop.com/products/new-bag/manage/',priceCurrency:'USD',price:'30.00'} };
+  let scripts=[{textContent:JSON.stringify(data)}];
+  context.document.querySelectorAll=selector=>selector.includes('script')?scripts:[{href:'https://www.depop.com/m4coq/likes/'}];
+  const verify=()=>context.findPublishedListing(pending,true);
+  assert.equal(verify()?.id,'new-bag','current JSON-LD layout verifies full title and price');
+  for (const [label, mutate] of [
+    ['wrong title', d=>d.description='Other bag\n\nFull description'],
+    ['wrong price', d=>d.offers.price='31'],
+    ['wrong currency', d=>d.offers.priceCurrency='GBP'],
+    ['unrelated listing', d=>d.offers.url='https://www.depop.com/products/other-bag/'],
+    ['foreign listing', d=>d.offers.url='https://evil.example/products/new-bag/'],
+    ['wrong schema', d=>d['@type']='Article'],
+    ['ambiguous offers', d=>d.offers=[d.offers]],
+  ]) {
+    const changed=structuredClone(data);mutate(changed);scripts=[{textContent:JSON.stringify(changed)}];
+    assert.equal(verify(),null,`${label} held`);
+  }
+  scripts=[{textContent:'{invalid'}];assert.equal(verify(),null,'malformed JSON held');
+  scripts=[{textContent:JSON.stringify(data)},{textContent:JSON.stringify(data)}];assert.equal(verify(),null,'ambiguous products held');
+  scripts=[{textContent:JSON.stringify(data)}];
+  context.document.querySelectorAll=selector=>selector.includes('script')?scripts:[{href:'https://www.depop.com/other/likes/'}];
+  assert.equal(verify(),null,'wrong signed-in account held');
+  context.document.querySelectorAll=selector=>selector.includes('script')?scripts:[{href:'https://www.depop.com/m4coq/likes/'}];
+  context.document.referrer='https://www.depop.com/sellinghub/';assert.equal(verify(),null,'unrelated navigation held');
+  context.document.referrer='https://www.depop.com/products/create/success/?productId=938270465';
+  now+=120001;assert.equal(verify(),null,'stale JSON-LD held');
   console.log('Depop recovery tests passed.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
