@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import PROJECT_ROOT
-from app.models.domain import EbayListing, ListingDraft, PriceSnapshot, Product, ProductImage, ProductStatus, SnapshotSource, SupplierProduct
+from app.models.domain import AppSetting, EbayListing, ListingDraft, PriceSnapshot, Product, ProductImage, ProductStatus, SnapshotSource, SupplierProduct
 from app.services.settings import read_pricing_settings
 from app.services.listing_exclusions import listing_exclusion_reason
 from app.services.suppliers import supplier_from_url
@@ -656,7 +656,11 @@ def import_captured_product(
         db.flush()
     else:
         product.title = product_title[:512]
-        product.status = ProductStatus.monitoring.value
+        phone_draft = product.status == ProductStatus.draft.value and db.scalar(
+            select(AppSetting.value).where(AppSetting.key == f"phone_import_draft_{product.id}")
+        ) == "true"
+        if not phone_draft:
+            product.status = ProductStatus.monitoring.value
         if competitor_price is not None:
             product.competitor_price = competitor_price
     _archive_source_duplicates(db, product, source_url)

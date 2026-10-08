@@ -864,6 +864,7 @@
     </section>
 
     <a class="dashboard-banner" id="dashboard-link" href="/">Dashboard</a>
+    <a class="dashboard-banner" id="phone-import-link" href="/phone-import.html">Import a Home Depot product</a>
 
     <section class="segments" aria-label="Mobile view">
       <button class="segment active" data-view="stats" type="button">Stats</button>
@@ -1014,6 +1015,7 @@
     let refreshController = null;
 
     document.getElementById("dashboard-link").href = dashboardUrl;
+    document.getElementById("phone-import-link").href = `${window.location.origin}/phone-import.html?api=${encodeURIComponent(apiBase)}`;
 
     // Marketplace switch. Shares the desktop dashboard's storage key so the two
     // stay on the same store, and paints the whole app in that store's accent.

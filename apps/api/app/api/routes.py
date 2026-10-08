@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.services import ebay_checkout_verification as ebay_verification
 from app.services.ebay_checkout_verification import VerificationObservation
 from app.core.database import get_db
+from app.services.phone_import import PhoneImportRequest, queue_phone_import
 from app.core.config import get_settings
 from app.core.config import PROJECT_ROOT
 from app.core.store_keys import DEFAULT_EBAY_STORE_KEY
@@ -1725,6 +1726,14 @@ def import_source_products(payload: ProductImportRequest, db: Session = Depends(
         competitor_price=payload.competitor_price,
     )
     return ProductImportResult(imported=len(products), products=[ProductRead.model_validate(product) for product in products], warnings=warnings)
+
+
+@router.post("/products/phone-import")
+def import_phone_link(payload: PhoneImportRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        return queue_phone_import(db, payload.source_url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.post("/products/import-captured", response_model=ProductRead)
