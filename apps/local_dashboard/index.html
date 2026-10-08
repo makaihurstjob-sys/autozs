@@ -4006,7 +4006,8 @@
           subtitle: `${job.sku || "No SKU"} · ${job.batch_key || "single refresh"}`,
           meta: [
             sourceDelta,
-            typeof job.price_changed === "boolean" ? (job.price_changed ? "source changed" : "source confirmed") : "",
+            job.status === "completed" && job.captured_price !== null && job.captured_price !== undefined
+              ? (job.price_changed ? "source changed" : "source confirmed") : "",
             job.updated_at ? `Updated ${formatDateTime(job.updated_at)}` : "",
             `${job.attempts || 0} attempt(s)`,
           ].filter(Boolean),
