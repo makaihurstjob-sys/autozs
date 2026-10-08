@@ -6,9 +6,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
+from app.models.depop import DepopListingVariant
 from app.models.domain import AppSetting, EbayListing, EbayRevisionJob, EbayRevisionJobStatus, ListingDraft, Product, SourceRefreshJobStatus, SupplierProduct
 from app.services.ebay_revisions import enqueue_ebay_price_revisions, serialize_ebay_revision_job
-from app.services.importer import recalculate_all_draft_prices
+from app.services.importer import recalculate_all_draft_prices, update_product_from_capture
 from app.services.source_refresh_jobs import (
     claim_next_source_refresh_job_any_batch,
     complete_source_refresh_job,
@@ -76,6 +77,38 @@ def add_listing_draft(db, product, calculated_price=30.0):
     db.add(draft)
     db.commit()
     return draft
+
+
+def test_depop_amazon_source_refresh_tracks_published_and_queued_not_drafts():
+    db = make_session()
+    products = []
+    for status in ("published", "queued", "draft", "sold"):
+        product = add_source_product(db, sku=f"AMAZON-{status}", updated_at=datetime.utcnow() - timedelta(hours=7))
+        supplier = product.supplier_products[0]
+        supplier.supplier = "amazon"
+        supplier.source_url = f"https://www.amazon.com/dp/{status}"
+        supplier.updated_at = datetime.utcnow() - timedelta(hours=7)
+        product.status = "paused"  # Depop routing pauses only the eBay pipeline.
+        db.add(DepopListingVariant(product_id=product.id, account_key="closet", variant_key=status, title=status, price=35.0, status=status))
+        db.commit()
+        products.append(product)
+    _, due, jobs, _ = create_automatic_source_refresh_batch(db)
+    assert due == 2
+    assert {job.product_id for job in jobs} == {products[0].id, products[1].id}
+    # A second marketplace/variant must not duplicate the same source check.
+    add_ebay_listing(db, products[0])
+    _, _, repeated, _ = create_automatic_source_refresh_batch(db)
+    assert repeated == []
+    job = jobs[0]
+    updated = update_product_from_capture(db, product_id=job.product_id, source_price=24.0, source_shipping=0.0)
+    assert updated.supplier_products[0].last_price == 24.0
+    assert db.scalars(select(ListingDraft).where(ListingDraft.product_id == job.product_id)).all() == []
+    completed = complete_source_refresh_job(db, job.id, job.product_id)
+    assert completed.price_changed
+    assert "Depop selling prices unchanged" in completed.message
+    assert db.scalars(select(ListingDraft).where(ListingDraft.product_id == job.product_id)).all() == []
+    assert all(variant.price == 35.0 for variant in db.scalars(select(DepopListingVariant)).all())
+    assert all(product.status == "paused" for product in products)
 
 
 def test_automatic_source_refresh_queues_due_products_and_claims_next_job() -> None:

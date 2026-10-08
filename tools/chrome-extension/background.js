@@ -410,10 +410,11 @@ function stampedHomeDepotWorkerUrl(url, openedAt = Date.now()) {
 }
 
 async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
-  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  const tabs = await chrome.tabs.query({ url: ["https://www.homedepot.com/*", "https://www.amazon.com/*", "https://amazon.com/*"] });
   const stale = tabs.filter((tab) => {
     try {
       const parsed = new URL(tab.url || "");
+      if (parsed.hostname !== "www.homedepot.com" && !isSourceRefreshRunnerUrl(tab.url)) return false;
       const automated = parsed.searchParams.get("ea_auto_import") === "1"
         || parsed.searchParams.has("autozs_refresh_job")
         || parsed.searchParams.get("autozs_tracking_poll") === "1";
@@ -435,7 +436,7 @@ async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
         await localApiJson(`/source-refresh/jobs/${refreshJobId}/failed`, {
           method: "POST",
           body: JSON.stringify({
-            message: "Home Depot worker tab exceeded the 15-minute limit and was closed automatically.",
+            message: "Source worker tab exceeded the 15-minute limit and was closed automatically.",
           }),
         });
       }
@@ -565,7 +566,7 @@ async function openNextProductCapture() {
 function isSourceRefreshRunnerUrl(url) {
   try {
     const parsed = new URL(url || "");
-    return parsed.hostname === "www.homedepot.com" && parsed.searchParams.has("autozs_refresh_job");
+    return ["www.homedepot.com", "www.amazon.com", "amazon.com"].includes(parsed.hostname) && parsed.searchParams.has("autozs_refresh_job");
   } catch {
     return false;
   }
@@ -573,7 +574,7 @@ function isSourceRefreshRunnerUrl(url) {
 
 async function openSourceRefreshRunnerUrl(url) {
   const stampedUrl = stampedHomeDepotWorkerUrl(url);
-  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  const tabs = await chrome.tabs.query({ url: ["https://www.homedepot.com/*", "https://www.amazon.com/*", "https://amazon.com/*"] });
   const runnerTab = tabs.find((tab) => isSourceRefreshRunnerUrl(tab.url));
   if (runnerTab?.id) {
     await chrome.tabs.update(runnerTab.id, { url: stampedUrl, active: false });
@@ -591,8 +592,11 @@ async function openNextSourceRefreshJob() {
   if (Date.now() - lastOpened < SOURCE_REFRESH_MIN_GAP_MS) return;
   const job = await claimNextSourceRefreshJob();
   if (!job?.runner_url) return;
-  if (Number(job.attempts || 0) > 1) await clearHomeDepotBatchState();
-  else await ensureHomeDepotBatchState(job.batch_key);
+  if (!isSourceRefreshRunnerUrl(job.runner_url)) return;
+  if (new URL(job.runner_url).hostname === "www.homedepot.com") {
+    if (Number(job.attempts || 0) > 1) await clearHomeDepotBatchState();
+    else await ensureHomeDepotBatchState(job.batch_key);
+  }
   await chrome.storage.local.set({ [SOURCE_REFRESH_LAST_OPENED_KEY]: Date.now() });
   await openSourceRefreshRunnerUrl(job.runner_url);
 }

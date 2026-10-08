@@ -497,12 +497,12 @@
       button.textContent = "Imported";
       if (refreshContext) {
         try {
-          await chrome.runtime.sendMessage({ type: "autozs-home-depot-refresh-success" });
+          if (/(^|\.)homedepot\.com$/i.test(location.hostname)) await chrome.runtime.sendMessage({ type: "autozs-home-depot-refresh-success" });
         } catch {}
         try {
           await chrome.runtime.sendMessage({ type: "autozs-source-refresh-cooldown" });
         } catch {}
-        setStatus(`Refreshed ${product.sku}. The background worker will continue after the Home Depot cooldown.`);
+        setStatus(`Refreshed ${product.sku}. The background worker will continue after the source-check cooldown.`);
       }
       progress(100, refreshContext ? "Source price imported. AutoZS will continue the schedule." : `Imported ${product.sku} into AutoZS.`, "complete");
       closeCompletedAutomaticTab();

@@ -2,10 +2,11 @@ from datetime import datetime, timedelta
 import re
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain import AutomationRun, EbayListing, Product, ProductStatus, SourceRefreshJob, SourceRefreshJobStatus
+from app.models.depop import DepopListingVariant
 from app.services.ebay_revisions import enqueue_ebay_price_revisions
 from app.services.importer import recalculate_all_draft_prices
 from app.services.settings import read_pricing_settings
@@ -126,6 +127,7 @@ def create_source_refresh_batch(
     interval_hours: float = 6.0,
     force: bool = False,
     product_ids: set[int] | None = None,
+    depop_product_ids: set[int] | None = None,
 ) -> tuple[str, int, list[SourceRefreshJob]]:
     now = datetime.utcnow()
     release_expired_source_refresh_jobs(db, now=now)
@@ -139,7 +141,12 @@ def create_source_refresh_batch(
     if not force:
         # Paused products are intentionally outside unattended automation.
         # A forced refresh remains available for an explicit recheck.
-        query = query.where(Product.status != ProductStatus.paused.value)
+        # Depop routing deliberately pauses the eBay product pipeline. Active
+        # Depop listings still need source monitoring without unpausing eBay.
+        query = query.where(or_(
+            Product.status != ProductStatus.paused.value,
+            Product.id.in_(depop_product_ids or set()),
+        ))
     if product_ids is not None:
         if not product_ids:
             return f"refresh-{now:%Y%m%d%H%M%S}-{uuid4().hex[:6]}", 0, []
@@ -218,6 +225,12 @@ def create_automatic_source_refresh_batch(db: Session) -> tuple[str | None, int,
             select(EbayListing.product_id).where(EbayListing.status.in_(AUTO_REFRESH_LISTING_STATUSES))
         ).all()
     )
+    depop_product_ids = set(db.scalars(
+        select(DepopListingVariant.product_id).where(
+            DepopListingVariant.status.in_({"queued", "published"})
+        )
+    ).all())
+    eligible_product_ids.update(depop_product_ids)
     if not eligible_product_ids:
         return None, 0, [], "No scheduled or live listings are eligible for automatic source refresh."
     batch_key, due_available, jobs = create_source_refresh_batch(
@@ -226,6 +239,7 @@ def create_automatic_source_refresh_batch(db: Session) -> tuple[str | None, int,
         interval_hours=interval_hours,
         force=False,
         product_ids=eligible_product_ids,
+        depop_product_ids=depop_product_ids,
     )
     if jobs:
         message = (
@@ -348,6 +362,12 @@ def complete_source_refresh_job(db: Session, job_id: int, product_id: int) -> So
         job.message = f"Price confirmed; {queued + updated} eBay revision job(s) reconciled"
     else:
         job.message = "Price and shipping confirmed; eBay revision state reconciled"
+    if supplier and supplier.supplier == "amazon":
+        job.message = (
+            "Supplier price unavailable; needs review" if price_unavailable
+            else "Amazon source price changed; Depop selling prices unchanged" if job.price_changed
+            else "Amazon source price and shipping confirmed; Depop selling prices unchanged"
+        )
     db.commit()
     db.refresh(job)
     return job

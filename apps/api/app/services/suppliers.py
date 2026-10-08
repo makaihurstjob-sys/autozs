@@ -41,7 +41,7 @@ SUPPLIER_CATALOG: tuple[dict[str, object], ...] = (
         "capabilities": {
             "url_import": True,
             "browser_capture": True,
-            "automatic_price_refresh": False,
+            "automatic_price_refresh": True,
             "browser_fulfillment": False,
         },
         # Browser capture is the Depop sourcing path. Only the primary product

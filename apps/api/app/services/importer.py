@@ -357,6 +357,9 @@ def recalculate_all_draft_prices(db: Session, product_ids: list[int] | None = No
         price_decision = calculate_listing_price(landed_cost, product.competitor_price, settings)
         draft = product.listing_drafts[0] if product.listing_drafts else None
         if draft is None:
+            from app.models.depop import DepopListingVariant
+            if db.scalar(select(DepopListingVariant.id).where(DepopListingVariant.product_id == product.id).limit(1)):
+                continue
             draft = ListingDraft(
                 product_id=product.id,
                 title=_listing_title(product.title, settings, _infer_brand(product.title), minimum_order_quantity),
@@ -807,6 +810,12 @@ def update_product_from_capture(
 
     draft = product.listing_drafts[0] if product.listing_drafts else None
     if draft is None:
+        # Depop routing removes the unused eBay placeholder. A supplier
+        # refresh must update its cost without recreating that eBay draft.
+        from app.models.depop import DepopListingVariant
+        if db.scalar(select(DepopListingVariant.id).where(DepopListingVariant.product_id == product.id).limit(1)):
+            db.commit()
+            return product
         draft = ListingDraft(
             product_id=product.id,
             title=_listing_title(product.title, settings, _infer_brand(product.title), effective_minimum_order_quantity),
