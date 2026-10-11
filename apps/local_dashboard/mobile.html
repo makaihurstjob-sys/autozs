@@ -1571,7 +1571,7 @@
 
     function applyMarketplaceStatLabels(marketplace) {
       const depop = marketplace === "depop";
-      setText("drafts-label", depop ? "Ready" : "Drafts");
+      setText("drafts-label", depop ? "Approved" : "Drafts");
       document.getElementById("drafts-count").parentElement.title = depop ? "Overall photo-ready listings across all Depop products; downloads and listing checks still apply." : "Draft products";
       setText("views-30d-label", depop ? "Views" : "30D Views");
       document.querySelectorAll(".ebay-period-stat").forEach((card) => { card.style.display = depop ? "none" : "grid"; });

@@ -20,7 +20,7 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  await page.goto('http://mobile.test/mobile.html?api=http://mobile.test');
  await page.evaluate(()=>{applyMarketplace('depop');setView('chat')});
  await page.evaluate(()=>refreshDepop(new AbortController().signal));
- assert.equal(await page.locator('#drafts-label').innerText(),'Ready');
+ assert.equal(await page.locator('#drafts-label').innerText(),'Approved');
  assert.equal(await page.locator('#drafts-count').innerText(),'1');
  const frame=page.locator('#depop-review');
  await frame.locator('#picker .queue-row').first().click();
