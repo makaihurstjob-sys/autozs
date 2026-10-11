@@ -74,6 +74,8 @@ window.mountPhotoReview = function(root, options = {}) {
       let queue = [];
       let variants = [];
       let readinessData = null;
+      let readinessGeneration = 0;
+      let readinessController;
       let selectedVariantId = null;
       let total = 0;
       let done = 0;
@@ -83,14 +85,14 @@ window.mountPhotoReview = function(root, options = {}) {
       const cropStates = new Map();
 
       const api = async (path, options) => {
-        const response = await fetch(API + path, { ...options, signal: lifetime.signal });
+        const response = await fetch(API + path, { ...options, signal: options?.signal || lifetime.signal });
         if (!response.ok) throw new Error((await response.text()).slice(0, 200));
         return response.json();
       };
 
       async function loadPicker() {
-        await refreshReadiness();
         const queue = await api("/depop/photo-queue");
+        void refreshReadiness();
         document.getElementById("product-title").textContent = "Photo review";
         document.getElementById("product-sub").textContent = queue.length
           ? `${queue.filter((item) => item.pending).length} product(s) waiting`
@@ -144,7 +146,8 @@ window.mountPhotoReview = function(root, options = {}) {
         }
         const data = await api(`/depop/photo-review/${productId}`);
         variants = data.variants;
-        await refreshReadiness(data);
+        // Render the current product without waiting for catalog-wide readiness.
+        void refreshReadiness(data);
         allVariationPhotos = data.photos.filter((p) => p.kind === "variation");
         // Variation photos already know their colour, so only the unattributed
         // review photos need a human decision.
@@ -162,13 +165,24 @@ window.mountPhotoReview = function(root, options = {}) {
       async function refreshReadiness(data) {
         const el = document.getElementById("photo-readiness");
         el.hidden = false;
+        const generation = ++readinessGeneration;
+        readinessController?.abort();
+        const controller = readinessController = new AbortController();
+        const cancel = () => controller.abort();
+        lifetime.signal.addEventListener("abort", cancel, {once:true});
+        el.textContent = "Updating approved count...";
         try {
-          readinessData = await globalThis.readDepopPhotoReadiness(api, data);
+          const updated = await globalThis.readDepopPhotoReadiness(path => api(path, {signal:controller.signal}), data);
+          if (lifetime.signal.aborted || generation !== readinessGeneration) return;
+          readinessData = updated;
           renderReadiness();
           globalThis.dispatchEvent(new CustomEvent("depop-readiness", {detail: globalThis.countDepopPhotoReadiness(readinessData).ready}));
         } catch (error) {
+          if (lifetime.signal.aborted || generation !== readinessGeneration) return;
           readinessData = null;
           el.textContent = "Photo-ready count unavailable";
+        } finally {
+          lifetime.signal.removeEventListener("abort", cancel);
         }
       }
 
@@ -252,8 +266,9 @@ window.mountPhotoReview = function(root, options = {}) {
         document.querySelector(".actions").style.display = "flex";
         chipsEl.style.display = "flex";
         const next = queue[1];
+        const currentCard = makeCard(queue[0], false);
         if (next) deck.append(makeCard(next, true));
-        deck.append(makeCard(queue[0], false));
+        deck.append(currentCard);
         const currentMode = cropState(queue[0]).mode;
         document.getElementById("square-crop").setAttribute("aria-pressed", String(currentMode === "crop"));
         document.getElementById("expand-toggle").classList.toggle("active", currentMode === "blur");
@@ -274,6 +289,8 @@ window.mountPhotoReview = function(root, options = {}) {
         backdrop.alt = "";
         const img = document.createElement("img");
         img.className = "photo";
+        img.fetchPriority = behind ? "low" : "high";
+        img.decoding = "async";
         img.src = photo.image_url;
         img.alt = "";
         img.loading = "eager";
@@ -477,7 +494,7 @@ window.mountPhotoReview = function(root, options = {}) {
           history.push({ photo, status, variantId, crop: { ...crop } });
           queue.shift();
           done += 1;
-          await refreshReadiness();
+          void refreshReadiness();
         } catch (error) {
           hintEl.textContent = `Could not save: ${error.message}`;
         } finally {
@@ -505,7 +522,7 @@ window.mountPhotoReview = function(root, options = {}) {
           });
           queue.unshift(last.photo);
           done = Math.max(0, done - 1);
-          await refreshReadiness();
+          void refreshReadiness();
         } catch (error) {
           history.push(last);
           hintEl.textContent = `Undo failed: ${error.message}`;
