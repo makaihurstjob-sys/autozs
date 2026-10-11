@@ -21,7 +21,10 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  await frame.locator('#deck .card').last().waitFor();
  if(process.env.SCREENSHOT_OUT&&width===390&&height===844)await page.screenshot({path:process.env.SCREENSHOT_OUT+'-review.png'});const box=await frame.locator('#deck').boundingBox();assert.ok(Math.abs(box.width-box.height)<1,'square preview');
  const yes=await frame.locator('#btn-yes').boundingBox();assert.ok(yes.y+yes.height<height-60,'approve visible above navigation');
- await frame.locator('#all-colors').click();await frame.locator('.color-dialog .chip').first().click();await frame.locator('#color-done').click();
+ await frame.locator('#variants .chip').first().click();
+ assert.equal(await frame.locator('.color-dialog').count(),0);
+ assert.equal(await frame.locator('#variants .chip img').first().isVisible(),true);
+ assert.equal(await frame.locator('#all-colors').isVisible(),false);
  await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('2');await frame.locator('#crop-cancel').click();
  await frame.locator('#square-crop').click();await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('1.5');await frame.locator('#crop-save').click();
  await frame.locator('.chip').first().click();await frame.locator('#btn-yes').click();await page.waitForTimeout(400);

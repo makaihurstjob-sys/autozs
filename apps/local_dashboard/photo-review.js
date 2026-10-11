@@ -217,6 +217,7 @@ window.mountPhotoReview = function(root, options = {}) {
           chip.title = `${variant.color} (press ${index + 1})`;
           const img = document.createElement("img");
           img.src = variantImage(variant);
+          img.loading = "lazy";
           img.alt = variant.color;
           const label = document.createElement("span");
           label.textContent = variant.color || variant.variant_key;
@@ -248,7 +249,7 @@ window.mountPhotoReview = function(root, options = {}) {
       }
 
       function render() {
-        document.getElementById("all-colors").hidden = !queue.length;
+        document.getElementById("all-colors").hidden = true;
         deck.innerHTML = "";
         counterEl.textContent = total ? `${done} / ${total} reviewed` : "no review photos";
         undoBtn.disabled = !history.length;
@@ -461,7 +462,7 @@ window.mountPhotoReview = function(root, options = {}) {
       }
 
       async function decide(status) {
-        if (busy || !queue.length || cropDialog.open || colorDialog.open) return;
+        if (busy || !queue.length || cropDialog.open) return;
         if (status === "approved" && !selectedVariantId) {
           // Approving is also an assignment, so refuse until a colour is chosen.
           chipsEl.classList.remove("nudge");
@@ -506,7 +507,7 @@ window.mountPhotoReview = function(root, options = {}) {
       }
 
       async function undo() {
-        if (busy || cropDialog.open || colorDialog.open) return;
+        if (busy || cropDialog.open) return;
         const last = history.pop();
         if (!last) return;
         busy = true;
@@ -583,24 +584,6 @@ window.mountPhotoReview = function(root, options = {}) {
         Object.assign(cropState(queue[0]), { x:0, y:0, zoom:1, mode:"crop" });
         const img = deck.lastElementChild?.querySelector("img.photo"); if (img) applyCrop(img, queue[0]);
       };
-      const colorDialog = document.createElement("dialog");
-      colorDialog.className = "color-dialog";
-      colorDialog.innerHTML = '<h2>Assign a color</h2><input id="color-search" type="search" placeholder="Search colors" aria-label="Search colors"><div class="color-grid"></div><button id="color-done">Done</button>';
-      document.body.append(colorDialog);
-      let colorsAnchor;
-      document.getElementById("all-colors").onclick = () => {
-        colorsAnchor = document.createComment("colors"); chipsEl.replaceWith(colorsAnchor);
-        colorDialog.querySelector(".color-grid").append(chipsEl); colorDialog.showModal();
-      };
-      colorDialog.querySelector("#color-search").oninput = event => {
-        chipsEl.querySelectorAll(".chip").forEach(c => c.hidden = !c.textContent.toLowerCase().includes(event.target.value.toLowerCase()));
-      };
-      function closeColors() {
-        colorsAnchor.replaceWith(chipsEl); chipsEl.querySelectorAll(".chip").forEach(c=>c.hidden=false);
-        colorDialog.querySelector("#color-search").value=""; colorDialog.close();
-      }
-      colorDialog.querySelector("#color-done").onclick = closeColors;
-      colorDialog.addEventListener("cancel", event => { event.preventDefault(); closeColors(); });
       document.getElementById("expand-toggle").addEventListener("click", () => {
         if (!queue.length) return;
         const state = cropState(queue[0]);
@@ -631,7 +614,7 @@ window.mountPhotoReview = function(root, options = {}) {
       });
       undoBtn.addEventListener("click", undo);
       window.addEventListener("keydown", (event) => {
-        if (!root.isConnected || (options.native && !root.closest(".visible")) || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || cropDialog.open || colorDialog.open) return;
+        if (!root.isConnected || (options.native && !root.closest(".visible")) || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName) || cropDialog.open) return;
         if (event.key === "ArrowRight") decide("approved");
         else if (event.key === "ArrowLeft") decide("rejected");
         else if (event.key.toLowerCase() === "u") undo();
