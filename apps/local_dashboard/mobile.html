@@ -833,6 +833,7 @@
   </style>
   <link rel="stylesheet" href="mobile-compact.css" />
 <link rel="stylesheet" href="mobile-workflows.css" />
+<link rel="stylesheet" href="depop-review.css" />
 </head>
 <body>
   <main class="shell">
@@ -962,7 +963,7 @@
 
     <section id="listings-view" hidden></section>
     <section class="photo-review-shell" id="photo-review-view" aria-label="Depop photo review">
-      <iframe class="photo-review-frame" id="photo-review-frame" title="Depop photo review"></iframe>
+      <div id="depop-review" class="depop-review"></div>
     </section>
   </main>
     <section class="segments" aria-label="Mobile view">
@@ -1299,11 +1300,7 @@
       document.getElementById("chat-view").classList.toggle("visible", selectedView === "chat" && !depopPhotoReview);
       document.getElementById("photo-review-view").classList.toggle("visible", depopPhotoReview);
       if (depopPhotoReview) {
-        const frame = document.getElementById("photo-review-frame");
-        const target = new URL("photos.html", location.href);
-        target.searchParams.set("embedded", "1");
-        if (apiBase) target.searchParams.set("api", apiBase);
-        if (!frame.src) frame.src = target.href;
+        if (!document.getElementById("depop-review").children.length) openDepopReview();
       } else if (["chat", "stats"].includes(selectedView)) {
         renderChatList();
       }
@@ -2549,6 +2546,8 @@
       return output;
     }
   </script>
+<script src="photo-review.js"></script>
+<script src="depop-review.js"></script>
 <script src="mobile-workflows.js"></script>
 </body>
 </html>

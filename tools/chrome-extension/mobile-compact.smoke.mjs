@@ -16,10 +16,8 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  return r.fulfill({json:[]});});
  await page.goto('http://mobile.test/mobile.html?api=http://mobile.test');
  await page.evaluate(()=>{applyMarketplace('depop');setView('chat')});
- const frame=page.frameLocator('#photo-review-frame');
- await frame.locator('#picker').waitFor({state:'visible'}).catch(()=>{});
- // Exercise actual embedded review workflow with disposable responses.
- await page.locator('#photo-review-frame').evaluate(f=>f.src='http://mobile.test/photos.html?embedded=1&product_id=300&api=http://mobile.test');
+ const frame=page.locator('#depop-review');
+ await page.evaluate(()=>openDepopReview(300));
  await frame.locator('#deck .card').last().waitFor();
  if(process.env.SCREENSHOT_OUT&&width===390&&height===844)await page.screenshot({path:process.env.SCREENSHOT_OUT+'-review.png'});const box=await frame.locator('#deck').boundingBox();assert.ok(Math.abs(box.width-box.height)<1,'square preview');
  const yes=await frame.locator('#btn-yes').boundingBox();assert.ok(yes.y+yes.height<height-60,'approve visible above navigation');

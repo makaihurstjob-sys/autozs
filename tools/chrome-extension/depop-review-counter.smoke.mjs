@@ -10,32 +10,35 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async r=>{const u=new URL(r.request().url());const path=u.pathname;
  if(path.endsWith('.html')||path.endsWith('.css')||path.endsWith('.js'))return r.fulfill({contentType:path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL(path.slice(1),root))});
- if(path==='/depop/jobs')return r.fulfill({json:[{variant_id:1,status:'queued',attempts:0}]});
- if(path==='/depop/photo-review/300')return r.fulfill({json:{product_title:'Test bag',variants:[{id:1,color:'Black',variant_key:'black'}],photos:[...Array.from({length:approved},(_,i)=>({id:100+i,kind:'review',status:'approved',variant_id:1,sort_order:i,image_url:'/bag.svg'})),{id:10,kind:'review',status:'pending',variant_id:1,image_url:'/bag.svg',crop_zoom:1},{id:11,kind:'review',status:'pending',variant_id:1,image_url:'/bag.svg'}]}});
+ if(path==='/depop/photo-queue')return r.fulfill({json:[{product_id:300,product_title:'Test bag',pending:2},{product_id:301,product_title:'Second bag',pending:0}]});
+ if(path==='/depop/photo-review/301')return r.fulfill({json:{product_id:301,variants:[{id:2,color:'Red',variant_key:'red',depop_listing_id:'posted'},{id:3,color:'Blue',variant_key:'blue'},{id:4,color:'Green',variant_key:'green'}],photos:[2,3,4].flatMap(id=>Array.from({length:4},(_,i)=>({id:id*100+i,variant_id:id,status:'approved'})))}});
+ if(path==='/depop/jobs')return r.fulfill({json:[{variant_id:1,status:'queued',attempts:0},{variant_id:3,status:'cancelled',attempts:1},{variant_id:4,status:'cancelled',attempts:0}]});
+ if(path==='/depop/photo-review/300')return r.fulfill({json:{product_id:300,product_title:'Test bag',variants:[{id:1,color:'Black',variant_key:'black'}],photos:[...Array.from({length:approved},(_,i)=>({id:100+i,kind:'review',status:'approved',variant_id:1,sort_order:i,image_url:'/bag.svg'})),{id:10,kind:'review',status:'pending',variant_id:1,image_url:'/bag.svg',crop_zoom:1},{id:11,kind:'review',status:'pending',variant_id:1,image_url:'/bag.svg'}]}});
  if(path.endsWith('/decision')){const d=r.request().postDataJSON();decisions.push(d);if(fail)return r.fulfill({status:500,json:{detail:'test failure'}});if(d.status==='approved')approved++;if(d.status==='pending')approved--;return r.fulfill({json:{}})}
  if(path==='/bag.svg')return r.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="500" height="800"><rect width="500" height="800" fill="gray"/></svg>'});
  return r.fulfill({json:[]});});
  await page.goto('http://mobile.test/mobile.html?api=http://mobile.test');
  await page.evaluate(()=>{applyMarketplace('depop');setView('chat')});
- const frame=page.frameLocator('#photo-review-frame');
- await frame.locator('#picker').waitFor({state:'visible'}).catch(()=>{});
- // Exercise actual embedded review workflow with disposable responses.
- await page.locator('#photo-review-frame').evaluate(f=>f.src='http://mobile.test/photos.html?embedded=1&product_id=300&api=http://mobile.test');
+ const frame=page.locator('#depop-review');
+ await frame.locator('#picker .queue-row').first().click();
+ assert.equal(await page.locator('iframe').count(),0);
  await frame.locator('#deck .card').last().waitFor();
  await frame.locator('.chip').first().click();
- assert.match(await frame.locator('#photo-readiness').innerText(), /0 photo-ready listings.*Black: 3\/4/);
+ assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing.*All Depop products.*Black: 3\/4/);
  if(process.env.SCREENSHOT_OUT&&width===390&&height===844)await page.screenshot({path:process.env.SCREENSHOT_OUT+'-review.png'});const box=await frame.locator('#deck').boundingBox();assert.ok(Math.abs(box.width-box.height)<1,'square preview');
  const yes=await frame.locator('#btn-yes').boundingBox();assert.ok(yes.y+yes.height<height-60,'approve visible above navigation');
  await frame.locator('#all-colors').click();await frame.locator('.color-dialog .chip').first().click();await frame.locator('#color-done').click();
  await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('2');await frame.locator('#crop-cancel').click();
  await frame.locator('#square-crop').click();await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('1.5');await frame.locator('#crop-save').click();
  await frame.locator('.chip').first().click();await frame.locator('#btn-yes').click();await page.waitForTimeout(400);
- assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing.*Black: 0\/4/);
+ assert.match(await frame.locator('#photo-readiness').innerText(), /2 photo-ready listings.*Black: 0\/4/);
  await frame.locator('#undo').click();await page.waitForTimeout(350);
- assert.match(await frame.locator('#photo-readiness').innerText(), /0 photo-ready listings.*Black: 3\/4/);
+ assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing.*All Depop products.*Black: 3\/4/);
  fail=true;await frame.locator('#btn-yes').click();await page.waitForTimeout(350);
- assert.match(await frame.locator('#photo-readiness').innerText(), /0 photo-ready listings/);
+ assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing/);
  assert.equal(decisions[0].background_mode,'crop');assert.equal(decisions[0].crop_zoom,1.5);assert.equal(decisions[0].variant_id,1);
+ await frame.locator('#review-products').click();await frame.locator('#picker .queue-row').first().waitFor();
+ assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing/);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);assert.deepEqual(errors,[]);
  console.log(`PASS ${width}x${height}: counter approval/undo/failure/reserved batch, square, visible actions, crop persistence, no overflow/errors`);await page.close();
 }
