@@ -9,7 +9,7 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  const page=await browser.newPage({viewport:{width,height},isMobile:true,hasTouch:true});const errors=[];const decisions=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async r=>{const u=new URL(r.request().url());const path=u.pathname;
- if(path.endsWith('.html')||path.endsWith('.css'))return r.fulfill({contentType:path.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL(path.slice(1),root))});
+ if(path.endsWith('.html')||path.endsWith('.css')||path.endsWith('.js'))return r.fulfill({contentType:path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL(path.slice(1),root))});
  if(path==='/depop/photo-review/300')return r.fulfill({json:{product_title:'KKXIU slouchy hobo',variants:[{id:1,color:'Black',variant_key:'black'}],photos:[{id:10,kind:'review',status:'pending',variant_id:1,image_url:'/bag.svg',crop_zoom:1},{id:11,kind:'review',status:'pending',variant_id:1,image_url:'/bag.svg'}]}});
  if(path.endsWith('/decision')){decisions.push(r.request().postDataJSON());return r.fulfill({json:{}})}
  if(path==='/bag.svg')return r.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="500" height="800"><rect width="500" height="800" fill="gray"/></svg>'});
@@ -23,7 +23,9 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  await frame.locator('#deck .card').last().waitFor();
  const box=await frame.locator('#deck').boundingBox();assert.ok(Math.abs(box.width-box.height)<1,'square preview');
  const yes=await frame.locator('#btn-yes').boundingBox();assert.ok(yes.y+yes.height<height-60,'approve visible above navigation');
- await frame.locator('#square-crop').click();await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('1.5');
+ await frame.locator('#all-colors').click();await frame.locator('.color-dialog .chip').first().click();await frame.locator('#color-done').click();
+ await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('2');await frame.locator('#crop-cancel').click();
+ await frame.locator('#square-crop').click();await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('1.5');await frame.locator('#crop-save').click();
  await frame.locator('.chip').first().click();await frame.locator('#btn-yes').click();await page.waitForTimeout(400);
  assert.equal(decisions[0].background_mode,'crop');assert.equal(decisions[0].crop_zoom,1.5);assert.equal(decisions[0].variant_id,1);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);assert.deepEqual(errors,[]);

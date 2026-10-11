@@ -17,7 +17,7 @@
     summary{font-weight:600;cursor:pointer;min-height:30px}code{word-break:break-all;color:#eef7f1}ol{padding-left:22px}
   </style>
   <script defer src="/phone-import.js"></script>
-</head>
+<link rel="stylesheet" href="mobile-workflows.css"><style>body{background:#0c1014;padding:16px 14px}h1{font-size:24px}form,details{background:#14191f;border-color:#303841;margin:14px 0}button{background:#168777;color:white}input{background:#10151b;border-color:#303841}p,li{font-size:13px}</style></head>
 <body><main>
   <a id="back" href="/mobile.html">← AUTOZS Mobile</a>
   <h1>Import a product</h1>
@@ -25,6 +25,7 @@
   <form id="import-form">
     <label for="source-url">Home Depot product link</label>
     <input id="source-url" type="url" inputmode="url" autocomplete="off" placeholder="https://www.homedepot.com/p/…" required>
+    <button id="paste-link" type="button">Paste link</button>
     <button id="submit" type="submit">Save draft</button>
     <p id="result" role="status" aria-live="polite"></p>
   </form>
@@ -42,4 +43,4 @@
     <button id="copy-prefix" type="button">Copy URL prefix</button>
     <p>In Safari, open a Home Depot product, tap Share → Import to AUTOZS, then tap Save draft on the page that opens.</p>
   </details>
-</main></body></html>
+</main><script>document.getElementById("paste-link").onclick=async()=>{try{document.getElementById("source-url").value=await navigator.clipboard.readText()}catch{document.getElementById("source-url").focus();document.getElementById("result").textContent="Touch and hold the link field, then choose Paste."}};</script></body></html>

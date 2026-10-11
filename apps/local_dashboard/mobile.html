@@ -832,6 +832,7 @@
     }
   </style>
   <link rel="stylesheet" href="mobile-compact.css" />
+<link rel="stylesheet" href="mobile-workflows.css" />
 </head>
 <body>
   <main class="shell">
@@ -957,13 +958,14 @@
       </div>
     </section>
 
+    <section id="listings-view" hidden></section>
     <section class="photo-review-shell" id="photo-review-view" aria-label="Depop photo review">
       <iframe class="photo-review-frame" id="photo-review-frame" title="Depop photo review"></iframe>
     </section>
   </main>
     <section class="segments" aria-label="Mobile view">
       <button class="segment active" data-view="stats" type="button">Overview</button>
-      <a class="segment" id="dashboard-link" href="/" aria-label="Open full listings dashboard">Listings ?</a>
+      <button class="segment" id="dashboard-link" data-view="listings" type="button">Listings</button>
       <button class="segment" data-view="queue" type="button">Queue</button>
       <button class="segment" data-view="chat" id="chat-segment" type="button">Messages</button>
     </section>
@@ -998,7 +1000,7 @@
     const businessTimeZone = "America/New_York";
     const storeKey = `autozs-mobile-store:${apiBase}`;
     const privacyKey = "autozs-mobile-privacy";
-    let selectedView = ["queue", "chat"].includes(params.get("view")) ? params.get("view") : "stats";
+    let selectedView = ["queue", "chat", "listings"].includes(params.get("view")) ? params.get("view") : "stats";
     let selectedStore = localStorage.getItem(storeKey) || "all";
     let privacyMode = localStorage.getItem(privacyKey) === "true";
     let pushConfig = null;
@@ -1275,7 +1277,9 @@
     }
 
     function setView(view) {
-      selectedView = ["queue", "chat"].includes(view) ? view : "stats";
+      selectedView = ["queue", "chat", "listings"].includes(view) ? view : "stats";
+      document.getElementById("listings-view").hidden = selectedView !== "listings";
+      if (selectedView === "listings") window.loadMobileListings?.();
       document.body.dataset.view = selectedView;
       document.body.classList.toggle("reviewing", selectedView === "chat" && document.body.dataset.marketplace === "depop");
       document.querySelectorAll("[data-view]").forEach((button) => {
@@ -1866,7 +1870,7 @@
           <div class="alert-actions">
             ${revision?.source_url ? `<a class="small-btn" href="${escAttr(revision.source_url)}" target="_blank" rel="noopener noreferrer">Open source</a>` : ""}
             ${canReviewRevision ? `<button class="small-btn accent" type="button" data-revision-approve="${escapeHtml(revision.id)}">Approve</button><button class="small-btn danger" type="button" data-revision-disapprove="${escapeHtml(revision.id)}">Disapprove</button>` : ""}
-            <a class="small-btn" href="${escAttr(dashboardUrl)}">View</a>
+            <a class="small-btn" href="${escAttr(dashboardUrl)}" data-job-detail="${escapeHtml(entry.id)}" data-job-kind="${escapeHtml(entry.kind)}">Details</a>
           </div>
         </article>
       `;
@@ -2542,5 +2546,6 @@
       return output;
     }
   </script>
+<script src="mobile-workflows.js"></script>
 </body>
 </html>
