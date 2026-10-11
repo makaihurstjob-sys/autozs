@@ -15,7 +15,7 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  if(path==='/bag.svg')return r.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="500" height="800"><rect width="500" height="800" fill="gray"/></svg>'});
  return r.fulfill({json:[]});});
  await page.goto('http://mobile.test/mobile.html?api=http://mobile.test');
- await page.evaluate(()=>{document.body.dataset.marketplace='depop';setView('chat')});
+ await page.evaluate(()=>{applyMarketplace('depop');setView('chat')});
  const frame=page.frameLocator('#photo-review-frame');
  await frame.locator('#picker').waitFor({state:'visible'}).catch(()=>{});
  // Exercise actual embedded review workflow with disposable responses.
