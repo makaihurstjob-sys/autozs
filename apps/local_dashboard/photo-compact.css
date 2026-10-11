@@ -1,0 +1,23 @@
+/* Square output remains the primary review surface, including short Safari viewports. */
+html[data-embedded="true"] header { padding:6px 8px; gap:6px; background:transparent; }
+html[data-embedded="true"] header > div:first-child { min-width:0; flex:1; }
+html[data-embedded="true"] header h1 { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:14px; }
+html[data-embedded="true"] header .sub { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; }
+html[data-embedded="true"] .pill { padding:4px 6px; font-size:10px; }
+html[data-embedded="true"] #undo { min-height:36px; padding:6px; }
+html[data-embedded="true"] main { padding:6px; gap:6px; overflow-y:auto; }
+html[data-embedded="true"] #deck { width:min(100%,calc(100dvh - 260px)); height:auto; aspect-ratio:1; }
+.crop-toolbar { display:flex; width:min(420px,100%); gap:8px; flex:none; }
+.crop-toolbar button { flex:1; min-height:44px; font-size:13px; }
+#square-crop[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
+#deck::after { content:'1:1'; position:absolute; top:8px; left:8px; z-index:4; background:#111b; border-radius:5px; padding:3px 6px; font-size:11px; pointer-events:none; }
+html[data-embedded="true"] #variants { width:100%; padding:0; gap:6px; }
+html[data-embedded="true"] .chip { width:58px; padding:3px; border-radius:9px; }
+html[data-embedded="true"] .chip img { height:42px; }
+html[data-embedded="true"] .actions { width:100%; flex-wrap:wrap; gap:6px; }
+html[data-embedded="true"] .actions .round { flex:1; width:auto; height:44px; border-radius:10px; font-size:14px; }
+html[data-embedded="true"] #expand-toggle { order:3; padding:4px 8px; min-height:32px; font-size:11px; }
+html[data-embedded="true"] #ai-expand { display:none; }
+html[data-embedded="true"] #hint { font-size:10px; min-height:0; margin:0; }
+html[data-embedded="true"] .crop-controls { width:100%; min-height:30px; }
+html[data-embedded="true"] .card .meta { padding:4px 6px; font-size:10px; }

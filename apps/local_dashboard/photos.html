@@ -278,7 +278,8 @@
         .card img, .chip img { background: #f2f6f4; }
       }
     </style>
-  </head>
+  <link rel="stylesheet" href="photo-compact.css" />
+</head>
   <body>
     <header>
       <div>
@@ -292,16 +293,14 @@
 
     <main>
       <div id="deck"></div>
+      <div class="crop-toolbar"><button id="square-crop" type="button" aria-pressed="true">Square crop</button><button id="crop-toggle" type="button">Adjust crop</button></div>
+      <div class="crop-controls" id="crop-controls"><span>?</span><input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-label="Crop zoom" /><span>+</span></div>
       <div id="variants"></div>
       <div class="actions">
-        <button class="round no" id="btn-no" title="Reject (left arrow)">&#10005;</button>
-        <button id="crop-toggle" type="button">Adjust crop</button>
+        <button class="round no" id="btn-no" title="Reject (left arrow)">&#10005; Reject</button>
         <button id="expand-toggle" type="button">Expand background</button>
         <button id="ai-expand" type="button" disabled title="Experimental: blocked until OAuth generation supports pixel-locked masking">AI Expand · experimental</button>
-        <button class="round yes" id="btn-yes" title="Approve (right arrow)">&#10003;</button>
-      </div>
-      <div class="crop-controls" id="crop-controls">
-        <span>−</span><input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-label="Crop zoom" /><span>+</span>
+        <button class="round yes" id="btn-yes" title="Approve (right arrow)">&#10003; Approve</button>
       </div>
       <div id="hint"></div>
       <div id="empty">
@@ -494,6 +493,7 @@
         if (next) deck.append(makeCard(next, true));
         deck.append(makeCard(queue[0], false));
         const currentMode = cropState(queue[0]).mode;
+        document.getElementById("square-crop").setAttribute("aria-pressed", String(currentMode === "crop"));
         document.getElementById("expand-toggle").classList.toggle("active", currentMode === "blur");
         document.getElementById("expand-toggle").textContent = currentMode === "blur" ? "Use square crop" : "Expand background";
         // A pending photo that already carries a variant was matched through its
@@ -749,6 +749,16 @@
         }
       }
 
+      document.getElementById("square-crop").addEventListener("click", () => {
+        if (!queue.length) return;
+        cropState(queue[0]).mode = "crop";
+        render();
+        hintEl.textContent = "1:1 square crop. Adjust crop to position and zoom.";
+      });
+      new ResizeObserver(() => {
+        const img = deck.lastElementChild?.querySelector("img.photo");
+        if (img && queue.length) applyCrop(img, queue[0]);
+      }).observe(deck);
       document.getElementById("btn-yes").addEventListener("click", () => decide("approved"));
       document.getElementById("btn-no").addEventListener("click", () => decide("rejected"));
       document.getElementById("crop-toggle").addEventListener("click", () => {

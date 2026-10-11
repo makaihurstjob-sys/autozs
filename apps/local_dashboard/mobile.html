@@ -831,6 +831,7 @@
       .segment { font-size: 12px; }
     }
   </style>
+  <link rel="stylesheet" href="mobile-compact.css" />
 </head>
 <body>
   <main class="shell">
@@ -840,7 +841,7 @@
         <div class="market-row">
           <div class="market-switch" id="market-switch" role="group" aria-label="Marketplace">
             <button type="button" data-market="ebay" aria-label="eBay">ebay</button>
-            <button type="button" data-market="depop" aria-label="Depop">d</button>
+            <button type="button" data-market="depop" aria-label="Depop">depop</button>
           </div>
         </div>
         <div class="store-row">
@@ -863,14 +864,9 @@
       </div>
     </section>
 
-    <a class="dashboard-banner" id="dashboard-link" href="/">Dashboard</a>
-    <a class="dashboard-banner" id="phone-import-link" href="/phone-import.html">Import a Home Depot product</a>
+    <a class="dashboard-banner" id="phone-import-link" href="/phone-import.html">+ Import</a>
 
-    <section class="segments" aria-label="Mobile view">
-      <button class="segment active" data-view="stats" type="button">Stats</button>
-      <button class="segment" data-view="queue" type="button">Worker Queue</button>
-      <button class="segment" data-view="chat" id="chat-segment" type="button">Messages</button>
-    </section>
+
 
     <div class="error" id="error-box"></div>
 
@@ -965,6 +961,12 @@
       <iframe class="photo-review-frame" id="photo-review-frame" title="Depop photo review"></iframe>
     </section>
   </main>
+    <section class="segments" aria-label="Mobile view">
+      <button class="segment active" data-view="stats" type="button">Overview</button>
+      <a class="segment" id="dashboard-link" href="/" aria-label="Open full listings dashboard">Listings ?</a>
+      <button class="segment" data-view="queue" type="button">Queue</button>
+      <button class="segment" data-view="chat" id="chat-segment" type="button">Messages</button>
+    </section>
 
   <div class="notification-modal" id="notification-modal" hidden>
     <div class="notification-panel" role="dialog" aria-modal="true" aria-labelledby="notification-title">
@@ -1274,6 +1276,8 @@
 
     function setView(view) {
       selectedView = ["queue", "chat"].includes(view) ? view : "stats";
+      document.body.dataset.view = selectedView;
+      document.body.classList.toggle("reviewing", selectedView === "chat" && document.body.dataset.marketplace === "depop");
       document.querySelectorAll("[data-view]").forEach((button) => {
         button.classList.toggle("active", button.dataset.view === selectedView);
       });

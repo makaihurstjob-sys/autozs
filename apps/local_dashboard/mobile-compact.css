@@ -1,0 +1,46 @@
+:root, :root[data-marketplace="depop"], body[data-marketplace="depop"] { --bg:#0c1014; --panel:#14191f; --panel-2:#191f26; --line:#303841; --control-bg:#10151b; --card-bg:#14191f; --text:#f4f7fa; --muted:#a7b1bc; --muted-2:#85909c; }
+.shell { max-width:600px; padding:12px 12px calc(84px + env(safe-area-inset-bottom)); }
+.hero { position:relative; display:block; margin-bottom:10px; padding-top:42px; }
+.logo { position:absolute; top:0; left:0; width:auto; height:32px; background:none; box-shadow:none; }
+.logo img { width:32px; height:32px; }
+.logo::after { content:'AUTOZS'; margin-left:6px; font-size:20px; font-weight:850; }
+.logo { display:flex; }
+.top-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.market-row { margin:0; justify-content:stretch; }
+.market-switch { width:100%; height:44px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.market-switch button { font-size:14px; }
+.market-switch button.active { background:var(--accent-2); border-radius:10px; }
+.store-row { display:block; }
+.store-picker { min-height:44px; border-radius:12px; font-size:14px; padding-left:10px; }
+#privacy-button, #notify-button { position:absolute; top:0; height:36px; min-width:36px; }
+#privacy-button { right:42px; } #notify-button { right:0; }
+.status-row { position:absolute; top:9px; right:88px; font-size:11px; gap:4px; }
+.worker-pill { display:none; }
+.dashboard-banner { display:inline-flex; min-height:44px; padding:8px 12px; margin:0 0 10px; border-radius:10px; font-size:14px; align-items:center; width:auto; }
+#dashboard-link { background:transparent; border:1px solid var(--line); font-size:12px; color:var(--muted); }
+#phone-import-link { float:right; }
+.segments { position:fixed; bottom:0; left:50%; transform:translateX(-50%); width:min(100%,600px); z-index:30; margin:0; padding:8px 10px calc(8px + env(safe-area-inset-bottom)); border-radius:0; background:#11171f; border:0; border-top:1px solid var(--line); gap:6px; }
+.segment { min-height:48px; border-radius:10px; font-size:13px; }
+.stats-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.stat-card { min-height:68px; padding:10px; border-radius:12px; }
+.stat-card label { font-size:11px; } .stat-card strong,.stat-card.money strong { font-size:24px; }
+.mobile-calendar { margin-top:10px; }
+.worker-health { padding:8px 10px; gap:8px; margin-top:8px; }
+.health-lamp { width:10px; height:10px; } .worker-health strong { font-size:13px; } .worker-health span { font-size:11px; }
+.chat-item { padding:10px 12px; border-radius:12px; margin-bottom:6px; }
+.chat-item-subject { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-item-preview { -webkit-line-clamp:1; font-size:12px; }
+.photo-review-shell { margin:0; }
+body.reviewing #worker-health, body.reviewing #dashboard-link, body.reviewing #phone-import-link { display:none; }
+body.reviewing .shell { height:calc(100dvh - 72px - env(safe-area-inset-bottom)); padding-bottom:0; display:flex; flex-direction:column; }
+body.reviewing .hero { flex:none; }
+body.reviewing .photo-review-shell.visible { flex:1; min-height:0; display:flex; }
+body.reviewing .photo-review-frame { width:100%; height:100%; min-height:0; border:0; }
+@media(max-width:350px) { .logo::after { font-size:17px; } #api-status { max-width:44px; overflow:hidden; white-space:nowrap; } }
+
+.segments { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); }
+.segments #dashboard-link { display:flex; align-items:center; justify-content:center; min-height:48px; margin:0; padding:4px; text-decoration:none; font-size:12px; border:0; }
+body.reviewing .segments #dashboard-link { display:flex; }
+body[data-view="chat"][data-marketplace="ebay"] #stats-view { display:grid !important; margin-bottom:10px; }
+body[data-view="chat"][data-marketplace="ebay"] .stat-card { display:none; }
+body[data-view="chat"][data-marketplace="ebay"] .stat-card:has(#active-count),body[data-view="chat"][data-marketplace="ebay"] .stat-card:has(#scheduled-count),body[data-view="chat"][data-marketplace="ebay"] .stat-card:has(#drafts-count) { display:block; }
