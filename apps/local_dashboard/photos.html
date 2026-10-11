@@ -293,6 +293,7 @@
     </header>
 
     <main>
+      <div id="photo-readiness" role="status" aria-live="polite" hidden></div>
       <div id="deck"></div>
       <div class="crop-toolbar"><button id="square-crop" type="button" aria-pressed="true">Square crop</button><button id="crop-toggle" type="button">Adjust crop</button></div>
       <div class="crop-controls" id="crop-controls"><span>?</span><input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-label="Crop zoom" /><span>+</span></div>
@@ -342,6 +343,7 @@
 
       let queue = [];
       let variants = [];
+      let readinessData = null;
       let selectedVariantId = null;
       let total = 0;
       let done = 0;
@@ -409,6 +411,7 @@
         }
         const data = await api(`/depop/photo-review/${productId}`);
         variants = data.variants;
+        await refreshReadiness(data);
         allVariationPhotos = data.photos.filter((p) => p.kind === "variation");
         // Variation photos already know their colour, so only the unattributed
         // review photos need a human decision.
@@ -421,6 +424,41 @@
           `${variants.length} variation(s) - swipe review photos onto a colour`;
         renderChips();
         render();
+      }
+
+      async function refreshReadiness(data) {
+        const el = document.getElementById("photo-readiness");
+        el.hidden = false;
+        try {
+          const [review, jobs] = await Promise.all([
+            data ? Promise.resolve(data) : api(`/depop/photo-review/${productId}`),
+            api("/depop/jobs?limit=1000"),
+          ]);
+          if (jobs.length >= 1000) throw new Error("Queue history exceeds counter limit");
+          readinessData = { review, jobs };
+          renderReadiness();
+        } catch (error) {
+          readinessData = null;
+          el.textContent = "Photo-ready count unavailable";
+        }
+      }
+
+      function renderReadiness() {
+        if (!readinessData) return;
+        const { review, jobs } = readinessData;
+        let ready = 0;
+        let progress = "";
+        for (const base of review.variants.filter(v => !v.variant_key.includes("::batch-"))) {
+          const count = review.photos.filter(p => p.status === "approved" && p.variant_id === base.id).length;
+          for (let index = 1; index <= Math.floor(count / 4); index++) {
+            const variant = index === 1 ? base : review.variants.find(v => v.variant_key === `${base.variant_key}::batch-${index}`);
+            const used = variant && (variant.depop_listing_id || jobs.some(j => j.variant_id === variant.id && (j.status !== "cancelled" || j.attempts > 0)));
+            if (!used) ready++;
+          }
+          if (base.id === selectedVariantId) progress = `${base.color || base.variant_key}: ${count % 4}/4 toward next set`;
+        }
+        document.getElementById("photo-readiness").textContent = `${ready} photo-ready listing${ready === 1 ? "" : "s"} ? This product` +
+          (progress ? ` ? ${progress}` : "") + " ? Downloads and listing checks still apply";
       }
 
       /** Amazon renders any stored size on demand, so ask for a crisp chip-sized
@@ -437,6 +475,7 @@
       let allVariationPhotos = [];
 
       function renderChips() {
+        renderReadiness();
         chipsEl.innerHTML = "";
         variants.forEach((variant, index) => {
           const chip = document.createElement("button");
@@ -718,6 +757,7 @@
           history.push({ photo, status, variantId, crop: { ...crop } });
           queue.shift();
           done += 1;
+          await refreshReadiness();
         } catch (error) {
           hintEl.textContent = `Could not save: ${error.message}`;
         } finally {
@@ -744,6 +784,7 @@
           });
           queue.unshift(last.photo);
           done = Math.max(0, done - 1);
+          await refreshReadiness();
         } catch (error) {
           hintEl.textContent = `Undo failed: ${error.message}`;
         } finally {
