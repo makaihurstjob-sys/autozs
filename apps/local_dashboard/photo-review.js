@@ -1,3 +1,31 @@
+window.readDepopPhotoReadiness = async function(api, data) {
+          const [products, jobs] = await Promise.all([api("/depop/photo-queue"), api("/depop/jobs?limit=1000")]);
+          if (jobs.length >= 1000) throw new Error("Queue history exceeds counter limit");
+          const reviews = [];
+          // Bound concurrency so a large catalog does not overwhelm the API.
+          for (let index = 0; index < products.length; index += 6) {
+            reviews.push(...await Promise.all(products.slice(index, index + 6).map(item =>
+              data && item.product_id === data.product_id ? Promise.resolve(data) : api(`/depop/photo-review/${item.product_id}`))));
+          }
+          if (data && !reviews.some(r => r.product_id === data.product_id)) reviews.push(data);
+          return { reviews, jobs };
+
+};
+window.countDepopPhotoReadiness = function({reviews, jobs}, productId, selectedVariantId) {
+        let ready = 0;
+        let progress = "";
+        for (const review of reviews) for (const base of review.variants.filter(v => !v.variant_key.includes("::batch-"))) {
+          const count = review.photos.filter(p => p.status === "approved" && p.variant_id === base.id).length;
+          for (let index = 1; index <= Math.floor(count / 4); index++) {
+            const variant = index === 1 ? base : review.variants.find(v => v.variant_key === `${base.variant_key}::batch-${index}`);
+            const used = variant && (variant.depop_listing_id || jobs.some(j => j.variant_id === variant.id && (j.status !== "cancelled" || j.attempts > 0)));
+            if (!used) ready++;
+          }
+          if (review.product_id === productId && base.id === selectedVariantId) progress = `${base.color || base.variant_key}: ${count % 4}/4 next set`;
+        }
+
+ return {ready, progress};
+};
 // Shared photo review controller. Queries and dialogs stay within its mount.
 window.mountPhotoReview = function(root, options = {}) {
   const lifetime = new AbortController();
@@ -135,17 +163,9 @@ window.mountPhotoReview = function(root, options = {}) {
         const el = document.getElementById("photo-readiness");
         el.hidden = false;
         try {
-          const [products, jobs] = await Promise.all([api("/depop/photo-queue"), api("/depop/jobs?limit=1000")]);
-          if (jobs.length >= 1000) throw new Error("Queue history exceeds counter limit");
-          const reviews = [];
-          // Bound concurrency so a large catalog does not overwhelm the API.
-          for (let index = 0; index < products.length; index += 6) {
-            reviews.push(...await Promise.all(products.slice(index, index + 6).map(item =>
-              data && item.product_id === data.product_id ? Promise.resolve(data) : api(`/depop/photo-review/${item.product_id}`))));
-          }
-          if (data && !reviews.some(r => r.product_id === data.product_id)) reviews.push(data);
-          readinessData = { reviews, jobs };
+          readinessData = await globalThis.readDepopPhotoReadiness(api, data);
           renderReadiness();
+          globalThis.dispatchEvent(new CustomEvent("depop-readiness", {detail: globalThis.countDepopPhotoReadiness(readinessData).ready}));
         } catch (error) {
           readinessData = null;
           el.textContent = "Photo-ready count unavailable";
@@ -155,17 +175,7 @@ window.mountPhotoReview = function(root, options = {}) {
       function renderReadiness() {
         if (!readinessData) return;
         const { reviews, jobs } = readinessData;
-        let ready = 0;
-        let progress = "";
-        for (const review of reviews) for (const base of review.variants.filter(v => !v.variant_key.includes("::batch-"))) {
-          const count = review.photos.filter(p => p.status === "approved" && p.variant_id === base.id).length;
-          for (let index = 1; index <= Math.floor(count / 4); index++) {
-            const variant = index === 1 ? base : review.variants.find(v => v.variant_key === `${base.variant_key}::batch-${index}`);
-            const used = variant && (variant.depop_listing_id || jobs.some(j => j.variant_id === variant.id && (j.status !== "cancelled" || j.attempts > 0)));
-            if (!used) ready++;
-          }
-          if (review.product_id === productId && base.id === selectedVariantId) progress = `${base.color || base.variant_key}: ${count % 4}/4 next set`;
-        }
+        const {ready, progress} = globalThis.countDepopPhotoReadiness(readinessData, productId, selectedVariantId);
         document.getElementById("photo-readiness").textContent = `${ready} photo-ready listing${ready === 1 ? "" : "s"} | All Depop products` +
           (progress ? ` | ${progress}` : "");
         document.getElementById("photo-readiness").title = "Four approved photos of the same color per listing. Downloads and listing checks still apply.";

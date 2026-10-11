@@ -19,6 +19,9 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  return r.fulfill({json:[]});});
  await page.goto('http://mobile.test/mobile.html?api=http://mobile.test');
  await page.evaluate(()=>{applyMarketplace('depop');setView('chat')});
+ await page.evaluate(()=>refreshDepop(new AbortController().signal));
+ assert.equal(await page.locator('#drafts-label').innerText(),'Ready');
+ assert.equal(await page.locator('#drafts-count').innerText(),'1');
  const frame=page.locator('#depop-review');
  await frame.locator('#picker .queue-row').first().click();
  assert.equal(await page.locator('iframe').count(),0);
@@ -32,6 +35,7 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  await frame.locator('#square-crop').click();await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('1.5');await frame.locator('#crop-save').click();
  await frame.locator('.chip').first().click();await frame.locator('#btn-yes').click();await page.waitForTimeout(400);
  assert.match(await frame.locator('#photo-readiness').innerText(), /2 photo-ready listings.*Black: 0\/4/);
+ assert.equal(await page.locator('#drafts-count').innerText(),'2');
  await frame.locator('#undo').click();await page.waitForTimeout(350);
  assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing.*All Depop products.*Black: 3\/4/);
  fail=true;await frame.locator('#btn-yes').click();await page.waitForTimeout(350);
@@ -39,6 +43,8 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  assert.equal(decisions[0].background_mode,'crop');assert.equal(decisions[0].crop_zoom,1.5);assert.equal(decisions[0].variant_id,1);
  await frame.locator('#review-products').click();await frame.locator('#picker .queue-row').first().waitFor();
  assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing/);
+ await page.evaluate(()=>applyMarketplace('ebay'));
+ assert.equal(await page.locator('#drafts-label').innerText(),'Drafts');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);assert.deepEqual(errors,[]);
  console.log(`PASS ${width}x${height}: counter approval/undo/failure/reserved batch, square, visible actions, crop persistence, no overflow/errors`);await page.close();
 }

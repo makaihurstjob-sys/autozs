@@ -878,7 +878,7 @@
       <div class="stat-card"><label>Queued</label><strong id="scheduled-count">-</strong></div>
       <div class="stat-card money"><label>1W Revenue</label><strong id="revenue-7d">-</strong></div>
       <div class="stat-card"><label>Orders</label><strong id="orders-count">-</strong></div>
-      <div class="stat-card"><label>Drafts</label><strong id="drafts-count">-</strong></div>
+      <div class="stat-card"><label id="drafts-label">Drafts</label><strong id="drafts-count">-</strong></div>
       <div class="stat-card"><label id="views-30d-label">30D Views</label><strong id="views-30d">-</strong></div>
       <div class="stat-card ebay-period-stat"><label>1W Views</label><strong id="views-7d">-</strong></div>
       <div class="stat-card ebay-period-stat"><label>Impressions</label><strong id="traffic-impressions">-</strong></div>
@@ -1229,17 +1229,19 @@
         api("/depop/variants", { signal }),
         api("/depop/jobs", { signal }),
         api("/depop/accounts", { signal }),
+        readDepopPhotoReadiness(path => api(path, {signal})),
       ]);
       if (document.body.dataset.marketplace !== "depop") return;
 
       const failures = results.filter((result) => result.status === "rejected");
-      const [workers, variants, jobs, stores] = results.map((result) => result.status === "fulfilled" ? result.value : null);
+      const [workers, variants, jobs, stores, readiness] = results.map((result) => result.status === "fulfilled" ? result.value : null);
       setError(failures.length
         ? `${failures.length} Depop dashboard section${failures.length === 1 ? "" : "s"} could not refresh.`
         : "");
       if (workers) updateWorker(workers);
       if (stores) updateStores(stores);
       if (variants && jobs) updateDepopStats({ variants, jobs });
+      setText("drafts-count", readiness ? countDepopPhotoReadiness(readiness).ready : "-");
     }
 
     async function api(path, options = {}) {
@@ -1569,6 +1571,8 @@
 
     function applyMarketplaceStatLabels(marketplace) {
       const depop = marketplace === "depop";
+      setText("drafts-label", depop ? "Ready" : "Drafts");
+      document.getElementById("drafts-count").parentElement.title = depop ? "Overall photo-ready listings across all Depop products; downloads and listing checks still apply." : "Draft products";
       setText("views-30d-label", depop ? "Views" : "30D Views");
       document.querySelectorAll(".ebay-period-stat").forEach((card) => { card.style.display = depop ? "none" : "grid"; });
       document.querySelectorAll(".depop-engagement-stat").forEach((card) => { card.style.display = depop ? "grid" : "none"; });
@@ -1640,7 +1644,7 @@
 
       setText("active-count", liveVariants.length);
       setText("scheduled-count", scheduledJobs.length);
-      setText("drafts-count", Math.max(0, scopedVariants.length - liveVariants.length));
+
 
       const views = scopedVariants.reduce((sum, item) => sum + Number(item.views_count || 0), 0);
       const clicks = scopedVariants.reduce((sum, item) => sum + Number(item.clicks_count || 0), 0);
@@ -2548,6 +2552,7 @@
   </script>
 <script src="photo-review.js"></script>
 <script src="depop-review.js"></script>
+<script>window.addEventListener("depop-readiness", event => { if (document.body.dataset.marketplace === "depop") setText("drafts-count", event.detail); });</script>
 <script src="mobile-workflows.js"></script>
 </body>
 </html>
