@@ -21,7 +21,7 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  // Exercise actual embedded review workflow with disposable responses.
  await page.locator('#photo-review-frame').evaluate(f=>f.src='http://mobile.test/photos.html?embedded=1&product_id=300&api=http://mobile.test');
  await frame.locator('#deck .card').last().waitFor();
- const box=await frame.locator('#deck').boundingBox();assert.ok(Math.abs(box.width-box.height)<1,'square preview');
+ if(process.env.SCREENSHOT_OUT&&width===390&&height===844)await page.screenshot({path:process.env.SCREENSHOT_OUT+'-review.png'});const box=await frame.locator('#deck').boundingBox();assert.ok(Math.abs(box.width-box.height)<1,'square preview');
  const yes=await frame.locator('#btn-yes').boundingBox();assert.ok(yes.y+yes.height<height-60,'approve visible above navigation');
  await frame.locator('#all-colors').click();await frame.locator('.color-dialog .chip').first().click();await frame.locator('#color-done').click();
  await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('2');await frame.locator('#crop-cancel').click();

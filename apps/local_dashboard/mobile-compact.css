@@ -44,3 +44,31 @@ body.reviewing .segments #dashboard-link { display:flex; }
 body[data-view="chat"][data-marketplace="ebay"] #stats-view { display:grid !important; margin-bottom:10px; }
 body[data-view="chat"][data-marketplace="ebay"] .stat-card { display:none; }
 body[data-view="chat"][data-marketplace="ebay"] .stat-card:has(#active-count),body[data-view="chat"][data-marketplace="ebay"] .stat-card:has(#scheduled-count),body[data-view="chat"][data-marketplace="ebay"] .stat-card:has(#drafts-count) { display:block; }
+
+/* Fidelity pass: shared mockup rhythm, not miniature desktop controls. */
+:root {font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;--accent:#13d5c2;--accent-2:#00bfa9;--bg-glow:transparent;}
+:root[data-marketplace="depop"],body[data-marketplace="depop"] {--accent:#ff5363;--accent-2:#f03547;--bg-glow:transparent;}
+body{background:var(--bg);font-weight:400;}.shell{padding-top:14px;}
+.hero{padding-top:44px;margin-bottom:14px;}.logo{font-size:23px;font-weight:800;letter-spacing:-.8px;gap:0;}.logo span{color:var(--accent)}.logo::after{content:none;}
+.status-row{left:142px;right:auto;top:10px;font-weight:400;font-size:10px;}.status-dot{width:7px;height:7px;}
+#privacy-button{right:38px;width:32px;min-width:32px;height:32px;border:0;background:transparent;color:var(--muted);}
+#notify-button{background:transparent;border:0;height:32px;min-width:32px;}.icon-btn svg{width:20px;height:20px;stroke-width:1.8;}
+.market-switch{height:40px;border-radius:10px;}.market-switch button{font-size:13px;font-weight:650;}.market-switch button.active{border-radius:9px;}.store-picker{min-height:40px;font-size:13px;font-weight:650;}
+.mobile-page-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;}.mobile-page-heading h1{font-size:24px;letter-spacing:-.6px;margin:0;font-weight:750;}
+#phone-import-link{float:none;min-height:36px;padding:8px 14px;margin:0;background:var(--accent-2);border:0;font-size:13px;font-weight:650;box-shadow:none;}
+body.reviewing .mobile-page-heading{display:none;}
+.stats-grid{gap:8px;}.stat-card{min-height:72px;display:flex;flex-direction:column-reverse;align-items:center;justify-content:center;padding:8px;box-shadow:none;border:1px solid var(--line);background:var(--panel);}.stat-card label{font-size:12px;text-transform:none;letter-spacing:0;font-weight:450;margin-top:4px;}.stat-card strong,.stat-card.money strong{font-size:25px;line-height:1.15;font-weight:700;}
+body:not(.statistics-expanded) .stat-card{display:none;}body:not(.statistics-expanded) .stat-card:has(#active-count),body:not(.statistics-expanded) .stat-card:has(#scheduled-count),body:not(.statistics-expanded) .stat-card:has(#drafts-count){display:flex;}
+.stat-card:has(#active-count){order:-3}.stat-card:has(#scheduled-count){order:-2}.stat-card:has(#drafts-count){order:-1}
+body:not(.statistics-expanded) #mobile-calendar{display:none;}#more-statistics{margin:10px 0;padding:6px 10px;min-height:36px;font-size:12px;color:var(--muted);width:100%;}
+body:not([data-view="stats"]) #more-statistics{display:none;}#listing-goal{padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-top:10px;font-size:13px;}#listing-goal[hidden]{display:none;}#listing-goal progress{width:100%;height:7px;display:block;margin-top:8px;accent-color:var(--accent);}
+body:not([data-view="stats"]) #listing-goal{display:none;}body[data-view="listings"] #worker-health{display:none;}
+.segments{background:#10151c;border-top:1px solid var(--line);padding-top:6px;gap:2px;}.segments .segment,.segments #dashboard-link{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:4px;min-height:52px;padding:4px;background:transparent;border:0;color:var(--muted);font-size:11px;font-weight:500;line-height:1.2;}.segments .segment.active,.segments #dashboard-link.active{color:var(--accent);background:transparent;box-shadow:none;}.segment svg{width:23px;height:23px;stroke-width:1.7;}
+.worker-health{border-radius:12px;background:var(--panel);}.health-lamp{width:9px!important;height:9px!important;box-shadow:none!important;}.worker-health strong{font-size:13px;font-weight:600;}.worker-health span{font-size:11px;font-weight:400;}
+.chat-list{gap:6px;}.chat-item{position:relative;padding-left:55px;border-left:1px solid var(--line);min-height:64px;box-shadow:none;}.chat-item::before{content:attr(data-initial);position:absolute;left:10px;top:13px;width:34px;height:34px;background:#315d80;border-radius:50%;display:grid;place-items:center;font-size:16px;}.chat-item-name{font-size:13px;font-weight:600;}.chat-item-subject{display:none;}.chat-item-time{font-size:10px;}.chat-item-preview{font-size:11px;margin-top:5px;font-weight:400;}.bubble{border-radius:14px;padding:10px 12px;font-size:14px;}.bubble.outbound-human{background:#008f85;}
+@media(max-width:350px){.logo{font-size:20px}.status-row{left:119px;}.mobile-page-heading h1{font-size:22px}}
+
+body:not(.statistics-expanded) .stat-card:not(:has(#active-count)):not(:has(#scheduled-count)):not(:has(#drafts-count)){display:none!important;}
+body[data-view="stats"][data-marketplace="ebay"] #chat-view{display:block;}.chat-list-heading{display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px;}.chat-list-heading h2{font-size:18px;margin:0;}.chat-list-heading button{background:none;color:var(--accent);border:0;font:inherit;font-size:12px;min-height:36px;}body[data-view="stats"] .chat-item:nth-of-type(n+5){display:none;}
+body[data-view="stats"] #chat-thread{display:none!important;}
+.detail-product{display:flex;align-items:center;gap:12px;margin:12px 0;}.detail-product img,.detail-product .product-placeholder{width:96px;height:96px;aspect-ratio:1;border-radius:10px;object-fit:cover;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center;color:var(--muted);font-size:12px;}.detail-product strong{font-size:16px;display:block;}.detail-product small{color:var(--muted);font-size:12px;display:block;margin:6px 0;}.detail-product .price{font-size:19px;color:var(--text);font-weight:650;}
