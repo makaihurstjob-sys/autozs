@@ -878,7 +878,7 @@
       <div class="stat-card"><label>Queued</label><strong id="scheduled-count">-</strong></div>
       <div class="stat-card money"><label>1W Revenue</label><strong id="revenue-7d">-</strong></div>
       <div class="stat-card"><label>Orders</label><strong id="orders-count">-</strong></div>
-      <div class="stat-card"><label id="drafts-label">Drafts</label><strong id="drafts-count">-</strong></div>
+      <div class="stat-card"><label id="drafts-label">Drafts</label><strong id="drafts-count">-</strong><small id="approved-week-note" hidden></small></div>
       <div class="stat-card"><label id="views-30d-label">30D Views</label><strong id="views-30d">-</strong></div>
       <div class="stat-card ebay-period-stat"><label>1W Views</label><strong id="views-7d">-</strong></div>
       <div class="stat-card ebay-period-stat"><label>Impressions</label><strong id="traffic-impressions">-</strong></div>
@@ -1241,7 +1241,7 @@
       if (workers) updateWorker(workers);
       if (stores) updateStores(stores);
       if (variants && jobs) updateDepopStats({ variants, jobs });
-      setText("drafts-count", readiness ? countDepopPhotoReadiness(readiness).ready : "-");
+      updateApprovedWeek(readiness ? countDepopPhotoReadiness(readiness).ready : null);
     }
 
     async function api(path, options = {}) {
@@ -1572,6 +1572,7 @@
     function applyMarketplaceStatLabels(marketplace) {
       const depop = marketplace === "depop";
       setText("drafts-label", depop ? "Approved" : "Drafts");
+      document.getElementById("approved-week-note").hidden = !depop;
       document.getElementById("drafts-count").parentElement.title = depop ? "Overall photo-ready listings across all Depop products; downloads and listing checks still apply." : "Draft products";
       setText("views-30d-label", depop ? "Views" : "30D Views");
       document.querySelectorAll(".ebay-period-stat").forEach((card) => { card.style.display = depop ? "none" : "grid"; });
@@ -1621,6 +1622,20 @@
       setText("scheduled-count", scheduledListings.length + pendingScheduledJobs.length);
       setText("orders-count", scopedOrders.length);
       setText("drafts-count", draftProducts.length);
+    }
+
+    function updateApprovedWeek(count) {
+      // Match the approved-batch scheduler default: one slot every two hours.
+      const perDay = 12;
+      const weeklyTarget = perDay * 7;
+      const known = Number.isFinite(count);
+      setText("drafts-count", `${known ? count : "-"}/${weeklyTarget}`);
+      setText("approved-week-note", known
+        ? (count >= weeklyTarget ? "Full week ready" : `${weeklyTarget - count} more for a week`)
+        : "Weekly target");
+      document.getElementById("drafts-count").parentElement.title =
+        `One week = ${weeklyTarget} listings at ${perDay}/day (one every two hours). ` +
+        "Counts approved unused four-photo sets across all Depop products. Downloads and listing checks still apply.";
     }
 
     function updateDepopStats({ variants, jobs }) {
@@ -2552,7 +2567,7 @@
   </script>
 <script src="photo-review.js"></script>
 <script src="depop-review.js"></script>
-<script>window.addEventListener("depop-readiness", event => { if (document.body.dataset.marketplace === "depop") setText("drafts-count", event.detail); });</script>
+<script>window.addEventListener("depop-readiness", event => { if (document.body.dataset.marketplace === "depop") updateApprovedWeek(event.detail); });</script>
 <script src="mobile-workflows.js"></script>
 </body>
 </html>

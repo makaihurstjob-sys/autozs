@@ -21,7 +21,13 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  await page.evaluate(()=>{applyMarketplace('depop');setView('chat')});
  await page.evaluate(()=>refreshDepop(new AbortController().signal));
  assert.equal(await page.locator('#drafts-label').innerText(),'Approved');
- assert.equal(await page.locator('#drafts-count').innerText(),'1');
+ assert.equal(await page.locator('#drafts-count').innerText(),'1/84');
+ assert.equal(await page.locator('#approved-week-note').innerText(),'83 more for a week');
+ await page.evaluate(()=>updateApprovedWeek(84));
+ assert.equal(await page.locator('#approved-week-note').innerText(),'Full week ready');
+ await page.evaluate(()=>updateApprovedWeek(null));
+ assert.equal(await page.locator('#drafts-count').innerText(),'-/84');
+ await page.evaluate(()=>refreshDepop(new AbortController().signal));
  const frame=page.locator('#depop-review');
  await frame.locator('#picker .queue-row').first().click();
  assert.equal(await page.locator('iframe').count(),0);
@@ -35,7 +41,7 @@ for(const [width,height] of [[320,568],[390,664],[390,844],[430,932]]){
  await frame.locator('#square-crop').click();await frame.locator('#crop-toggle').click();await frame.locator('#crop-zoom').fill('1.5');await frame.locator('#crop-save').click();
  await frame.locator('.chip').first().click();await frame.locator('#btn-yes').click();await page.waitForTimeout(400);
  assert.match(await frame.locator('#photo-readiness').innerText(), /2 photo-ready listings.*Black: 0\/4/);
- assert.equal(await page.locator('#drafts-count').innerText(),'2');
+ assert.equal(await page.locator('#drafts-count').innerText(),'2/84');
  await frame.locator('#undo').click();await page.waitForTimeout(350);
  assert.match(await frame.locator('#photo-readiness').innerText(), /1 photo-ready listing.*All Depop products.*Black: 3\/4/);
  fail=true;await frame.locator('#btn-yes').click();await page.waitForTimeout(350);

@@ -72,3 +72,7 @@ body:not(.statistics-expanded) .stat-card:not(:has(#active-count)):not(:has(#sch
 body[data-view="stats"][data-marketplace="ebay"] #chat-view{display:block;}.chat-list-heading{display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px;}.chat-list-heading h2{font-size:18px;margin:0;}.chat-list-heading button{background:none;color:var(--accent);border:0;font:inherit;font-size:12px;min-height:36px;}body[data-view="stats"] .chat-item:nth-of-type(n+5){display:none;}
 body[data-view="stats"] #chat-thread{display:none!important;}
 .detail-product{display:flex;align-items:center;gap:12px;margin:12px 0;}.detail-product img,.detail-product .product-placeholder{width:96px;height:96px;aspect-ratio:1;border-radius:10px;object-fit:cover;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center;color:var(--muted);font-size:12px;}.detail-product strong{font-size:16px;display:block;}.detail-product small{color:var(--muted);font-size:12px;display:block;margin:6px 0;}.detail-product .price{font-size:19px;color:var(--text);font-weight:650;}
+
+#approved-week-note { color:var(--muted); font-size:9px; line-height:1.25; margin-top:4px; text-align:center; }
+#approved-week-note[hidden] { display:none; }
+body[data-marketplace="depop"] .stat-card:has(#drafts-count) strong { font-size:clamp(18px,6vw,25px); white-space:nowrap; }
