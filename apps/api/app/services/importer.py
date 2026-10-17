@@ -1440,6 +1440,9 @@ def build_listing_readiness(db: Session, product_id: int, *, package: dict | Non
         "source_shipping": "supplier/source shipping",
     }
     missing_manual = [label for key, label in manual_labels.items() if not checks[key]]
+    brand = str(package.get("item_specifics", {}).get("Brand") or "").strip()
+    if re.sub(r"[^a-z0-9]", "", brand.lower()) in {"na", "none", "null", "unknown", "notavailable"}:
+        missing_manual.append("Verify actual manufacturer or confirmed unbranded status; supplier Brand is a placeholder.")
     from app.services.delivery_quotes import delivery_risk_reason
     delivery_risk = delivery_risk_reason(db, product_id)
     if delivery_risk:
