@@ -1883,6 +1883,10 @@ def mark_source_refresh_job_failed(
 
 @router.get("/products/capture-queue", response_model=SourceCaptureQueueRead)
 def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRead:
+    # A completed Depop import intentionally removes its unused eBay draft.
+    # Do not recapture that channel solely to recreate an eBay description or
+    # an Amazon shipping quote the Depop capture does not collect.
+    depop_product_ids = set(db.scalars(select(DepopListingVariant.product_id)).all())
     listed_product_ids = set(
         db.scalars(
             select(EbayListing.product_id).where(
@@ -1900,6 +1904,8 @@ def source_capture_queue(db: Session = Depends(get_db)) -> SourceCaptureQueueRea
     ).all()
     items: list[SourceCaptureQueueItem] = []
     for product in products:
+        if product.status == ProductStatus.paused.value and product.id in depop_product_ids:
+            continue
         # Capture capacity is for products that can become new listings. A live
         # or scheduled item may still lack locally downloaded images (for
         # example, after an eBay-first import), but recapturing it cannot grow
