@@ -91,10 +91,13 @@
     // Searchable Depop comboboxes filter their menu from a real input event.
     setControlledValue(input, wanted);
     await wait(250);
-    const filteredOptions = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)].filter(visible)
-      .filter((element) => !section || String(element.parentElement?.querySelector?.('p')?.textContent || "").trim().startsWith(`${section} >`));
-    const filtered = filteredOptions.find((element) => selectionKey(optionText(element)) === selectionKey(target))
-;
+    let filtered;
+    for (let attempt = 0; attempt < 20 && !filtered; attempt++) {
+      const filteredOptions = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)].filter(visible)
+        .filter((element) => !section || String(element.parentElement?.querySelector?.('p')?.textContent || "").trim().startsWith(`${section} >`));
+      filtered = filteredOptions.find((element) => selectionKey(optionText(element)) === selectionKey(target));
+      if (!filtered) await wait(250);
+    }
     if (filtered) filtered.click();
     await wait(150);
     return Boolean(filtered) && depopFieldMatches(idPrefix, wanted);
