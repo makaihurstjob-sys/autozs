@@ -7,6 +7,7 @@ const REPORT_SYNC_CONTEXT_KEY = "autozsEbayReportSyncContext";
 const REPORT_DOWNLOADS_KEY = "autozsEbayReportDownloads";
 const PRODUCT_CAPTURE_ALARM = "autozs-product-capture-poll";
 const PRODUCT_CAPTURE_LAST_OPENED_KEY = "autozsProductCaptureLastOpened";
+var productCaptureDispatchBusy = false;
 const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
 const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
 const LISTING_JOB_ALARM = "autozs-listing-job-poll";
@@ -534,6 +535,9 @@ async function sourceRefreshIsDueForSharedRunner() {
 }
 
 async function openNextProductCapture() {
+  if (productCaptureDispatchBusy) return;
+  productCaptureDispatchBusy = true;
+  try {
   if (!(await canRunAutozsSourceJobs())) return;
   if (await productCaptureRunnerTab()) return;
   if (await hasRunningSourceRefreshJob()) return;
@@ -563,6 +567,7 @@ async function openNextProductCapture() {
   runnerUrl.searchParams.set(AUTOZS_WORKER_OPENED_AT_PARAM, String(Date.now()));
   await chrome.storage.local.set({ [PRODUCT_CAPTURE_LAST_OPENED_KEY]: Date.now() });
   await chrome.tabs.create({ url: runnerUrl.href, active: false });
+  } finally { productCaptureDispatchBusy = false; }
 }
 
 function isSourceRefreshRunnerUrl(url) {

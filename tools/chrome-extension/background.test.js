@@ -245,6 +245,10 @@ async function runNativePcInputTest() {
   if (!captureTab || captureTab.active !== false || !/ea_auto_import=1/.test(captureTab.url)) {
     throw new Error(`Expected a background Home Depot capture runner, got ${JSON.stringify(createdTabs)}`);
   }
+  storage.autozsProductCaptureLastOpened = 0;
+  const beforeConcurrent = createdTabs.length;
+  await Promise.all([context.openNextProductCapture(),context.openNextProductCapture()]);
+  if (createdTabs.length !== beforeConcurrent+1) throw new Error("Concurrent alarms must create one capture tab");
   const claim = fetched.find(r => r.url.endsWith("/products/capture-queue/claim"));
   if (JSON.parse(claim.options.body).source_host) throw new Error("Supplier-specific claim starves Amazon queue");
   captureSourceUrl = "https://www.amazon.com/dp/B012345678";
