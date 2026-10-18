@@ -59,7 +59,7 @@
     return selectionKey(input?.value) === selectionKey(expected);
   }
 
-  async function selectCombobox(idPrefix, wanted) {
+  async function selectCombobox(idPrefix, wanted, section = "") {
     if (idPrefix === "colour") wanted = depopColour(wanted);
     if (!wanted) return true;
     const input = document.getElementById(`${idPrefix}-input`);
@@ -78,6 +78,7 @@
     const target = String(wanted).trim().toLowerCase();
     const options = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)]
       .filter(visible)
+      .filter((element) => !section || String(element.parentElement?.querySelector?.('p')?.textContent || "").trim().startsWith(`${section} >`))
       .filter((element) => !element.id?.endsWith("toggle-button"));
     const exact = options.find((element) => selectionKey(optionText(element)) === selectionKey(target));
     const partial = null;
@@ -90,7 +91,8 @@
     // Searchable Depop comboboxes filter their menu from a real input event.
     setControlledValue(input, wanted);
     await wait(250);
-    const filteredOptions = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)].filter(visible);
+    const filteredOptions = [...document.querySelectorAll(`#${idPrefix}-menu [role="option"]`)].filter(visible)
+      .filter((element) => !section || String(element.parentElement?.querySelector?.('p')?.textContent || "").trim().startsWith(`${section} >`));
     const filtered = filteredOptions.find((element) => selectionKey(optionText(element)) === selectionKey(target))
 ;
     if (filtered) filtered.click();
@@ -527,7 +529,7 @@
       ["condition", pkg.condition],
       ["colour", pkg.color],
     ]) {
-      const matched = await selectCombobox(field, value);
+      const matched = await selectCombobox(field, value, field === "group" && /\bwomen\b/i.test(pkg.title) ? "Women" : "");
       results.push(matched);
       if (!matched) unresolvedFields.push(field);
     }
