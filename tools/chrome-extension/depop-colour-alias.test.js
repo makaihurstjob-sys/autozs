@@ -1,0 +1,13 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+let source = fs.readFileSync(__dirname + '/depop-fill.js', 'utf8');
+source = source.slice(0, source.indexOf('  const task =')) + 'globalThis.colourForTest = depopColour; })();';
+const context = { URLSearchParams, location: { search: '' }, globalThis: {} };
+vm.runInNewContext(source, context);
+assert.equal(context.globalThis.colourForTest('Brown Leopard'), 'Brown');
+assert.equal(context.globalThis.colourForTest('Black'), 'Black');
+assert.equal(context.globalThis.colourForTest('Blue'), 'Blue');
+assert.equal(context.globalThis.colourForTest('Unrecognized Pattern'), 'Unrecognized Pattern');
+assert.match(source, /if \(idPrefix === "colour"\) wanted = depopColour\(wanted\)/);
+console.log('Depop colour alias preserves unknown labels and maps Brown Leopard to Brown');

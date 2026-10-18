@@ -44,6 +44,11 @@
 
   const selectionKey = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, "");
 
+  function depopColour(value) {
+    // Supplier pattern names are kept in the listing; Depop accepts base colours.
+    return selectionKey(value) === "brownleopard" ? "Brown" : value;
+  }
+
   function depopFieldMatches(field, wanted) {
     const input = document.getElementById(`${field}-input`);
     if (field === "colour" && input?.parentElement?.querySelectorAll) {
@@ -55,6 +60,7 @@
   }
 
   async function selectCombobox(idPrefix, wanted) {
+    if (idPrefix === "colour") wanted = depopColour(wanted);
     if (!wanted) return true;
     const input = document.getElementById(`${idPrefix}-input`);
     const toggle = document.getElementById(`${idPrefix}-toggle-button`);
@@ -514,13 +520,16 @@
     // Depop allows only one listbox open at a time. Running these concurrently
     // makes each toggle close the previous menu before its option is clicked.
     const results = [];
+    const unresolvedFields = [];
     for (const [field, value] of [
       ["group", pkg.category],
       ["brand", pkg.brand],
       ["condition", pkg.condition],
       ["colour", pkg.color],
     ]) {
-      results.push(await selectCombobox(field, value));
+      const matched = await selectCombobox(field, value);
+      results.push(matched);
+      if (!matched) unresolvedFields.push(field);
     }
     const usps = document.getElementById("usps__shipping");
     if (usps && !usps.checked) usps.click();
@@ -541,7 +550,7 @@
     const note = !photosVerified
       ? `Draft filled; photo upload completion is unverified. Post is blocked pending review.`
       : unresolved
-      ? `Draft filled with ${uploaded} photo(s); ${unresolved} dropdown(s) need review.`
+      ? `Draft filled with ${uploaded} photo(s); ${unresolved} dropdown(s) need review${unresolvedFields.length ? `: ${unresolvedFields.join(", ")}` : " (shipping or required values)"}.`
       : `Draft filled with ${uploaded} photo(s), listing details, and shipping. Review it, then post.`;
     if (unresolved || !photosVerified) await patchJob("needs_review", 90, note);
     showStatus(note);
