@@ -28,6 +28,7 @@ async function runNativePcInputTest() {
   let tabQueryResults = [];
   let runningListingJobs = [];
   let sourceRefreshJobs = [];
+  let captureSourceUrl = "https://www.homedepot.com/p/Test-Capture/123456";
   const reloadedTabs = [];
   const storage = { autozsWorkerMode: "operations" };
   const fetched = [];
@@ -70,7 +71,7 @@ async function runNativePcInputTest() {
           status: 200,
           json: async () => ({
             product_id: 44,
-            source_url: "https://www.homedepot.com/p/Test-Capture/123456",
+            source_url: captureSourceUrl,
           }),
         };
       }
@@ -244,6 +245,24 @@ async function runNativePcInputTest() {
   if (!captureTab || captureTab.active !== false || !/ea_auto_import=1/.test(captureTab.url)) {
     throw new Error(`Expected a background Home Depot capture runner, got ${JSON.stringify(createdTabs)}`);
   }
+  const claim = fetched.find(r => r.url.endsWith("/products/capture-queue/claim"));
+  if (JSON.parse(claim.options.body).source_host) throw new Error("Supplier-specific claim starves Amazon queue");
+  captureSourceUrl = "https://www.amazon.com/dp/B012345678";
+  storage.autozsProductCaptureLastOpened = 0;
+  await context.openNextProductCapture();
+  const amazonTab = createdTabs.at(-1);
+  if (!amazonTab.url.startsWith(captureSourceUrl) || !context.isProductCaptureRunnerUrl(amazonTab.url)
+      || !context.isAutomaticProductImportUrl(amazonTab.url)) throw new Error("Amazon capture must open and close as a managed runner");
+  tabQueryResults = [{id:777,url:amazonTab.url}];
+  storage.autozsProductCaptureLastOpened = 0;
+  const beforeBlocked = createdTabs.length;
+  await context.openNextProductCapture();
+  if (createdTabs.length !== beforeBlocked) throw new Error("Amazon runner must prevent overlapping captures");
+  tabQueryResults = [];
+  captureSourceUrl = "https://www.amazon.com.evil.example/dp/B012345678";
+  await context.openNextProductCapture();
+  if (createdTabs.length !== beforeBlocked) throw new Error("Reject unsupported capture hosts");
+  captureSourceUrl = "https://www.homedepot.com/p/Test-Capture/123456";
   const capturesBeforeQueuedRefresh = createdTabs.length;
   sourceRefreshJobs = [{ id: 756, status: "queued" }];
   await context.openNextProductCapture();

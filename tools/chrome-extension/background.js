@@ -384,7 +384,8 @@ async function claimNextSourceRefreshJob() {
 function isProductCaptureRunnerUrl(url) {
   try {
     const parsed = new URL(url || "");
-    return parsed.hostname === "www.homedepot.com"
+    return parsed.protocol === "https:"
+      && ["www.homedepot.com", "www.amazon.com", "amazon.com"].includes(parsed.hostname)
       && parsed.searchParams.get("ea_auto_import") === "1"
       && parsed.searchParams.has("autozs_capture_product_id");
   } catch {
@@ -395,7 +396,8 @@ function isProductCaptureRunnerUrl(url) {
 function isAutomaticProductImportUrl(url) {
   try {
     const parsed = new URL(url || "");
-    return parsed.hostname === "www.homedepot.com"
+    return parsed.protocol === "https:"
+      && ["www.homedepot.com", "www.amazon.com", "amazon.com"].includes(parsed.hostname)
       && parsed.searchParams.get("ea_auto_import") === "1"
       && !parsed.searchParams.has("autozs_refresh_job");
   } catch {
@@ -414,7 +416,7 @@ async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
   const stale = tabs.filter((tab) => {
     try {
       const parsed = new URL(tab.url || "");
-      if (parsed.hostname !== "www.homedepot.com" && !isSourceRefreshRunnerUrl(tab.url)) return false;
+      if (parsed.hostname !== "www.homedepot.com" && !isSourceRefreshRunnerUrl(tab.url) && !isProductCaptureRunnerUrl(tab.url)) return false;
       const automated = parsed.searchParams.get("ea_auto_import") === "1"
         || parsed.searchParams.has("autozs_refresh_job")
         || parsed.searchParams.get("autozs_tracking_poll") === "1";
@@ -506,7 +508,7 @@ async function closeLegacyProductImportTabs() {
 }
 
 async function productCaptureRunnerTab() {
-  const tabs = await chrome.tabs.query({ url: "https://www.homedepot.com/*" });
+  const tabs = await chrome.tabs.query({ url: ["https://www.homedepot.com/*", "https://www.amazon.com/*", "https://amazon.com/*"] });
   return tabs.find((tab) => isProductCaptureRunnerUrl(tab.url)) || null;
 }
 
@@ -545,13 +547,13 @@ async function openNextProductCapture() {
   const item = await localApiJson("/products/capture-queue/claim", {
     method: "POST",
     body: JSON.stringify({
-    worker_id: await productCaptureWorkerId(),
-      source_host: "homedepot.com",
+      worker_id: await productCaptureWorkerId(),
     }),
   });
   if (!item?.source_url || !item?.product_id) return;
   try {
-    if (new URL(item.source_url).hostname !== "www.homedepot.com") return;
+    const source = new URL(item.source_url);
+    if (source.protocol !== "https:" || !["www.homedepot.com", "www.amazon.com", "amazon.com"].includes(source.hostname)) return;
   } catch {
     return;
   }
