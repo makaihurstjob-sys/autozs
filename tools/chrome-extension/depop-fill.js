@@ -599,7 +599,9 @@
       );
       if (!requiredValuesPersisted) await wait(150);
     }
-    const unresolved = (!pkg.shipping_method || !pkg.category || !pkg.brand || !pkg.condition ? 1 : 0) + results.filter((result) => !result).length + (requiredValuesPersisted ? 0 : 1);
+    const finalResults = savedDraft ? [['group',pkg.category],['brand',pkg.brand],['condition',pkg.condition],
+      ['colour',pkg.color],['shippingMethods',pkg.shipping_method]].map(([field,value])=>depopFieldMatches(field,value)) : results;
+    const unresolved = (!pkg.shipping_method || !pkg.category || !pkg.brand || !pkg.condition ? 1 : 0) + finalResults.filter((result) => !result).length + (requiredValuesPersisted ? 0 : 1);
     setPublicationReadiness(unresolved === 0, uploaded);
     const photosVerified = photosReady(uploaded);
     const note = !photosVerified
