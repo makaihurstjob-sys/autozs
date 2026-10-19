@@ -515,6 +515,7 @@
 
     const savedDraft = /^\/sellinghub\/drafts\/edit\/[0-9a-f-]{36}\/?$/i.test(location.pathname);
     if (savedDraft) {
+      for (let attempt = 0; attempt < 60 && !savedDraftMatches(pkg); attempt++) await wait(150);
       if (!savedDraftMatches(pkg)) {
         throw new Error("Saved draft identity/content does not match this job; no new draft will be created");
       }
