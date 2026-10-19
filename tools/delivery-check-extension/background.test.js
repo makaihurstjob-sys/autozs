@@ -137,6 +137,33 @@ test('supplier refresh errors before adding back off without pausing the worker'
   assert.equal(h.calls.at(-1).body.retryable, true);
 });
 
+test('unrendered delivery tile re-checks, then backs off without pausing the worker', async () => {
+  const h = harness();
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'product');
+  h.options.pageError = 'Delivery control is missing or ambiguous';
+  for (let i = 0; i < 4; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'product');
+  assert.equal(h.actions.filter(a => a === 'reload').length, 1);
+  assert.equal(h.calls.some(c => c.url.endsWith('/failed')), false);
+  await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.tabs.length, 0);
+  assert.equal(h.addCount, 0);
+  assert.equal(h.calls.at(-1).body.retryable, true);
+});
+
+test('delivery tile that renders late completes the same job', async () => {
+  const h = harness();
+  await h.tick(); await h.tick();
+  h.options.pageError = 'Delivery control is missing or ambiguous';
+  await h.tick(); await h.tick();
+  h.options.pageError = null;
+  for (let i = 0; i < 10 && !h.complete; i++) await h.tick();
+  assert.equal(h.complete, true);
+  assert.equal(h.addCount, 1);
+});
+
 test('supplier error after a possible add preserves the cart for review', async () => {
   const h = harness();
   for (let i = 0; i < 4; i++) await h.tick();

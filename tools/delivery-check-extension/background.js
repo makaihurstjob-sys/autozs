@@ -1,6 +1,9 @@
 const API = 'http://127.0.0.1:8000/delivery-quotes';
 const STATE = 'deliveryCheckState';
 const CART = 'https://www.homedepot.com/mycart/home';
+// Thrown by prepare_product before any click, while product tiles are still hydrating.
+// The cart was verified empty and nothing was mutated, so these are always safe to re-check.
+const RENDER_RACE = /^(Delivery control is missing or ambiguous|Product quantity is ambiguous|Wrong product page|Cannot confirm an empty cart before adding)$/;
 let polling = false;
 
 async function api(path, body) {
@@ -136,12 +139,21 @@ async function deliveryTick() {
       await chrome.tabs.reload(state.tabId);
       return;
     }
+    const renderRace = state?.job && state.phase === 'product' && RENDER_RACE.test(String(error.message));
+    if (renderRace && (state.renderRetries || 0) < 4) {
+      // Give slow product pages more settling time; reload once midway.
+      state.renderRetries = (state.renderRetries || 0) + 1;
+      state.phaseAt = Date.now();
+      await save(state);
+      if (state.renderRetries === 2) await chrome.tabs.reload(state.tabId);
+      return;
+    }
     if (state?.job) {
       const message = String(error.message || error).slice(0, 500);
       // Before add_pending this worker has never attempted an Add to Cart.
       // Let the server back off this product without stalling unrelated checks.
-      const safeRetry = /Transient supplier page error/.test(message) &&
-        ['initial', 'product', 'prepared'].includes(state.phase);
+      const safeRetry = renderRace || (/Transient supplier page error/.test(message) &&
+        ['initial', 'product', 'prepared'].includes(state.phase));
       if (safeRetry) {
         try {
           await api(`/jobs/${state.job.id}/failed`, { ...lease(state), message, retryable: true });
