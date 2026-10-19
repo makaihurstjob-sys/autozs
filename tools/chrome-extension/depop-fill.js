@@ -588,13 +588,17 @@
       if (!boostRequirementMet(pkg)) throw new Error('Unboosted post-first state could not be verified');
     } else if (!(await enableBoosting())) throw new Error("Boosting could not be verified on at the approved 12% fee; Post is blocked");
     await wait(300);
-    const requiredValuesPersisted = Boolean(
-      document.getElementById("description")?.value?.trim()
-      && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
-      && document.getElementById("group-input")?.value?.trim()
-      && document.getElementById("brand-input")?.value?.trim()
-      && document.getElementById("condition-input")?.value?.trim()
-    );
+    let requiredValuesPersisted = false;
+    for (let attempt = 0; attempt < 40 && !requiredValuesPersisted; attempt++) {
+      requiredValuesPersisted = Boolean(
+        document.getElementById("description")?.value === description
+        && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
+        && document.getElementById("group-input")?.value?.trim()
+        && document.getElementById("brand-input")?.value?.trim()
+        && document.getElementById("condition-input")?.value?.trim()
+      );
+      if (!requiredValuesPersisted) await wait(150);
+    }
     const unresolved = (!pkg.shipping_method || !pkg.category || !pkg.brand || !pkg.condition ? 1 : 0) + results.filter((result) => !result).length + (requiredValuesPersisted ? 0 : 1);
     setPublicationReadiness(unresolved === 0, uploaded);
     const photosVerified = photosReady(uploaded);
