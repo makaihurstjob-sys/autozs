@@ -477,6 +477,14 @@
     badge.textContent = message;
   }
 
+  function savedDraftMatches(pkg) {
+    const expectedPath = new URL(pkg.runner_url).pathname.replace(/\/$/, "");
+    const description = [pkg.title, pkg.description && pkg.description !== pkg.title ? pkg.description : ""].filter(Boolean).join("\n\n");
+    return location.pathname.replace(/\/$/, "") === expectedPath
+      && document.getElementById("description")?.value === description
+      && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price);
+  }
+
   async function run() {
     showStatus("AutoZS is loading this Depop draft…");
     const pkg = await apiRequest(`/depop/jobs/${encodeURIComponent(jobId)}`);
@@ -505,16 +513,23 @@
       throw new Error("Depop signed-in username does not match the enabled listing account");
     }
 
+    const savedDraft = /^\/sellinghub\/drafts\/edit\/[0-9a-f-]{36}\/?$/i.test(location.pathname);
+    if (savedDraft) {
+      if (!savedDraftMatches(pkg)) {
+        throw new Error("Saved draft identity/content does not match this job; no new draft will be created");
+      }
+    }
     pkg.verified_username = expectedUsername;
     const setPublicationReadiness = await armPublicationConfirmation(pkg);
 
     // Uploading photos makes Depop rerender the form. Do that first so it
     // cannot erase controlled values written below.
     const imagePaths = [...new Set((pkg.local_image_paths?.length ? pkg.local_image_paths : pkg.image_urls) || [])];
-    const uploaded = await uploadImages(imagePaths);
+    const uploaded = savedDraft ? imagePaths.length : await uploadImages(imagePaths);
     for (let attempt = 0; uploaded > 0 && attempt < 60 && !photosReady(uploaded); attempt++) {
       await wait(500);
     }
+    if (savedDraft && !photosReady(uploaded)) throw new Error("Saved draft photo count/upload evidence does not match; photos were preserved");
 
     // Depop has no title input: its listing title is derived from description.
     // Put the curated title first, then the longer copy, without duplicating it.
@@ -541,6 +556,7 @@
     if (usps && !usps.checked) usps.click();
     await wait(200);
     results.push(await selectCombobox("shippingMethods", pkg.shipping_method));
+    setControlledValue(document.getElementById("quantity__input"), "1");
     if (!(await enableBoosting())) throw new Error("Boosting could not be verified on at the approved 12% fee; Post is blocked");
     await wait(300);
     const requiredValuesPersisted = Boolean(

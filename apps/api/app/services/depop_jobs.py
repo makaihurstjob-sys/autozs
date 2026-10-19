@@ -1,7 +1,8 @@
 import json
 import math
+import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from app.core.config import PROJECT_ROOT
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -122,12 +123,18 @@ def serialize_depop_job(db: Session, job: DepopListingJob) -> dict:
     }
 
 
-def depop_runner_url(job_id: int, account_key: str) -> str:
+def depop_runner_url(job_id: int, account_key: str, saved_url: str = "") -> str:
     params = {
         "autozs_fill": "1",
         "autozs_job_id": str(job_id),
         "autozs_account_key": account_key or "manual",
     }
+    if saved_url and "/sellinghub/drafts/edit/" in saved_url:
+        parsed = urlparse(saved_url)
+        if (parsed.scheme != "https" or parsed.netloc != "www.depop.com"
+                or not re.fullmatch(r"/sellinghub/drafts/edit/[0-9a-fA-F-]{36}/?", parsed.path)):
+            raise ValueError("Invalid saved Depop draft URL; refusing a new-draft fallback")
+        return f"https://www.depop.com{parsed.path}?{urlencode(params)}"
     return f"https://www.depop.com/products/create/?{urlencode(params)}"
 
 
@@ -217,7 +224,7 @@ def start_next_depop_job(db: Session, now: datetime | None = None, account_key: 
     job.attempts += 1
     job.progress = 0
     job.message = "Reserved for Depop listing creation."
-    job.runner_url = depop_runner_url(job.id, job.account_key)
+    job.runner_url = depop_runner_url(job.id, job.account_key, job.runner_url)
     db.commit()
     db.refresh(job)
     return job

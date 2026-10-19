@@ -1,0 +1,13 @@
+const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
+let source=fs.readFileSync(__dirname+'/depop-fill.js','utf8');
+source=source.slice(0,source.indexOf('  const task ='))+'globalThis.matches = savedDraftMatches; })();';
+const fields={description:{value:'Black bag\n\nDescription'},priceAmount__input:{value:'29.78'}};
+const location={search:'',pathname:'/sellinghub/drafts/edit/96913967-122e-4eb6-92b8-f9633f8a967d/'};
+const context={URL,URLSearchParams,location,globalThis:{},document:{getElementById:id=>fields[id]}};
+vm.runInNewContext(source,context);
+const pkg={runner_url:'https://www.depop.com'+location.pathname,title:'Black bag',description:'Description',price:29.78};
+assert.equal(context.globalThis.matches(pkg),true);
+fields.priceAmount__input.value='39.98';assert.equal(context.globalThis.matches(pkg),false);
+fields.priceAmount__input.value='29.78';fields.description.value='Another bag';assert.equal(context.globalThis.matches(pkg),false);
+fields.description.value='Black bag\n\nDescription';location.pathname='/products/create/';assert.equal(context.globalThis.matches(pkg),false);
+console.log('Saved draft rejects wrong product, price and route');
