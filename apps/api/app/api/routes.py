@@ -24,6 +24,7 @@ from app.core.config import get_settings
 from app.core.config import PROJECT_ROOT
 from app.core.store_keys import DEFAULT_EBAY_STORE_KEY
 from app.models.domain import (
+    AppSetting,
     AutomationRun,
     CandidateProduct,
     Competitor,
@@ -1490,6 +1491,40 @@ def update_depop_variant(
     db.commit()
     db.refresh(variant)
     return _depop_variant_read(variant)
+
+
+@router.get('/depop/variants/{variant_id}/offer-plan')
+def depop_offer_plan(variant_id: int, db: Session = Depends(get_db)) -> dict:
+    from app.services.depop_offers import variant_offer_plan
+    return variant_offer_plan(db, variant_id)
+
+
+@router.put('/depop/variants/{variant_id}/offer-cost-evidence')
+def depop_offer_cost_evidence(variant_id: int, payload: dict, db: Session = Depends(get_db)) -> dict:
+    from app.services.depop_offers import offer_floor, variant_offer_plan
+    variant = db.get(DepopListingVariant, variant_id)
+    if variant is None:
+        raise HTTPException(status_code=404, detail='Depop variant not found')
+    try:
+        observed = datetime.fromisoformat(payload['observed_at'])
+        expiry = datetime.fromisoformat(payload['expires_at'])
+        now = datetime.now(timezone.utc)
+        if (not observed.tzinfo or not expiry.tzinfo or not observed <= now < expiry
+                or expiry - observed > timedelta(hours=6)
+                or payload['currency'] != 'USD' or payload['account_key'] != variant.account_key
+                or not str(payload['evidence_url']).startswith('https://')
+                or payload.get('includes_supplier_tax_and_shipping') is not True):
+            raise ValueError('Complete current landed-cost evidence is required')
+        offer_floor(**{k: payload[k] for k in ('landed_cost_cap', 'seller_shipping_cap',
+            'processing_extra_base_cap', 'boost_extra_base_cap')}, listed_price=variant.price)
+    except (ValueError, KeyError, TypeError, ArithmeticError) as exc:
+        raise HTTPException(status_code=422, detail='Valid landed-cost, shipping/tax fee bounds and evidence timestamps are required') from exc
+    row = db.scalar(select(AppSetting).where(AppSetting.key == f'depop_offer_cost:{variant_id}'))
+    if row is None:
+        row = AppSetting(key=f'depop_offer_cost:{variant_id}', value='{}'); db.add(row)
+    row.value = json.dumps(payload, allow_nan=False)
+    db.commit()
+    return variant_offer_plan(db, variant_id)
 
 
 @router.get("/depop/jobs", response_model=list[DepopJobRead])

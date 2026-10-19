@@ -1,0 +1,16 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+let source=fs.readFileSync(__dirname+'/depop-fill.js','utf8');
+source=source.slice(0,source.indexOf('  const task ='))+'globalThis.policy=boostRequirementMet; })();';
+const control={checked:false,isConnected:true,disabled:false,indeterminate:false};
+let headings=[];
+const context={URL,URLSearchParams,location:{search:''},globalThis:{},document:{querySelectorAll:()=>headings}};
+vm.runInNewContext(source,context);
+const check=context.globalThis.policy;
+assert.equal(check({defer_boost:true}),true,'explicit post-first policy permits saved draft without Boost control');
+assert.equal(check({}),false,'default still requires verified boost');
+headings=[{textContent:'Boost your listing',parentElement:{textContent:'12%',querySelectorAll:()=>[control]}}];
+assert.equal(check({defer_boost:true}),true);
+control.checked=true;assert.equal(check({defer_boost:true}),false,'post-first must be unboosted');
+assert.equal(check({}),true);
+headings[0].parentElement.textContent='15%';assert.equal(check({defer_boost:true}),false);
+console.log('Post-first policy and fee guards passed');

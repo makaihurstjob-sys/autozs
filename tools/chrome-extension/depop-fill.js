@@ -258,6 +258,15 @@
         published_at: pending.publicationEvidence.observedAt,
       }),
     });
+    if (pending.boostAfterPost) {
+      const followups = await storageGet('autozsDepopPostprocess') || {};
+      if (!followups[identity.id]) {
+        followups[identity.id] = {listingId:identity.id, variantId:pending.variantId, jobId:pending.jobId,
+          username:pending.username, title:pending.title, price:pending.price,
+          boost:'pending', offers:'pending', updatedAt:new Date().toISOString()};
+        await storageSet('autozsDepopPostprocess', followups);
+      }
+    }
     await storageRemove(PENDING_PUBLICATION_KEY);
     sessionStorage.removeItem(PENDING_PUBLICATION_KEY);
     showStatus("AutoZS confirmed this Depop listing as published.");
@@ -331,6 +340,7 @@
       title: pkg.title || "",
       color: pkg.color || "",
       price: pkg.price,
+      boostAfterPost: pkg.defer_boost === true,
       postClickedAt: null,
     };
     await storageSet(PENDING_PUBLICATION_KEY, pending);
@@ -340,7 +350,7 @@
     let expectedPhotos = 0;
     const fieldsStillMatch = () => {
       const description = [pkg.title, pkg.description && pkg.description !== pkg.title ? pkg.description : ""].filter(Boolean).join("\n\n");
-      return boostingEnabledAtApprovedRate() && Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
+      return boostRequirementMet(pkg) && Number.isFinite(Number(pkg.price)) && Number(pkg.price) > 0
         && document.getElementById("description")?.value === description
         && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
         && [["group", pkg.category], ["brand", pkg.brand], ["condition", pkg.condition],
@@ -357,7 +367,7 @@
       event.stopImmediatePropagation();
       if (submitting) return;
       if (!ready || !fieldsStillMatch() || !photosReady(expectedPhotos) || !button || button.disabled) {
-        showStatus("Post blocked: boosting must be on at the approved 12% fee, and listing fields and completed photo uploads need verification.", true);
+        showStatus("Post blocked: posting policy, listing fields and completed photo uploads need verification.", true);
         return;
       }
       submitting = true;
@@ -485,6 +495,14 @@
       && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price);
   }
 
+  function boostRequirementMet(pkg) {
+    if (pkg.defer_boost !== true) return boostingEnabledAtApprovedRate();
+    const headings = [...document.querySelectorAll('form h2')].filter(e => e.textContent.trim() === 'Boost your listing');
+    if (!headings.length) return true;
+    const control = boostControl();
+    return Boolean(control && control.isConnected && !control.disabled && !control.indeterminate && control.checked === false);
+  }
+
   async function run() {
     showStatus("AutoZS is loading this Depop draft…");
     const pkg = await apiRequest(`/depop/jobs/${encodeURIComponent(jobId)}`);
@@ -520,6 +538,8 @@
         throw new Error("Saved draft identity/content does not match this job; no new draft will be created");
       }
     }
+    const postPolicy = await storageGet('autozsDepopPostPolicy');
+    pkg.defer_boost = postPolicy?.postThenBoost === true;
     pkg.verified_username = expectedUsername;
     const setPublicationReadiness = await armPublicationConfirmation(pkg);
 
@@ -558,7 +578,11 @@
     await wait(200);
     results.push(await selectCombobox("shippingMethods", pkg.shipping_method));
     setControlledValue(document.getElementById("quantity__input"), "1");
-    if (!(await enableBoosting())) throw new Error("Boosting could not be verified on at the approved 12% fee; Post is blocked");
+    if (pkg.defer_boost) {
+      const control = boostControl();
+      if (control?.checked) { control.click(); await wait(300); }
+      if (!boostRequirementMet(pkg)) throw new Error('Unboosted post-first state could not be verified');
+    } else if (!(await enableBoosting())) throw new Error("Boosting could not be verified on at the approved 12% fee; Post is blocked");
     await wait(300);
     const requiredValuesPersisted = Boolean(
       document.getElementById("description")?.value?.trim()

@@ -1,5 +1,5 @@
 if (typeof importScripts === "function") {
-  importScripts("dashboard-browser-bridge-config.js", "dashboard-browser-bridge-agent.js", "ebay-payments.js", "ebay-order-verification.js");
+  importScripts("dashboard-browser-bridge-config.js", "dashboard-browser-bridge-agent.js", "ebay-payments.js", "ebay-order-verification.js", "depop-postprocess-worker.js");
 }
 
 const DEBUGGER_PROTOCOL_VERSION = "1.3";

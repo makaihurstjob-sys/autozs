@@ -1,0 +1,11 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+let source=fs.readFileSync(__dirname+'/depop-postprocess.js','utf8');
+source=source.slice(0,source.indexOf('  run().catch'))+'})();';
+const context={globalThis:{},location:{pathname:'/sellinghub/selling/active/'}};
+vm.runInNewContext(source,context);
+const rate=context.globalThis.AutoZSDepopPostprocess.approvedBoostRate;
+assert.equal(rate({textContent:'Pay a 12% boosting fee only if you sell.'}),true);
+assert.equal(rate({textContent:'Pay 15%'}),false);
+assert.equal(rate({textContent:'Boost now'}),false);
+assert.equal(rate({textContent:'12% plus 3%'}),false);
+console.log('Post-publication Boost refuses missing, changed and ambiguous rates');

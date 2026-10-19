@@ -13,6 +13,7 @@ async function main() {
       storageSet:async(key,pending)=> {if(pending.postClickedAt){order.push('persist');await gate;if(failure==='storage')throw Error('disk');}},
       apiRequest:async()=> {order.push('backend');if(failure==='backend')throw Error('network');},
       boostingEnabledAtApprovedRate:()=>failure!=='boost' && !(failure==='boost-after-arm' && order.includes('backend')),
+      boostRequirementMet:()=>failure!=='boost' && !(failure==='boost-after-arm' && order.includes('backend')),
       depopFieldMatches:(field,value)=>String(values[`${field}-input`]).toLowerCase().replace(/\s+/g, "")===String(value).toLowerCase().replace(/\s+/g, ""),selectionKey:(value)=>String(value||"").toLowerCase().replace(/\s+/g,""),photosReady:()=>true,showStatus:()=>{},watchForPublishedDestination:async()=>true,
       document:{addEventListener:(name,fn)=>handlers[name]=fn,getElementById:(id)=>({value:values[id]})}};
     context.globalThis=context;vm.createContext(context);vm.runInContext(arm,context);

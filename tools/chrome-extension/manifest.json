@@ -129,7 +129,8 @@
       ],
       "js": [
         "depop-profile.js",
-        "depop-fill.js"
+        "depop-fill.js",
+        "depop-postprocess.js"
       ],
       "run_at": "document_idle"
     }
