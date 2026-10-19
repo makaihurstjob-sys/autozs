@@ -3,6 +3,7 @@ const STATE = 'deliveryCheckState';
 const CART = 'https://www.homedepot.com/mycart/home';
 // Thrown by prepare_product before any click, while product tiles are still hydrating.
 // The cart was verified empty and nothing was mutated, so these are always safe to re-check.
+const ADD_REFUSED = 'Home Depot did not add the item; cart confirmed empty twice';
 const RENDER_RACE = /^(Delivery control is missing or ambiguous|Product quantity is ambiguous|Wrong product page|Cannot confirm an empty cart before adding)$/;
 let polling = false;
 
@@ -101,7 +102,18 @@ async function deliveryTick() {
       await chrome.tabs.update(state.tabId, { url: CART });
     } else if (state.phase === 'cart') {
       const observed = await page(state, 'inspect');
-      if (!observed.cartMatches) throw Error('Added item was not confirmed; will not repeat Add to Cart');
+      if (!observed.cartMatches) {
+        // An empty cart on two separate loads proves the add never landed (some items, e.g.
+        // van delivery, silently refuse guest adds). Nothing to clean up, so free the worker.
+        if (observed.empty && !state.emptyAfterAdd) {
+          state.emptyAfterAdd = true;
+          await transition(state, 'cart');
+          await chrome.tabs.reload(state.tabId);
+          return;
+        }
+        if (observed.empty) throw Error(ADD_REFUSED);
+        throw Error('Added item was not confirmed; will not repeat Add to Cart');
+      }
       const quote = observed.quote;
       if (quote?.postal_code === state.job.postal_code && quote.quantity === 1) {
         const key = JSON.stringify(quote);
@@ -152,7 +164,7 @@ async function deliveryTick() {
       const message = String(error.message || error).slice(0, 500);
       // Before add_pending this worker has never attempted an Add to Cart.
       // Let the server back off this product without stalling unrelated checks.
-      const safeRetry = renderRace || (/Transient supplier page error/.test(message) &&
+      const safeRetry = renderRace || message === ADD_REFUSED || (/Transient supplier page error/.test(message) &&
         ['initial', 'product', 'prepared'].includes(state.phase));
       if (safeRetry) {
         try {

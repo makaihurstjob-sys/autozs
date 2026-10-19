@@ -26,12 +26,13 @@ function harness(options = {}) {
     autozsDeliveryPage: action => {
       if (options.supplierError) throw Error('Transient supplier page error: Home Depot requested a refresh');
       if (options.pageError) throw Error(options.pageError);
+      if (action === 'inspect' && addCount && options.landOnInspect && --options.landOnInspect === 0) empty = false;
       if (action === 'inspect') return options.missingInspect ? undefined : {
         empty: options.foreignCart ? false : empty,
         cartMatches: !empty,
         quote: empty ? null : { source_url: job.source_url, postal_code: job.postal_code, quantity: 1, delivery_charge: 35 },
       };
-      if (action === 'add') { addCount++; empty = false; }
+      if (action === 'add') { addCount++; empty = !!options.addRefused; }
       if (action === 'remove') empty = true;
       if (options.missingAction === action) return undefined;
       if (options.errorAfterAction === action) throw Error('Transient supplier page error: uncertain mutation');
@@ -162,6 +163,26 @@ test('delivery tile that renders late completes the same job', async () => {
   for (let i = 0; i < 10 && !h.complete; i++) await h.tick();
   assert.equal(h.complete, true);
   assert.equal(h.addCount, 1);
+});
+
+test('refused add confirmed empty twice backs off without pausing the worker', async () => {
+  const h = harness({ addRefused: true });
+  for (let i = 0; i < 10 && h.storage.deliveryCheckState !== null; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.tabs.length, 0);
+  assert.equal(h.addCount, 1);
+  assert.equal(h.actions.filter(a => a === 'reload').length, 1);
+  const failure = h.calls.find(c => c.url.endsWith('/failed')).body;
+  assert.equal(failure.retryable, true);
+  assert.match(failure.message, /cart confirmed empty twice/);
+});
+
+test('cart that shows the item after a reload completes without another add', async () => {
+  const h = harness({ addRefused: true, landOnInspect: 2 });
+  for (let i = 0; i < 12 && !h.complete; i++) await h.tick();
+  assert.equal(h.complete, true);
+  assert.equal(h.addCount, 1);
+  assert.equal(h.calls.some(c => c.url.endsWith('/failed')), false);
 });
 
 test('supplier error after a possible add preserves the cart for review', async () => {
