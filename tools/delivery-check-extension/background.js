@@ -144,7 +144,10 @@ async function deliveryTick() {
       await chrome.storage.local.set({ deliveryLastError: error.message });
       return;
     }
-    if (state?.job && /Transient supplier page error/.test(String(error.message)) && (state.pageRetries || 0) < 3) {
+    // After a possible add, reloading is still read-only, and pausing blocks the whole queue,
+    // so give the cart more chances to load (still bounded by the 8-minute job timeout).
+    const reloadBudget = ['initial', 'product', 'prepared'].includes(state?.phase) ? 3 : 8;
+    if (state?.job && /Transient supplier page error/.test(String(error.message)) && (state.pageRetries || 0) < reloadBudget) {
       state.pageRetries = (state.pageRetries || 0) + 1;
       state.phaseAt = Date.now();
       await save(state);

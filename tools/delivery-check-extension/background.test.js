@@ -189,12 +189,27 @@ test('supplier error after a possible add preserves the cart for review', async 
   const h = harness();
   for (let i = 0; i < 4; i++) await h.tick();
   h.options.supplierError = true;
-  for (let i = 0; i < 5; i++) await h.tick();
+  for (let i = 0; i < 10; i++) await h.tick();
+  assert.equal(h.actions.filter(a => a === 'reload').length, 8);
   assert.equal(h.addCount, 1);
   assert.equal(h.storage.deliveryCheckState.paused, true);
   assert.equal(h.tabs.length, 1);
   assert.equal(h.calls.at(-1).body.retryable, false);
   assert.equal(h.actions.includes('remove'), false);
+});
+
+test('cart page errors after a refused add recover once the cart loads empty', async () => {
+  const h = harness({ addRefused: true });
+  for (let i = 0; i < 5; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'cart');
+  h.options.supplierError = true;
+  for (let i = 0; i < 5; i++) await h.tick();
+  assert.notEqual(h.storage.deliveryCheckState.paused, true);
+  h.options.supplierError = false;
+  for (let i = 0; i < 6 && h.storage.deliveryCheckState !== null; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.addCount, 1);
+  assert.equal(h.calls.at(-1).body.retryable, true);
 });
 
 test('uncertain failure report preserves state instead of claiming another job', async () => {
