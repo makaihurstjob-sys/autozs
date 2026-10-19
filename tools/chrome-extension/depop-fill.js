@@ -50,6 +50,7 @@
   }
 
   function depopFieldMatches(field, wanted) {
+    if (field === "colour") wanted = depopColour(wanted);
     const input = document.getElementById(`${field}-input`);
     if (field === "colour" && input?.parentElement?.querySelectorAll) {
       const selected = [...input.parentElement.querySelectorAll('[class*="selectedItemLabel"]')].map(e => selectionKey(e.textContent));
