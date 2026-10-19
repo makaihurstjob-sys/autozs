@@ -588,8 +588,11 @@
       if (!boostRequirementMet(pkg)) throw new Error('Unboosted post-first state could not be verified');
     } else if (!(await enableBoosting())) throw new Error("Boosting could not be verified on at the approved 12% fee; Post is blocked");
     await wait(300);
+    const finalFields = [['group',pkg.category],['brand',pkg.brand],['condition',pkg.condition],
+      ['colour',pkg.color],['shippingMethods',pkg.shipping_method]];
+    let finalResults = results;
     let requiredValuesPersisted = false;
-    for (let attempt = 0; attempt < 40 && !requiredValuesPersisted; attempt++) {
+    for (let attempt = 0; attempt < 40; attempt++) {
       requiredValuesPersisted = Boolean(
         document.getElementById("description")?.value === description
         && Number(document.getElementById("priceAmount__input")?.value) === Number(pkg.price)
@@ -597,17 +600,18 @@
         && document.getElementById("brand-input")?.value?.trim()
         && document.getElementById("condition-input")?.value?.trim()
       );
-      if (!requiredValuesPersisted) await wait(150);
+      finalResults = savedDraft ? finalFields.map(([field,value])=>depopFieldMatches(field,value)) : results;
+      if (requiredValuesPersisted && finalResults.every(Boolean)) break;
+      await wait(150);
     }
-    const finalResults = savedDraft ? [['group',pkg.category],['brand',pkg.brand],['condition',pkg.condition],
-      ['colour',pkg.color],['shippingMethods',pkg.shipping_method]].map(([field,value])=>depopFieldMatches(field,value)) : results;
+    const failedFinalFields = finalFields.filter((_, index)=>!finalResults[index]).map(([field])=>field);
     const unresolved = (!pkg.shipping_method || !pkg.category || !pkg.brand || !pkg.condition ? 1 : 0) + finalResults.filter((result) => !result).length + (requiredValuesPersisted ? 0 : 1);
     setPublicationReadiness(unresolved === 0, uploaded);
     const photosVerified = photosReady(uploaded);
     const note = !photosVerified
       ? `Draft filled; photo upload completion is unverified. Post is blocked pending review.`
       : unresolved
-      ? `Draft filled with ${uploaded} photo(s); ${unresolved} dropdown(s) need review${unresolvedFields.length ? `: ${unresolvedFields.join(", ")}` : " (shipping or required values)"}.`
+      ? `Draft filled with ${uploaded} photo(s); ${unresolved} checks need review: ${failedFinalFields.join(', ') || (requiredValuesPersisted ? 'missing package metadata' : 'description/price/required values did not persist')}.`
       : `Draft filled with ${uploaded} photo(s), listing details, and shipping. Review it, then post.`;
     if (unresolved || !photosVerified) await patchJob("needs_review", 90, note);
     showStatus(note);
