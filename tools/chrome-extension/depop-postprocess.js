@@ -68,6 +68,7 @@
     if(!open)throw Error('Native automatic offers control missing');
     open.click(); const modal=await waitFor(dialog);
     if(!modal)throw Error('Automatic offers dialog missing');
+    await waitFor(()=>modal.querySelector('#offer__price__input') && modal.querySelectorAll('input[type="checkbox"]').length===1);
     const input=modal.querySelector('#offer__price__input'), checks=[...modal.querySelectorAll('input[type="checkbox"]')];
     if(!input || checks.length!==1)throw Error('Ambiguous automatic offer controls');
     const checkbox=checks[0], done=exactButton(modal,'Done');

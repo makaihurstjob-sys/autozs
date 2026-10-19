@@ -569,14 +569,18 @@
       ["condition", pkg.condition],
       ["colour", pkg.color],
     ]) {
-      const matched = await selectCombobox(field, value, field === "group" && /\bwomen\b/i.test(pkg.title) ? "Women" : "");
+      // A verified saved draft already contains persisted selections. Reopening
+      // searchable menus can turn their labels into uncommitted search text.
+      const matched = savedDraft && depopFieldMatches(field, field === 'colour' ? depopColour(value) : value)
+        ? true : await selectCombobox(field, value, field === "group" && /\bwomen\b/i.test(pkg.title) ? "Women" : "");
       results.push(matched);
       if (!matched) unresolvedFields.push(field);
     }
     const usps = document.getElementById("usps__shipping");
     if (usps && !usps.checked) usps.click();
     await wait(200);
-    results.push(await selectCombobox("shippingMethods", pkg.shipping_method));
+    results.push(savedDraft && depopFieldMatches('shippingMethods', pkg.shipping_method)
+      ? true : await selectCombobox("shippingMethods", pkg.shipping_method));
     setControlledValue(document.getElementById("quantity__input"), "1");
     if (pkg.defer_boost) {
       const control = boostControl();
