@@ -110,7 +110,12 @@
         const likes=[...document.querySelectorAll('header a[aria-label="Likes"], nav a[aria-label="Likes"]')];
         if(!likes.some(link=>new URL(link.href).pathname===`/${entry.username}/likes/`))throw Error('Signed-in account identity unverified');
         const row=await waitFor(()=>[...document.querySelectorAll('li:has(a[href*="/products/"][href*="/manage/"])')].find(e=>[...e.querySelectorAll('a')].some(a=>new URL(a.href).pathname===`/products/${entry.listingId}/manage/`)));
-        if(!row || !text(row).includes(entry.title)) {await save(entry.listingId,{error:'Exact active listing not found'});continue;}
+        if(!row || !text(row).includes(entry.title)) {
+          await save(entry.listingId,{error:'Exact active listing not found'});
+          const refreshed=Number(sessionStorage.getItem('autozsDepopPostprocessRefresh')||0);
+          if(Date.now()-refreshed>60000){sessionStorage.setItem('autozsDepopPostprocessRefresh',String(Date.now()));location.reload();return;}
+          continue;
+        }
         try {
           if(entry.boost==='pending' || entry.boost==='submitting')await save(entry.listingId,{boost:await boost(row,entry),error:null});
         }catch(error){
