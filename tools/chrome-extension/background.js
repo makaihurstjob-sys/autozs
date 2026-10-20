@@ -1177,6 +1177,7 @@ function isEbayTrackingUploadRunnerUrl(url, supplierOrderId = null) {
 
 async function openNextEbayTrackingUpload() {
   if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await ebayWorkerSignedIn())) return;
   const tabs = await chrome.tabs.query({ url: "https://www.ebay.com/*" });
   for (const tab of tabs.filter(tab => isEbayTrackingUploadRunnerUrl(tab.url))) {
     const opened = Number(new URL(tab.url).searchParams.get(AUTOZS_WORKER_OPENED_AT_PARAM) || 0);
@@ -1261,6 +1262,7 @@ async function openEbayRevisionRunner(job) {
 
 async function openNextEbayRevisionJob() {
   if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await ebayWorkerSignedIn())) return;
   const stored = await chrome.storage.local.get(EBAY_REVISION_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_REVISION_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 30 * 1000) return;
@@ -1268,6 +1270,42 @@ async function openNextEbayRevisionJob() {
   if (!job || job.status !== "running") return;
   const opened = await openEbayRevisionRunner(job);
   if (opened) await chrome.storage.local.set({ [EBAY_REVISION_LAST_OPENED_KEY]: Date.now() });
+}
+
+const EBAY_SIGNIN_BLOCKED_SINCE_KEY = "autozsEbaySigninBlockedSince";
+const EBAY_SIGNIN_RETRY_MS = 15 * 60 * 1000;
+
+function isEbayWorkerSigninUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return parsed.hostname === "signin.ebay.com" && /autozs_/i.test(parsed.href);
+  } catch {
+    return false;
+  }
+}
+
+// eBay redirects signed-out worker tabs to signin.ebay.com, where the runner
+// reuse checks no longer match them. Keep at most one such tab, pause eBay
+// openers while it waits, and retry with a fresh tab every 15 minutes.
+async function ebayWorkerSignedIn() {
+  const tabs = (await chrome.tabs.query({ url: "https://signin.ebay.com/*" }))
+    .filter((tab) => tab?.id && isEbayWorkerSigninUrl(tab.url))
+    .sort((a, b) => b.id - a.id);
+  if (!tabs.length) {
+    await chrome.storage.local.set({ [EBAY_SIGNIN_BLOCKED_SINCE_KEY]: 0 });
+    return true;
+  }
+  for (const extra of tabs.slice(1)) await chrome.tabs.remove(extra.id).catch(() => {});
+  const stored = await chrome.storage.local.get(EBAY_SIGNIN_BLOCKED_SINCE_KEY);
+  const since = Number(stored?.[EBAY_SIGNIN_BLOCKED_SINCE_KEY] || 0);
+  if (!since) {
+    await chrome.storage.local.set({ [EBAY_SIGNIN_BLOCKED_SINCE_KEY]: Date.now() });
+    return false;
+  }
+  if (Date.now() - since < EBAY_SIGNIN_RETRY_MS) return false;
+  await chrome.tabs.remove(tabs[0].id).catch(() => {});
+  await chrome.storage.local.set({ [EBAY_SIGNIN_BLOCKED_SINCE_KEY]: 0 });
+  return true;
 }
 
 async function matchedEbayAccountKey() {
@@ -1318,6 +1356,7 @@ function isEbayActiveListingsRunnerUrl(url, runId = null) {
 
 async function openNextEbayActiveListingsSync() {
   if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await ebayWorkerSignedIn())) return;
   const stored = await chrome.storage.local.get(EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_ACTIVE_LISTINGS_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 60 * 1000) return;
@@ -1359,6 +1398,7 @@ function isEbayTrafficRunnerUrl(url, runId = null) {
 
 async function openNextEbayTrafficSync() {
   if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await ebayWorkerSignedIn())) return;
   const stored = await chrome.storage.local.get(EBAY_TRAFFIC_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_TRAFFIC_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 60 * 1000) return;
@@ -1432,6 +1472,7 @@ async function reconcileNextOrderProfit() {
   profitReconciliationRunning = true;
   let tabId = null, candidate = null;
   try {
+    if (!(await ebayWorkerSignedIn())) return;
     const accountKey = await matchedEbayAccountKey();
     if (!accountKey) return;
     const identity = await localApiJson(`/ebay/browser-account?account_key=${encodeURIComponent(accountKey)}`);
@@ -1498,6 +1539,7 @@ function isEbayOrderRunnerUrl(url, runId = null) {
 
 async function openNextEbayOrderSync() {
   if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await ebayWorkerSignedIn())) return;
   const stored = await chrome.storage.local.get(EBAY_ORDER_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_ORDER_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 60 * 1000) return;
@@ -1647,6 +1689,7 @@ function isEbayRevisionBatchRunnerUrl(url, batchId = null) {
 
 async function openNextEbayRevisionBatch() {
   if (!(await canRunAutozsWorkerJobs())) return;
+  if (!(await ebayWorkerSignedIn())) return;
   const stored = await chrome.storage.local.get(EBAY_REVISION_BATCH_LAST_OPENED_KEY);
   const lastOpened = Number(stored?.[EBAY_REVISION_BATCH_LAST_OPENED_KEY] || 0);
   if (Date.now() - lastOpened < 60 * 1000) return;

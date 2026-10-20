@@ -6,7 +6,7 @@ const worker = source.slice(source.indexOf('let profitReconciliationRunning'), s
 async function run(fail = false) {
   const posts = [], removed = [];
   const context = {
-    URL, setTimeout: fn => fn(), canRunAutozsWorkerJobs: async () => true,
+    URL, setTimeout: fn => fn(), canRunAutozsWorkerJobs: async () => true, ebayWorkerSignedIn: async () => true,
     matchedEbayAccountKey: async () => 'internal-account-key',
     localApiJson: async (path, options) => {
       if (path.includes('browser-account')) return {can_list:true, expected_username:'seller-name'};
