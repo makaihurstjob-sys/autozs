@@ -1275,21 +1275,22 @@ async function openNextEbayRevisionJob() {
 const EBAY_SIGNIN_BLOCKED_SINCE_KEY = "autozsEbaySigninBlockedSince";
 const EBAY_SIGNIN_RETRY_MS = 15 * 60 * 1000;
 
+// The worker profile only reaches eBay sign-in through runner tabs; the
+// account-security hops drop the autozs_ markers, so match by host.
 function isEbayWorkerSigninUrl(url) {
   try {
-    const parsed = new URL(url || "");
-    return parsed.hostname === "signin.ebay.com" && /autozs_/i.test(parsed.href);
+    return ["signin.ebay.com", "accounts.ebay.com"].includes(new URL(url || "").hostname);
   } catch {
     return false;
   }
 }
 
-// eBay redirects signed-out worker tabs to signin.ebay.com, where the runner
+// eBay redirects signed-out worker tabs to its sign-in hosts, where the runner
 // reuse checks no longer match them. Keep at most one such tab, pause eBay
 // openers while it waits, and retry with a fresh tab every 15 minutes.
 async function ebayWorkerSignedIn() {
-  const tabs = (await chrome.tabs.query({ url: "https://signin.ebay.com/*" }))
-    .filter((tab) => tab?.id && isEbayWorkerSigninUrl(tab.url))
+  const tabs = (await chrome.tabs.query({}))
+    .filter((tab) => tab?.id && isEbayWorkerSigninUrl(tab.url || tab.pendingUrl))
     .sort((a, b) => b.id - a.id);
   if (!tabs.length) {
     await chrome.storage.local.set({ [EBAY_SIGNIN_BLOCKED_SINCE_KEY]: 0 });
