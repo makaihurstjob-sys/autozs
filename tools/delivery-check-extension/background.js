@@ -4,7 +4,8 @@ const CART = 'https://www.homedepot.com/mycart/home';
 // Thrown by prepare_product before any click, while product tiles are still hydrating.
 // The cart was verified empty and nothing was mutated, so these are always safe to re-check.
 const ADD_REFUSED = 'Home Depot did not add the item; cart confirmed empty twice';
-const RENDER_RACE = /^(Delivery control is missing or ambiguous|Product quantity is ambiguous|Wrong product page|Cannot confirm an empty cart before adding)$/;
+// The guest header's "Log In" control can hydrate after the product page loads.
+const RENDER_RACE = /^(Signed-out guest session could not be verified|Delivery control is missing or ambiguous|Product quantity is ambiguous|Wrong product page|Cannot confirm an empty cart before adding)$/;
 let polling = false;
 
 async function api(path, body) {

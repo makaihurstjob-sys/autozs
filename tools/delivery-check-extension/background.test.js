@@ -222,8 +222,20 @@ test('uncertain failure report preserves state instead of claiming another job',
 });
 
 
+test('guest header that hydrates late completes the same job', async () => {
+  const h = harness();
+  await h.tick(); await h.tick();
+  h.options.pageError = 'Signed-out guest session could not be verified';
+  await h.tick(); await h.tick();
+  assert.equal(h.calls.some(c => c.url.endsWith('/failed')), false);
+  h.options.pageError = null;
+  for (let i = 0; i < 10 && !h.complete; i++) await h.tick();
+  assert.equal(h.complete, true);
+  assert.equal(h.addCount, 1);
+});
+
 test('injected page exceptions retain the actual failure reason', async () => {
-  const h = harness({ pageError: 'Signed-out guest session could not be verified' });
+  const h = harness({ pageError: 'Browser verification requires review' });
   await h.tick(); await h.tick();
   assert.equal(h.storage.deliveryCheckState.message, h.options.pageError);
   assert.equal(h.calls.at(-1).body.message, h.options.pageError);
