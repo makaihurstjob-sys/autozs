@@ -257,3 +257,18 @@ def fail_check(db: Session, job_id: int, worker_id: str, lease_token: str, messa
     job.message = message
     db.commit()
     return serialize_job(job)
+
+
+def retry_after_cart_cleared(db: Session, job_id: int, worker_id: str) -> dict:
+    """The worker's pause recovery proved its guest cart clean (empty, or only this check's test
+    item, removed), so a failure held for that review retries within the normal attempt budget."""
+    job = db.get(DeliveryCheckJob, job_id)
+    if not job:
+        raise LookupError("Delivery check not found")
+    if job.status != "needs_review" or job.worker_id != worker_id:
+        raise ValueError("Only this worker's checks awaiting review can be retried")
+    if job.attempts < MAX_ATTEMPTS:
+        job.status, job.retry_at = "queued", datetime.utcnow() + timedelta(minutes=5)
+        job.message = f"Retrying after the worker cleared its cart: {job.message}"
+        db.commit()
+    return serialize_job(job)

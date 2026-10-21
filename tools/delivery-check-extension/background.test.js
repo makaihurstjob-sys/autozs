@@ -5,8 +5,9 @@ const fs = require('node:fs');
 const source = fs.readFileSync(`${__dirname}/background.js`, 'utf8');
 
 function harness(options = {}) {
-  let now = 100000, empty = true, complete = false, addCount = 0;
-  const storage = {}, calls = [], actions = [], tabs = [];
+  let now = 100000, empty = true, complete = false, addCount = 0, nextTabId = 7;
+  const storage = {}, calls = [], actions = [];
+  const tabs = options.existingTab ? [{ id: 99, url: 'https://www.homedepot.com/p/Other/1', status: 'complete' }] : [];
   const job = { id: 1, lease_token: 'x'.repeat(32), source_url: 'https://www.homedepot.com/p/Anvil/123456789', postal_code: '33101' };
   let context = {
     Date: { now: () => now }, crypto: { randomUUID: () => 'worker-id' }, setTimeout: () => {},
@@ -33,7 +34,7 @@ function harness(options = {}) {
         quote: empty ? null : { source_url: job.source_url, postal_code: job.postal_code, quantity: 1, delivery_charge: 35 },
       };
       if (action === 'add') { addCount++; empty = !!options.addRefused; }
-      if (action === 'remove') empty = true;
+      if (action === 'remove' && !options.removeIgnored) empty = true;
       if (options.missingAction === action) return undefined;
       if (options.errorAfterAction === action) throw Error('Transient supplier page error: uncertain mutation');
       return { [{ prepare_product: 'prepared', add: 'added', zip: 'changed', remove: 'removed' }[action]]: true };
@@ -44,11 +45,13 @@ function harness(options = {}) {
         set: async values => Object.assign(storage, structuredClone(values)),
       } },
       tabs: {
-        query: async () => options.existingTab ? [{ id: 99 }] : tabs,
-        create: async ({ url }) => { const tab = { id: 7, url, status: 'complete' }; tabs.push(tab); return tab; },
-        get: async () => tabs[0], update: async (_id, values) => Object.assign(tabs[0], values),
+        query: async () => [...tabs],
+        create: async ({ url }) => { const tab = { id: nextTabId++, url, status: 'complete' }; tabs.push(tab); return tab; },
+        get: async id => { const tab = tabs.find(t => t.id === id); if (!tab) throw Error(`No tab with id: ${id}`); return tab; },
+        update: async (id, values) => Object.assign(tabs.find(t => t.id === id), values),
         reload: async () => actions.push('reload'),
-        remove: async () => { tabs.length = 0; }, onUpdated: { addListener() {} },
+        remove: async id => { const index = tabs.findIndex(t => t.id === id); if (index >= 0) tabs.splice(index, 1); },
+        onUpdated: { addListener() {} },
       },
       scripting: { executeScript: async request => {
         if (request.files) return [];
@@ -65,6 +68,7 @@ function harness(options = {}) {
   vm.createContext(context); vm.runInContext(source, context);
   return { storage, calls, actions, options, context, tabs,
     tick: async () => { now += 10000; await context.deliveryTick(); },
+    advance: ms => { now += ms; },
     get addCount() { return addCount; }, get complete() { return complete; },
     restart: () => { context = vm.createContext({ ...context }); vm.runInContext(source, context); },
   };
@@ -277,3 +281,136 @@ for (const action of ['add', 'remove']) {
     assert.equal(h.addCount, 1);
   });
 }
+
+const MINUTE = 60 * 1000;
+
+test('unreviewed pause with an empty guest cart resumes the queue without cart changes', async () => {
+  const h = harness({ pageError: 'Browser verification requires review' });
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  h.options.pageError = null;
+  const reads = h.actions.length;
+  for (let i = 0; i < 3; i++) await h.tick();
+  assert.equal(h.actions.length, reads);
+  assert.equal(h.tabs.length, 1);
+  h.advance(15 * MINUTE);
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.tabs.length, 0);
+  assert.deepEqual(h.actions.slice(reads), ['inspect']);
+  assert.equal(h.storage.deliveryRecoveryArchive.job.id, 1);
+  assert.equal(h.storage.deliveryRecoveryArchive.recoveredBy, 'worker');
+  assert.deepEqual(h.calls.filter(c => c.url.endsWith('/cart-cleared')).map(c => [c.url.split('/').at(-2), c.body]),
+    [['1', { worker_id: 'delivery-worker-id' }]]);
+  await h.tick();
+  assert.equal(h.calls.filter(c => c.url.endsWith('/claim')).length, 2);
+  assert.equal(h.storage.deliveryCheckState.phase, 'initial');
+  assert.equal(h.addCount, 0);
+});
+
+test('pause saved before rechecks existed is read on the next tick', async () => {
+  const h = harness();
+  h.storage.deliveryCheckState = { paused: true, message: 'Signed-out guest session could not be verified', phase: 'product', tabId: 5,
+    workerId: 'delivery-old', job: { id: 8, lease_token: 'y'.repeat(32), source_url: 'https://www.homedepot.com/p/Spinach/313508261', postal_code: '11706' } };
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.storage.deliveryRecoveryArchive.job.id, 8);
+  assert.deepEqual(h.actions, ['inspect']);
+  assert.deepEqual(h.calls.map(c => [c.url.split('/').slice(-2).join('/'), c.body]), [['8/cart-cleared', { worker_id: 'delivery-old' }]]);
+});
+
+test('unreachable API after a clean recovery still resumes the queue', async () => {
+  const h = harness({ pageError: 'Browser verification requires review' });
+  await h.tick(); await h.tick();
+  h.options.pageError = null;
+  h.options.networkDown = true;
+  h.advance(15 * MINUTE);
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  h.options.networkDown = false;
+  await h.tick();
+  assert.equal(h.storage.deliveryCheckState.phase, 'initial');
+});
+
+test('pause holding only its own test item removes it once, then resumes', async () => {
+  const h = harness();
+  for (let i = 0; i < 4; i++) await h.tick();
+  h.options.supplierError = true;
+  for (let i = 0; i < 10; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  h.options.supplierError = false;
+  h.advance(15 * MINUTE);
+  for (let i = 0; i < 3 && h.storage.deliveryCheckState !== null; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.actions.filter(a => a === 'remove').length, 1);
+  assert.equal(h.addCount, 1);
+  assert.equal(h.tabs.length, 0);
+  assert.ok(h.storage.deliveryRecoveryArchive.recoveryRemovedAt);
+  assert.equal(h.calls.filter(c => c.url.endsWith('/jobs/1/cart-cleared')).length, 1);
+});
+
+test('recovery never repeats a removal that did not land', async () => {
+  const h = harness({ removeIgnored: true });
+  for (let i = 0; i < 4; i++) await h.tick();
+  h.options.supplierError = true;
+  for (let i = 0; i < 10; i++) await h.tick();
+  h.options.supplierError = false;
+  h.advance(15 * MINUTE);
+  for (let i = 0; i < 3; i++) await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  assert.equal(h.storage.deliveryCheckState.recoveryMessage, 'Test-item removal was not confirmed');
+  h.advance(30 * MINUTE);
+  for (let i = 0; i < 3; i++) await h.tick();
+  assert.equal(h.actions.filter(a => a === 'remove').length, 1);
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  assert.equal(h.storage.deliveryCheckState.recoveryAttempts, 2);
+  assert.equal(h.addCount, 1);
+});
+
+test('cart contents this worker did not add stay paused and are rechecked with backoff', async () => {
+  const h = harness({ foreignCart: true });
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  h.advance(15 * MINUTE);
+  await h.tick(); await h.tick();
+  const state = h.storage.deliveryCheckState;
+  assert.equal(state.paused, true);
+  assert.equal(state.recovery, undefined);
+  assert.equal(state.recoveryAttempts, 1);
+  assert.equal(state.recoveryMessage, 'Guest cart holds items this worker did not add');
+  assert.equal(h.tabs.length, 1);
+  assert.equal(h.actions.includes('remove'), false);
+  const reads = h.actions.length;
+  h.advance(15 * MINUTE); await h.tick();
+  assert.equal(h.tabs.length, 1);
+  h.advance(15 * MINUTE); await h.tick(); await h.tick();
+  assert.equal(h.actions.length, reads + 1);
+  assert.equal(h.storage.deliveryCheckState.recoveryAttempts, 2);
+});
+
+test('a recovery read that is still blocked keeps the pause', async () => {
+  const h = harness({ pageError: 'Browser verification requires review' });
+  await h.tick(); await h.tick();
+  h.advance(15 * MINUTE);
+  await h.tick(); await h.tick();
+  const state = h.storage.deliveryCheckState;
+  assert.equal(state.paused, true);
+  assert.equal(state.message, 'Browser verification requires review');
+  assert.equal(state.recoveryMessage, 'Browser verification requires review');
+  assert.equal(h.tabs.length, 1);
+});
+
+test('leftover supplier tab is closed only after an unreviewed pause reads an empty cart', async () => {
+  const h = harness({ existingTab: true });
+  await h.tick();
+  assert.equal(h.storage.deliveryCheckState.paused, true);
+  await h.tick();
+  assert.equal(h.tabs.length, 1);
+  h.advance(15 * MINUTE);
+  await h.tick(); await h.tick();
+  assert.equal(h.storage.deliveryCheckState, null);
+  assert.equal(h.tabs.length, 0);
+  assert.equal(h.calls.length, 0);
+  await h.tick();
+  assert.equal(h.calls.filter(c => c.url.endsWith('/claim')).length, 1);
+});

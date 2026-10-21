@@ -46,3 +46,12 @@ Coordinator activation sequence:
 7. End the controlled trial promptly by PUT with `enabled: false, trial: null` and the preserved ZIP list, and read policy back. On failure, revoke scope immediately and inspect the preserved cart/state before recovery. Revocation invalidates API leases durably but cannot cancel an already in-flight browser action. Never re-enable merely to resurrect the old token.
 
 Remaining prerequisites are operational activation, fresh resource/cart/supplier checks, actual target ID/ZIP selection, and one successful live quote cycle. Broad coverage stays disabled. No live resource was accessed during this review.
+
+
+## Unattended operation (October 21, 2026)
+
+Supersedes the manual reconciliation in steps 3 and 4 above for routine pauses.
+
+- **Browser supervision.** `scripts/ensure-delivery-check-worker.ps1` runs every five minutes from `C:\AutoZS\Ensure-AutoZS.ps1` (task "AutoZS Operations Server"). While any check is queued or running, it launches the dedicated profile through `prepare-delivery-check-worker.ps1 -Launch`, or loads the worker into a running browser that lacks it. Chrome ignores `--load-extension`, so the worker exists only after that CDP load. The script never closes a browser. Log: `C:\AutoZS\logs\autozs-delivery-worker-ensure.log`.
+- **Pause recovery.** A pause left unreviewed for 15 minutes re-reads the guest cart in a new tab. An empty signed-out cart archives the state to `deliveryRecoveryArchive` (`recoveredBy: "worker"`), closes supplier tabs and resumes. A cart holding only the paused check's own test item at quantity 1 gets one guarded removal (persisted before the click), then must read empty. Anything else stays paused, with read-only rechecks backing off to 2 hours.
+- **Held checks retry.** After a clean recovery the worker calls `POST /delivery-quotes/jobs/{id}/cart-cleared`. Only a `needs_review` check last held by that worker is requeued, five minutes out, within the normal three-attempt budget. An exhausted check stays in review.

@@ -1,6 +1,10 @@
 const API = 'http://127.0.0.1:8000/delivery-quotes';
 const STATE = 'deliveryCheckState';
 const CART = 'https://www.homedepot.com/mycart/home';
+const SUPPLIER_TABS = 'https://www.homedepot.com/*';
+// A pause preserves an uncertain cart for review, but it also stops every queued check.
+// Once a pause has gone unreviewed this long, the worker re-reads the guest cart itself.
+const RECHECK_DELAYS = [15, 30, 60, 120].map(minutes => minutes * 60 * 1000);
 // Thrown by prepare_product before any click, while product tiles are still hydrating.
 // The cart was verified empty and nothing was mutated, so these are always safe to re-check.
 const ADD_REFUSED = 'Home Depot did not add the item; cart confirmed empty twice';
@@ -16,6 +20,9 @@ async function api(path, body) {
   return response.json();
 }
 async function save(state) { await chrome.storage.local.set({ [STATE]: state }); }
+async function pause(state, message) {
+  await save({ ...state, paused: true, message, pausedAt: Date.now(), recheckAt: Date.now() + RECHECK_DELAYS[0] });
+}
 function lease(state) { return { worker_id: state.workerId, lease_token: state.job.lease_token }; }
 async function page(state, action) {
   await chrome.scripting.executeScript({ target: { tabId: state.tabId }, files: ['cart-quotes.js', 'page.js'] });
@@ -42,6 +49,47 @@ async function page(state, action) {
 }
 async function transition(state, phase) { state.phase = phase; state.phaseAt = Date.now(); await save(state); }
 
+// Same evidence a reviewer used to archive a pause by hand: an empty signed-out cart, or only this
+// job's own test item at quantity 1, removed once with the normal cleanup control. Anything else
+// stays paused for review, rechecked read-only with backoff.
+async function recoverPause(state) {
+  try {
+    if (!state.recovery) {
+      if (Date.now() < Number(state.recheckAt || 0)) return;
+      const tab = await chrome.tabs.create({ url: CART, active: false });
+      await save({ ...state, recovery: { tabId: tab.id, at: Date.now() } });
+      return;
+    }
+    const tab = await chrome.tabs.get(state.recovery.tabId);
+    if (Date.now() - state.recovery.at > 2 * 60 * 1000) throw Error('Recovery cart read timed out');
+    if (tab.status !== 'complete' || Date.now() - state.recovery.at < 4000) return;
+    const reader = { ...state, tabId: state.recovery.tabId, job: state.job || { source_url: '' } };
+    const observed = await page(reader, 'inspect');
+    if (observed.empty) {
+      // Nothing is left to preserve, and leftover supplier tabs would only pause the next claim.
+      const leftovers = await chrome.tabs.query({ url: SUPPLIER_TABS });
+      await Promise.all(leftovers.map(tab => chrome.tabs.remove(tab.id).catch(() => {})));
+      await chrome.storage.local.set({ deliveryRecoveryArchive: { ...state, archivedAt: Date.now(), recoveredBy: 'worker' } });
+      await save(null);
+      // The check held for this review can retry; the server still enforces its attempt budget.
+      if (state.job) await api(`/jobs/${state.job.id}/cart-cleared`, { worker_id: state.workerId }).catch(() => {});
+      return;
+    }
+    if (!observed.cartMatches) throw Error('Guest cart holds items this worker did not add');
+    if (state.recoveryRemovedAt) throw Error('Test-item removal was not confirmed');
+    // Persist before the click so a restart never repeats it.
+    state = { ...state, recoveryRemovedAt: Date.now(), recovery: { ...state.recovery, at: Date.now() } };
+    await save(state);
+    await page(reader, 'remove');
+  } catch (error) {
+    const attempts = (state.recoveryAttempts || 0) + 1;
+    if (state.recovery) await chrome.tabs.remove(state.recovery.tabId).catch(() => {});
+    const { recovery, ...paused } = state;
+    await save({ ...paused, recoveryAttempts: attempts, recoveryMessage: String(error?.message || error).slice(0, 500),
+      recheckAt: Date.now() + RECHECK_DELAYS[Math.min(attempts, RECHECK_DELAYS.length - 1)] });
+  }
+}
+
 async function deliveryTick() {
   if (polling) return;
   polling = true;
@@ -50,13 +98,13 @@ async function deliveryTick() {
     const stored = await chrome.storage.local.get([STATE, 'deliveryWorkerId', 'deliveryInspectionUntil']);
     if (Number(stored.deliveryInspectionUntil || 0) > Date.now()) return;
     state = stored[STATE];
-    if (state?.paused) return;
+    if (state?.paused) { await recoverPause(state); return; }
     const workerId = stored.deliveryWorkerId || `delivery-${crypto.randomUUID()}`;
     if (!stored.deliveryWorkerId) await chrome.storage.local.set({ deliveryWorkerId: workerId });
     if (!state) {
-      // A leftover HD tab is not ours to repurpose or close.
-      const tabs = await chrome.tabs.query({ url: 'https://www.homedepot.com/*' });
-      if (tabs.length) { await save({ paused: true, message: 'Existing Home Depot tab preserved; review isolated profile' }); return; }
+      // A leftover HD tab is not ours to repurpose; only pause recovery closes it, after an empty-cart read.
+      const tabs = await chrome.tabs.query({ url: SUPPLIER_TABS });
+      if (tabs.length) { await pause({}, 'Existing Home Depot tab preserved; review isolated profile'); return; }
       const job = await api('/jobs/claim', { worker_id: workerId });
       if (!job) return;
       state = { job, workerId, phase: 'initial', phaseAt: Date.now(), startedAt: Date.now() };
@@ -77,7 +125,7 @@ async function deliveryTick() {
     }
     catch (error) {
       // Network interruptions preserve progress. An expired lease never authorizes further clicks.
-      if (String(error.message).includes('409')) await save({ ...state, paused: true, message: 'Delivery lease no longer valid; cart preserved' });
+      if (String(error.message).includes('409')) await pause(state, 'Delivery lease no longer valid; cart preserved');
       return;
     }
     if (!state.tabId) throw Error('Interrupted tab creation; inspect isolated profile');
@@ -177,12 +225,12 @@ async function deliveryTick() {
           await save(null);
           return;
         } catch {
-          await save({ ...state, paused: true, message: 'Could not confirm delivery retry or tab cleanup; review isolated profile' });
+          await pause(state, 'Could not confirm delivery retry or tab cleanup; review isolated profile');
           return;
         }
       }
       try { await api(`/jobs/${state.job.id}/failed`, { ...lease(state), message, retryable: false }); } catch {}
-      await save({ ...state, paused: true, message });
+      await pause(state, message);
     } else await chrome.storage.local.set({ deliveryLastError: String(error.message || error) });
   } finally { polling = false; }
 }

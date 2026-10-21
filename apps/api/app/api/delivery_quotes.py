@@ -146,3 +146,13 @@ def fail_check(job_id: int, payload: CheckFailure, db: Session = Depends(get_db)
         return delivery_checks.fail_check(db, job_id, **payload.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/cart-cleared")
+def retry_after_cart_cleared(job_id: int, payload: WorkerClaim, db: Session = Depends(get_db)):
+    try:
+        return delivery_checks.retry_after_cart_cleared(db, job_id, payload.worker_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
