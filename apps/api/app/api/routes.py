@@ -1272,13 +1272,71 @@ def list_depop_source_photos(
     return list(db.scalars(stmt).all())
 
 
+class DepopPhotoRenderError(Exception):
+    """The source photo could not be downloaded, decoded or rendered."""
+
+
+def _render_depop_square_jpeg(
+    image_url: str,
+    *,
+    background_mode: str | None,
+    crop_x: float | None,
+    crop_y: float | None,
+    crop_zoom: float | None,
+) -> bytes:
+    """Download and render the 1200x1200 Depop photo entirely in memory.
+
+    Raises DepopPhotoRenderError on any failure so callers can refuse to record
+    an approval that has no usable rendered artifact behind it."""
+    try:
+        response = httpx.get(image_url, timeout=20, follow_redirects=True)
+        response.raise_for_status()
+        with Image.open(io.BytesIO(response.content)) as opened:
+            source = opened.convert("RGB")
+        width, height = source.size
+        if width < 1 or height < 1:
+            raise ValueError("empty image")
+        if background_mode == "blur":
+            # Keep the entire source photo untouched in the foreground and
+            # derive a soft edge-to-edge backdrop from the same pixels. This
+            # gives portrait/landscape photos a square canvas without
+            # inventing or altering product details.
+            square = ImageOps.fit(
+                source, (1200, 1200), method=Image.Resampling.LANCZOS
+            ).filter(ImageFilter.GaussianBlur(radius=36))
+            square = ImageEnhance.Brightness(square).enhance(0.72)
+            foreground = source.copy()
+            foreground.thumbnail((1120, 1120), Image.Resampling.LANCZOS)
+            paste_x = (1200 - foreground.width) // 2
+            paste_y = (1200 - foreground.height) // 2
+            square.paste(foreground, (paste_x, paste_y))
+        else:
+            zoom = max(1.0, min(4.0, float(crop_zoom or 1.0)))
+            side = max(1.0, min(width, height) / zoom)
+            center_x = width / 2 - float(crop_x or 0.0) * max(0.0, width - side) / 2
+            center_y = height / 2 - float(crop_y or 0.0) * max(0.0, height - side) / 2
+            left = max(0.0, min(width - side, center_x - side / 2))
+            top = max(0.0, min(height - side, center_y - side / 2))
+            square = source.crop((round(left), round(top), round(left + side), round(top + side)))
+            square = square.resize((1200, 1200), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        square.save(output, "JPEG", quality=92, optimize=True)
+        return output.getvalue()
+    except (httpx.HTTPError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise DepopPhotoRenderError(type(exc).__name__) from exc
+
+
 @router.post("/depop/source-photos/{photo_id}/decision", response_model=DepopSourcePhotoRead)
 def decide_depop_source_photo(
     photo_id: int, payload: DepopPhotoDecision, db: Session = Depends(get_db)
 ) -> DepopSourcePhoto:
     """Record a swipe. Approving with a variant also wires the photo into that
     variant's publish payload, so the swipe queue feeds the existing Depop
-    listing path instead of being a parallel store."""
+    listing path instead of being a parallel store.
+
+    An approval is only saved once its square photo has been downloaded,
+    decoded, rendered and written. Any failure leaves the photo exactly as it
+    was (still pending in the queue) and returns an error to retry later."""
     photo = db.get(DepopSourcePhoto, photo_id)
     if photo is None:
         raise HTTPException(status_code=404, detail="Photo not found")
@@ -1289,6 +1347,22 @@ def decide_depop_source_photo(
         if variant is None or variant.product_id != photo.product_id:
             raise HTTPException(status_code=400, detail="Variant must belong to the same product")
 
+    rendered: bytes | None = None
+    if payload.status == "approved" and variant is not None:
+        try:
+            rendered = _render_depop_square_jpeg(
+                photo.image_url,
+                background_mode=payload.background_mode,
+                crop_x=payload.crop_x,
+                crop_y=payload.crop_y,
+                crop_zoom=payload.crop_zoom,
+            )
+        except DepopPhotoRenderError:
+            raise HTTPException(
+                status_code=502,
+                detail="Photo could not be downloaded or rendered; it was not approved. Try again later.",
+            )
+
     photo.status = payload.status
     photo.variant_id = variant.id if variant is not None else None
     photo.crop_x = payload.crop_x
@@ -1298,72 +1372,72 @@ def decide_depop_source_photo(
     if variant is not None:
         photo.variant_label = variant.color or photo.variant_label
 
-    if payload.status == "approved" and variant is not None:
-        image = db.scalar(
-            select(ProductImage).where(
-                ProductImage.product_id == photo.product_id,
-                ProductImage.image_url == photo.image_url,
+    destination: Path | None = None
+    previous_bytes: bytes | None = None
+    if rendered is not None and variant is not None:
+        relative = Path("downloads") / "product_images" / str(photo.product_id) / f"depop-{photo.id}.jpg"
+        destination = PROJECT_ROOT / relative
+        staging = destination.with_name(f"{destination.name}.part")
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                previous_bytes = destination.read_bytes()
+            staging.write_bytes(rendered)
+            staging.replace(destination)
+        except OSError:
+            db.rollback()
+            try:
+                staging.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise HTTPException(
+                status_code=500,
+                detail="Rendered photo could not be saved; it was not approved. Try again later.",
             )
-        )
-        if image is None:
-            highest = db.scalar(
-                select(func.max(ProductImage.sort_order)).where(
-                    ProductImage.product_id == photo.product_id
+
+    try:
+        if destination is not None and variant is not None:
+            image = db.scalar(
+                select(ProductImage).where(
+                    ProductImage.product_id == photo.product_id,
+                    ProductImage.image_url == photo.image_url,
                 )
             )
-            image = ProductImage(
-                product_id=photo.product_id,
-                image_url=photo.image_url,
-                sort_order=int(highest or 0) + 1,
-            )
-            db.add(image)
-            db.flush()
-        try:
-            response = httpx.get(photo.image_url, timeout=20, follow_redirects=True)
-            response.raise_for_status()
-            source = Image.open(io.BytesIO(response.content)).convert("RGB")
-            width, height = source.size
-            if photo.background_mode == "blur":
-                # Keep the entire source photo untouched in the foreground and
-                # derive a soft edge-to-edge backdrop from the same pixels. This
-                # gives portrait/landscape photos a square canvas without
-                # inventing or altering product details.
-                square = ImageOps.fit(
-                    source, (1200, 1200), method=Image.Resampling.LANCZOS
-                ).filter(ImageFilter.GaussianBlur(radius=36))
-                square = ImageEnhance.Brightness(square).enhance(0.72)
-                foreground = source.copy()
-                foreground.thumbnail((1120, 1120), Image.Resampling.LANCZOS)
-                paste_x = (1200 - foreground.width) // 2
-                paste_y = (1200 - foreground.height) // 2
-                square.paste(foreground, (paste_x, paste_y))
-            else:
-                zoom = max(1.0, min(4.0, float(photo.crop_zoom or 1.0)))
-                side = max(1.0, min(width, height) / zoom)
-                center_x = width / 2 - float(photo.crop_x or 0.0) * max(0.0, width - side) / 2
-                center_y = height / 2 - float(photo.crop_y or 0.0) * max(0.0, height - side) / 2
-                left = max(0.0, min(width - side, center_x - side / 2))
-                top = max(0.0, min(height - side, center_y - side / 2))
-                square = source.crop((round(left), round(top), round(left + side), round(top + side)))
-                square = square.resize((1200, 1200), Image.Resampling.LANCZOS)
-            relative = Path("downloads") / "product_images" / str(photo.product_id) / f"depop-{photo.id}.jpg"
-            destination = PROJECT_ROOT / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            square.save(destination, "JPEG", quality=92, optimize=True)
+            if image is None:
+                highest = db.scalar(
+                    select(func.max(ProductImage.sort_order)).where(
+                        ProductImage.product_id == photo.product_id
+                    )
+                )
+                image = ProductImage(
+                    product_id=photo.product_id,
+                    image_url=photo.image_url,
+                    sort_order=int(highest or 0) + 1,
+                )
+                db.add(image)
+                db.flush()
             image.local_path = relative.as_posix()
-        except (httpx.HTTPError, OSError, ValueError):
-            # Keep the swipe decision even if Amazon temporarily refuses the
-            # image; the original URL remains available for a later retry.
-            pass
-        try:
-            image_ids = [int(value) for value in json.loads(variant.image_ids_json or "[]")]
-        except (TypeError, ValueError, json.JSONDecodeError):
-            image_ids = []
-        if image.id not in image_ids and len(image_ids) < 4:
-            image_ids.append(image.id)
-            variant.image_ids_json = json.dumps(image_ids)
-
-    db.commit()
+            try:
+                image_ids = [int(value) for value in json.loads(variant.image_ids_json or "[]")]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                image_ids = []
+            if image.id not in image_ids and len(image_ids) < 4:
+                image_ids.append(image.id)
+                variant.image_ids_json = json.dumps(image_ids)
+        db.commit()
+    except Exception:
+        db.rollback()
+        if destination is not None:
+            # Do not leave a new artifact behind for an approval that was
+            # never recorded; restore the earlier render if there was one.
+            try:
+                if previous_bytes is None:
+                    destination.unlink(missing_ok=True)
+                else:
+                    destination.write_bytes(previous_bytes)
+            except OSError:
+                pass
+        raise
     db.refresh(photo)
     return photo
 

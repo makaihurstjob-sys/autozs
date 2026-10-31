@@ -71,7 +71,7 @@ def test_depop_account_variant_and_isolated_worker_queue(client, monkeypatch, tm
     from app.main import app
     from app.models.domain import ProductImage
     monkeypatch.setattr("app.services.depop_jobs.PROJECT_ROOT", tmp_path)
-    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads").mkdir(exist_ok=True)
     (tmp_path / "downloads" / "image.jpg").write_bytes(b"test image")
     database = next(app.dependency_overrides[get_db]())
     for image in database.query(ProductImage).all():
@@ -140,12 +140,25 @@ def test_depop_jobs_next_returns_404_when_queue_is_empty(client) -> None:
 
 
 def test_schedule_approved_photos_creates_idempotent_four_photo_batches(client, monkeypatch, tmp_path) -> None:
-    import httpx
+    import io
 
-    def fail_image_download(*args, **kwargs):
-        raise httpx.ConnectError("offline test image")
+    from PIL import Image
 
-    monkeypatch.setattr("app.api.routes.httpx.get", fail_image_download)
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 64), (120, 90, 60)).save(buffer, "JPEG")
+
+    class ImageResponse:
+        content = buffer.getvalue()
+        headers = {"content-type": "image/jpeg"}
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status() -> None:
+            return None
+
+    # Approvals require a rendered photo, so serve a real decodable image.
+    monkeypatch.setattr("app.api.routes.httpx.get", lambda *args, **kwargs: ImageResponse())
+    monkeypatch.setattr("app.api.routes.PROJECT_ROOT", tmp_path)
     client.post(
         "/depop/accounts",
         json={"key": "closet", "label": "Closet", "enabled": True, "writes_enabled": True},
@@ -188,7 +201,7 @@ def test_schedule_approved_photos_creates_idempotent_four_photo_batches(client, 
     from app.main import app
     from app.models.domain import ProductImage
     monkeypatch.setattr("app.services.depop_jobs.PROJECT_ROOT", tmp_path)
-    (tmp_path / "downloads").mkdir()
+    (tmp_path / "downloads").mkdir(exist_ok=True)
     (tmp_path / "downloads" / "image.jpg").write_bytes(b"test image")
     database = next(app.dependency_overrides[get_db]())
     for image in database.query(ProductImage).all():
