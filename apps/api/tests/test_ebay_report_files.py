@@ -59,13 +59,17 @@ def test_automatic_active_listings_report_imports_real_ebay_csv_and_preserves_sc
         assert listings["800262913581"].status == "active"
         assert listings["800262913581"].price == 123.53
         assert listings["800262913581"].views == 7
-        assert listings["800262913581"].started_at.isoformat() == "2026-06-29T23:00:01"
-        assert listings["800262913581"].renews_at.isoformat() == "2026-07-29T23:00:01"
+        # Listing times are stored as naive Eastern wall time (same convention as
+        # listing_schedule_at): 16:00:01 PDT is 19:00:01 ET.
+        assert listings["800262913581"].started_at.isoformat() == "2026-06-29T19:00:01"
+        assert listings["800262913581"].renews_at.isoformat() == "2026-07-29T19:00:01"
         assert listings["ACTIVE-MISSING-1"].status == "tombstoned"
         assert listings["SCHEDULED-MISSING-1"].status == "scheduled"
-        assert listings["STALE-SCHEDULED-1"].status == "tombstoned"
+        # An active-only report cannot prove a scheduled item was removed, even
+        # after its local schedule passed (be79db2): it and its job stay put.
+        assert listings["STALE-SCHEDULED-1"].status == "scheduled"
         stale_job = db.scalar(select(ListingJob).where(ListingJob.product_id == products[3].id))
-        assert stale_job.status == "tombstoned"
+        assert stale_job.status == "needs_review"
 
 
 def test_automatic_report_accepts_filename_safe_form_of_canonical_dotted_store_key(tmp_path) -> None:

@@ -3,13 +3,13 @@ import pytest
 from app.main import app
 from app.core.database import get_db
 from app.models.domain import SupplierOrder, EbayCheckoutVerification
-from test_fulfillment import _prepare_order
+from test_fulfillment import _place_order, _prepare_order
 from ebay_verification_helpers import verify_queued
 
 
 def setup_order(client):
     row = _prepare_order(client).json()
-    assert client.post(f"/supplier-orders/{row['id']}/approve").status_code == 200
+    assert _place_order(client, row["id"]).status_code == 200
     identity = client.get("/supplier-orders/ebay-verification-next").json()
     return row, {"ebay_order_id": identity["ebay_order_id"], "account_key": identity["account_key"],
                  "source_url": "https://www.ebay.com/mesh/ord/details?mode=SH&orderid=" + identity["ebay_order_id"],
@@ -105,6 +105,10 @@ def test_unknown_requires_reapproval_and_new_evidence(client):
     payload['status']='eligible'
     assert client.post(f"/supplier-orders/{row['id']}/ebay-verification",json=payload).status_code==422
     assert client.post(f"/supplier-orders/{row['id']}/approve").status_code==200
+    # Review alone does not authorize checkout: the claim drops it back to a
+    # draft until the owner clicks Place Order again.
     assert client.post('/supplier-orders/next').json() is None
+    assert client.get(f"/supplier-orders/{row['id']}").json()['status']=='draft'
+    assert _place_order(client, row["id"]).status_code==200
     assert verify_queued(client).status_code==200
     assert client.post('/supplier-orders/next').json()['id']==row['id']

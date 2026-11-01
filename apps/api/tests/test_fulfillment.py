@@ -24,6 +24,15 @@ def _prepare_order(client, *, gift_card_id: int | None = None):
     return client.post(f"/orders/{order['id']}/supplier-orders/prepare", json=payload)
 
 
+def _place_order(client, supplier_order_id: int):
+    """Authorize a purchase the way the owner does: the dashboard Place Order
+    button. Plain /approve no longer grants checkout permission."""
+    return client.post(
+        f"/supplier-orders/{supplier_order_id}/place-order",
+        headers={"Origin": "http://127.0.0.1:3000", "X-AutoZS-Owner-Action": "place-order"},
+    )
+
+
 def test_supplier_order_requires_shipping_address_before_approval(client) -> None:
     product = client.post(
         "/products/import-captured",
@@ -159,7 +168,7 @@ def test_gift_card_supplier_order_flow_debits_card_once(client) -> None:
     assert prepared["gift_card_amount"] == 20.0
     assert prepared["card_amount"] == 0.0
 
-    approved = client.post(f"/supplier-orders/{prepared['id']}/approve").json()
+    approved = _place_order(client, prepared["id"]).json()
     assert approved["status"] == "queued"
 
     assert verify_queued(client).status_code == 200
@@ -234,7 +243,7 @@ def test_checkout_credential_is_brokered_only_for_the_active_claim(client, monke
     assert secured.json()["last_four"] == "1234"
 
     prepared = _prepare_order(client, gift_card_id=card["id"]).json()
-    approved = client.post(f"/supplier-orders/{prepared['id']}/approve").json()
+    approved = _place_order(client, prepared["id"]).json()
     assert approved["approved_total"] == 20.0
     assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next").json()
@@ -287,7 +296,7 @@ def test_home_depot_payment_card_is_secured_and_brokered_only_to_claim(client, m
     assert secured.json() == {"supplier": "home_depot", "stored": True, "last_four": "1111"}
 
     prepared = _prepare_order(client).json()
-    client.post(f"/supplier-orders/{prepared['id']}/approve")
+    _place_order(client, prepared["id"])
     assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next").json()
     credential = client.post(
@@ -333,7 +342,7 @@ def test_repeated_approval_and_prepare_preserve_active_checkout_lease(client):
     from app.core.database import get_db
     from app.models.domain import SupplierOrder
     prepared = _prepare_order(client).json()
-    client.post(f"/supplier-orders/{prepared['id']}/approve")
+    _place_order(client, prepared["id"])
     assert verify_queued(client).status_code == 200
     claimed = client.post('/supplier-orders/next').json()
     db = next(app.dependency_overrides[get_db]())
@@ -358,7 +367,7 @@ def test_expired_checkout_requires_reconciliation_not_automatic_retry(client):
     from app.core.database import get_db
     from app.models.domain import SupplierOrder
     prepared = _prepare_order(client).json()
-    client.post(f"/supplier-orders/{prepared['id']}/approve")
+    _place_order(client, prepared["id"])
     assert verify_queued(client).status_code == 200
     client.post('/supplier-orders/next')
     db = next(app.dependency_overrides[get_db]())
