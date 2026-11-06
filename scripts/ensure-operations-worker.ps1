@@ -79,11 +79,20 @@ if ($runnableCount -eq 0) {
 }
 
 function Test-OperationsExtension {
-    $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
-    if (-not (Test-Path -LiteralPath $node)) { throw 'Node is required to verify the AUTOZS operations extension.' }
-    $output = & $node (Join-Path $PSScriptRoot 'ensure-operations-extension.mjs')
-    if ($LASTEXITCODE -ne 0) { throw 'AUTOZS operations extension verification failed.' }
-    Write-WorkerLog (($output | Out-String).Trim())
+    $mutex = [Threading.Mutex]::new($false, 'Local\AutoZS-OperationsExtensionHealth')
+    $held = $false
+    try {
+        try { $held = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $held = $true }
+        if (-not $held) { Write-WorkerLog 'Another operations extension health check is in progress.'; return }
+        $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
+        if (-not (Test-Path -LiteralPath $node)) { throw 'Node is required to verify the AUTOZS operations extension.' }
+        $output = & $node (Join-Path $PSScriptRoot 'ensure-operations-extension.mjs')
+        if ($LASTEXITCODE -ne 0) { throw 'AUTOZS operations extension verification failed.' }
+        Write-WorkerLog (($output | Out-String).Trim())
+    } finally {
+        if ($held) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
 }
 
 if (Test-MainWorkerRunning) {
