@@ -334,3 +334,13 @@ def test_supplier_alerts_are_not_silently_resolved_by_row_limit() -> None:
             source_url="https://example.com", in_stock=False))
     db.commit()
     assert summarize_operational_alerts(db)["critical"] >= 55
+
+
+def test_more_than_fifty_genuine_takedowns_remain_active() -> None:
+    db = make_session()
+    product = add_product(db)
+    for index in range(55):
+        db.add(EbayListing(product_id=product.id, listing_id=f"takedown-{index}",
+            relist_blocked=True, removal_reason="takedown"))
+    db.commit()
+    assert summarize_operational_alerts(db)["critical"] >= 55
