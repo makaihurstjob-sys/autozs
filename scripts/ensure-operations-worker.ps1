@@ -15,6 +15,7 @@ $queuePaths = @(
     "/source-refresh/jobs",
     "/ebay/revision-jobs",
     "/ebay/revision-batches",
+    "/ebay/sync-runs",
     "/depop/jobs"
 )
 
