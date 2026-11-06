@@ -410,8 +410,10 @@
   const captureAndImport = async (mode = "manual") => {
     const refreshContext = typeof sourceRefreshContextFromLocation === "function" ? sourceRefreshContextFromLocation() : null;
     const automatic = mode === "auto";
+    let automaticCloseRequested = false;
     const closeCompletedAutomaticTab = () => {
-      if (!automatic) return;
+      if (!automatic || automaticCloseRequested) return;
+      automaticCloseRequested = true;
       setTimeout(() => {
         try {
           const closeRequest = chrome.runtime.sendMessage({
@@ -547,6 +549,9 @@
         } catch {}
       }
     } finally {
+      // Even a failed capture/API acknowledgement must release Amazon's slot.
+      // Home Depot retains its existing single-reload recovery path.
+      if (/(^|\.)amazon\.com$/i.test(location.hostname)) closeCompletedAutomaticTab();
       setTimeout(() => {
         button.disabled = false;
         button.textContent = "Import to Website";

@@ -432,24 +432,9 @@ def launch_home_depot_backup_profile() -> dict[str, str]:
     shutil.copytree(extension_source, extension, dirs_exist_ok=True)
     manifest_path = extension / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-    manifest["name"] = "AutoZS Home Depot Backup Capture"
-    manifest["description"] = "Capture-only Home Depot failover worker. This extension cannot run eBay jobs."
-    manifest["host_permissions"] = [
-        permission
-        for permission in manifest.get("host_permissions", [])
-        if "homedepot.com" in permission
-        or "desktop-56u49jf" in permission
-        or "127.0.0.1" in permission
-        or "localhost" in permission
-    ]
-    manifest["content_scripts"] = [
-        script
-        for script in manifest.get("content_scripts", [])
-        if not any("ebay.com" in match for match in script.get("matches", []))
-        and not any("lowes.com" in match for match in script.get("matches", []))
-    ]
-    for resource in manifest.get("web_accessible_resources", []):
-        resource["matches"] = [match for match in resource.get("matches", []) if "homedepot.com" in match]
+    from app.services.backup_capture_manifest import build_backup_capture_manifest
+
+    manifest = build_backup_capture_manifest(manifest)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     profile.mkdir(parents=True, exist_ok=True)
     dashboard = (

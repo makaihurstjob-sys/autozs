@@ -36,6 +36,7 @@ async function runNativePcInputTest() {
     console,
     URL,
     URLSearchParams,
+    AbortSignal,
     Uint8Array,
     btoa: (value) => Buffer.from(value, "binary").toString("base64"),
     fetch: async (url, options = {}) => {
@@ -170,6 +171,7 @@ async function runNativePcInputTest() {
         },
       },
       storage: {
+        session: { get: async key => ({[key]:storage[key]}), set: async values => Object.assign(storage,values) },
         local: {
           get: async (key) => ({ [key]: storage[key] }),
           set: async (values) => Object.assign(storage, values),
