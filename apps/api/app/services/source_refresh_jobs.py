@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.domain import AutomationRun, EbayListing, Product, ProductStatus, SourceRefreshJob, SourceRefreshJobStatus
+from app.models.domain import AutomationRun, EbayListing, Product, ProductStatus, SourceRefreshJob, SourceRefreshJobStatus, SupplierProduct
 from app.models.depop import DepopListingVariant
 from app.services.ebay_revisions import enqueue_ebay_price_revisions
 from app.services.importer import recalculate_all_draft_prices
@@ -128,6 +128,7 @@ def create_source_refresh_batch(
     force: bool = False,
     product_ids: set[int] | None = None,
     depop_product_ids: set[int] | None = None,
+    recheck_out_of_stock: bool = False,
 ) -> tuple[str, int, list[SourceRefreshJob]]:
     now = datetime.utcnow()
     release_expired_source_refresh_jobs(db, now=now)
@@ -157,11 +158,21 @@ def create_source_refresh_batch(
         supplier = product.supplier_products[0] if product.supplier_products else None
         if supplier is None or not supplier.source_url:
             continue
-        if supplier.in_stock is False and not force:
-            # Out-of-stock products have no usable delivery quote. Automatic
-            # polling must not continually reopen them; a manual forced refresh
-            # remains available when the user wants to check for restocking.
+        restock_recheck = supplier.in_stock is False and recheck_out_of_stock and not force
+        if supplier.in_stock is False and not force and not restock_recheck:
             continue
+        if restock_recheck:
+            # Read the product page at most daily; never infer restocking from
+            # age or edit the stock flag here. Only explicit capture evidence
+            # can restore availability; relist/delivery/purchase gates still apply.
+            restock_cutoff = now - timedelta(hours=max(24.0, interval_hours))
+            latest = db.scalar(select(SourceRefreshJob).where(
+                SourceRefreshJob.product_id == product.id,
+            ).order_by(SourceRefreshJob.id.desc()))
+            observed = supplier.stock_observed_at
+            attempted = (latest.completed_at or latest.updated_at) if latest else None
+            if any(stamp and stamp > restock_cutoff for stamp in (observed, attempted)):
+                continue
         if supplier.price_unavailable and not force:
             # Some Home Depot products intentionally hide their price until
             # they are placed in the cart. Automatic polling cannot reveal it,
@@ -182,7 +193,7 @@ def create_source_refresh_batch(
                     # Wait for the normal refresh interval instead of creating a new
                     # job every scheduler poll; force=True remains the manual escape.
                     continue
-        if force or supplier.updated_at <= cutoff or supplier.last_price is None:
+        if force or restock_recheck or supplier.updated_at <= cutoff or supplier.last_price is None:
             due.append((product, supplier))
     due.sort(key=lambda item: (item[1].updated_at, item[0].id))
 
@@ -231,6 +242,11 @@ def create_automatic_source_refresh_batch(db: Session) -> tuple[str | None, int,
         )
     ).all())
     eligible_product_ids.update(depop_product_ids)
+    # Monitoring sources must be able to leave the out-of-stock state without
+    # owner retries. Paused/deleted products remain excluded by the batch query.
+    eligible_product_ids.update(db.scalars(select(SupplierProduct.product_id).where(
+        SupplierProduct.in_stock.is_(False),
+    )).all())
     if not eligible_product_ids:
         return None, 0, [], "No scheduled or live listings are eligible for automatic source refresh."
     batch_key, due_available, jobs = create_source_refresh_batch(
@@ -240,6 +256,7 @@ def create_automatic_source_refresh_batch(db: Session) -> tuple[str | None, int,
         force=False,
         product_ids=eligible_product_ids,
         depop_product_ids=depop_product_ids,
+        recheck_out_of_stock=True,
     )
     if jobs:
         message = (

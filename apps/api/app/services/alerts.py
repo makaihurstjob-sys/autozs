@@ -34,6 +34,10 @@ STALE_JOB_AFTER = timedelta(minutes=45)
 STALE_BATCH_AFTER = timedelta(minutes=45)
 STALE_TRAFFIC_DATA_AFTER = timedelta(hours=26)
 STUCK_TRAFFIC_SYNC_AFTER = timedelta(hours=2)
+INTENTIONAL_RELIST_BLOCK_REASONS = {
+    "zero_views_before_renewal", "zero_views_29_days", "duplicate_supplier_listing",
+    "delivery_unavailable", "stale_draft_collision",
+}
 
 
 def refresh_operational_alerts(db: Session, now: datetime | None = None) -> list[OperationalAlert]:
@@ -163,9 +167,14 @@ def _ebay_takedown_alert_specs(db: Session) -> list[dict[str, Any]]:
     """
     listings = db.scalars(
         select(EbayListing)
-        .where(EbayListing.relist_blocked == True)  # noqa: E712
+        .where(
+            EbayListing.relist_blocked.is_(True),
+            or_(
+                EbayListing.removal_reason.is_(None),
+                EbayListing.removal_reason.notin_(INTENTIONAL_RELIST_BLOCK_REASONS),
+            ),
+        )
         .order_by(EbayListing.removed_at.desc().nullslast(), EbayListing.id.desc())
-        .limit(50)
     ).all()
     specs: list[dict[str, Any]] = []
     for listing in listings:
@@ -175,7 +184,11 @@ def _ebay_takedown_alert_specs(db: Session) -> list[dict[str, Any]]:
                 key=f"ebay-takedown:{listing.id}",
                 severity=OperationalAlertSeverity.critical.value,
                 source="ebay-takedown",
-                title=f"eBay removed the listing for {_title(product, listing.product_id)}",
+                title=(
+                    f"eBay removed the listing for {_title(product, listing.product_id)}"
+                    if listing.removal_reason == "takedown"
+                    else f"Unexplained relist block for {_title(product, listing.product_id)}"
+                ),
                 message=(
                     listing.removal_detail
                     or "eBay took this listing down. Relisting is blocked until it is reviewed."
@@ -377,7 +390,6 @@ def _supplier_alert_specs(db: Session) -> list[dict[str, Any]]:
         select(SupplierProduct)
         .where(SupplierProduct.in_stock == False)  # noqa: E712
         .order_by(SupplierProduct.updated_at.desc())
-        .limit(50)
     ).all()
     specs: list[dict[str, Any]] = []
     for supplier in products:

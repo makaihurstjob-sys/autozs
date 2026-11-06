@@ -79,6 +79,62 @@ def add_listing_draft(db, product, calculated_price=30.0):
     return draft
 
 
+def test_automatic_restock_recheck_is_daily_deduplicated_and_preserves_blocks():
+    from app.models.domain import SourceRefreshJob
+    db = make_session()
+    product = add_source_product(db)
+    product.status = "monitoring"
+    source = product.supplier_products[0]
+    source.in_stock = False
+    source.stock_observed_at = datetime.utcnow() - timedelta(days=2)
+    listing = add_ebay_listing(db, product, status="ended")
+    listing.relist_blocked = True
+    listing.removal_reason = "zero_views_before_renewal"
+    db.commit()
+    _, _, jobs, _ = create_automatic_source_refresh_batch(db)
+    assert [j.product_id for j in jobs] == [product.id]
+    assert not source.in_stock and listing.relist_blocked and listing.status == "ended"
+    assert create_automatic_source_refresh_batch(db)[2] == []
+    job = jobs[0]
+    job.status = "failed"
+    job.completed_at = datetime.utcnow()
+    db.commit()
+    assert create_automatic_source_refresh_batch(db)[2] == []
+    job.completed_at = datetime.utcnow() - timedelta(days=2)
+    db.commit()
+    assert len(create_automatic_source_refresh_batch(db)[2]) == 1
+    assert db.query(SourceRefreshJob).count() == 2
+
+
+def test_restock_recheck_skips_paused_deleted_and_recent_stock_observations():
+    db = make_session()
+    for index, status in enumerate(("paused", "deleted", "monitoring")):
+        product = add_source_product(db, sku=f"restock-{index}")
+        product.status = status
+        source = product.supplier_products[0]
+        source.in_stock = False
+        source.stock_observed_at = datetime.utcnow()
+    db.commit()
+    assert create_automatic_source_refresh_batch(db)[2] == []
+
+
+def test_restock_alert_only_resolves_on_explicit_stock_capture():
+    from app.services.alerts import refresh_operational_alerts
+    db = make_session()
+    product = add_source_product(db)
+    source = product.supplier_products[0]
+    source.in_stock = False
+    db.commit()
+    alert = next(a for a in refresh_operational_alerts(db) if a.source == "supplier")
+    update_product_from_capture(db, product.id, title=product.title, source_price=20.0)
+    refresh_operational_alerts(db)
+    assert not source.in_stock and alert.status == "open"
+    update_product_from_capture(db, product.id, title=product.title, source_price=20.0,
+        source_in_stock=True)
+    refresh_operational_alerts(db)
+    assert source.in_stock and source.stock_observed_at and alert.status == "resolved"
+
+
 def test_depop_amazon_source_refresh_tracks_published_and_queued_not_drafts():
     db = make_session()
     products = []

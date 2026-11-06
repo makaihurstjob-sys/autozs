@@ -291,3 +291,46 @@ def test_replacing_a_revision_job_reuses_one_alert_per_listing() -> None:
     assert {a.key for a in revision_alerts} == keys_after_first, "replacement job created a second alert row"
     assert len(revision_alerts) == 1
     assert revision_alerts[0].job_id == replacement.id, "alert should track the current proposal"
+
+
+def test_intentional_retirements_do_not_hide_real_takedown_or_unknown_block() -> None:
+    from app.models.domain import OperationalAlert
+    db = make_session()
+    product = add_product(db)
+    now = datetime.utcnow()
+    for index in range(55):
+        db.add(EbayListing(product_id=product.id, listing_id=f"retired-{index}",
+            status="ended", quantity=0, relist_blocked=True,
+            removal_reason="zero_views_before_renewal", removed_at=now))
+    real = EbayListing(product_id=product.id, listing_id="real-takedown",
+        relist_blocked=True, removal_reason="takedown", removed_at=now-timedelta(days=60))
+    unknown = EbayListing(product_id=product.id, listing_id="unknown", relist_blocked=True)
+    db.add_all([real, unknown])
+    db.commit()
+    retired = db.query(EbayListing).filter_by(listing_id="retired-0").one()
+    old = OperationalAlert(key=f"ebay-takedown:{retired.id}", source="ebay-takedown",
+        title="eBay removed listing", severity="critical", status="open")
+    db.add(old)
+    db.commit()
+
+    alerts = [a for a in refresh_operational_alerts(db) if a.source == "ebay-takedown"]
+    assert {a.listing_id for a in alerts} == {"real-takedown", "unknown"}
+    assert next(a for a in alerts if a.listing_id == "unknown").title.startswith("Unexplained")
+    assert old.status == "resolved"
+    assert retired.relist_blocked and retired.status == "ended" and retired.quantity == 0
+    real.removal_reason = "zero_views_before_renewal"
+    db.commit()
+    refresh_operational_alerts(db)
+    real.removal_reason = "takedown"
+    db.commit()
+    assert any(a.listing_id == "real-takedown" for a in refresh_operational_alerts(db))
+
+
+def test_supplier_alerts_are_not_silently_resolved_by_row_limit() -> None:
+    db = make_session()
+    for index in range(55):
+        product = add_product(db, sku=f"stock-{index}")
+        db.add(SupplierProduct(product_id=product.id, supplier="home_depot",
+            source_url="https://example.com", in_stock=False))
+    db.commit()
+    assert summarize_operational_alerts(db)["critical"] >= 55
