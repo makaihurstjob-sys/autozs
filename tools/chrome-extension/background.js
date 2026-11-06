@@ -8,6 +8,7 @@ const REPORT_DOWNLOADS_KEY = "autozsEbayReportDownloads";
 const PRODUCT_CAPTURE_ALARM = "autozs-product-capture-poll";
 const PRODUCT_CAPTURE_LAST_OPENED_KEY = "autozsProductCaptureLastOpened";
 var productCaptureDispatchBusy = false;
+var supplierTabOpenBusy = false;
 const SOURCE_REFRESH_ALARM = "autozs-source-refresh-poll";
 const SOURCE_REFRESH_LAST_OPENED_KEY = "autozsSourceRefreshLastOpened";
 const LISTING_JOB_ALARM = "autozs-listing-job-poll";
@@ -55,6 +56,7 @@ const PRODUCT_CAPTURE_MIN_GAP_MS = 15 * 1000;
 const HOME_DEPOT_WORKER_TAB_MAX_AGE_MS = 15 * 60 * 1000;
 const EBAY_WORKER_TAB_MAX_AGE_MS = 20 * 60 * 1000;
 const AUTOZS_WORKER_OPENED_AT_PARAM = "autozs_worker_opened_at";
+const SUPPLIER_RUNNER_SLOT_KEY = "autozsSupplierRunnerSlot";
 const SUPPLIER_CHECKOUT_ERROR_COOLDOWN_MS = 30 * 60 * 1000;
 const SUPPLIER_TRACKING_MIN_GAP_MS = 6 * 60 * 60 * 1000;
 const SUPPLIER_TRACKING_ERROR_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -413,11 +415,15 @@ function stampedHomeDepotWorkerUrl(url, openedAt = Date.now()) {
 }
 
 async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
-  const tabs = await chrome.tabs.query({ url: ["https://www.homedepot.com/*", "https://www.amazon.com/*", "https://amazon.com/*"] });
+  const tabs = await chrome.tabs.query({});
+  const stored = await chrome.storage.session.get(SUPPLIER_RUNNER_SLOT_KEY);
+  const slot = stored?.[SUPPLIER_RUNNER_SLOT_KEY];
   const stale = tabs.filter((tab) => {
     try {
-      const parsed = new URL(tab.url || "");
-      if (parsed.hostname !== "www.homedepot.com" && !isSourceRefreshRunnerUrl(tab.url) && !isProductCaptureRunnerUrl(tab.url)) return false;
+      if (isRememberedSupplierRunner(tab, slot)) return now - slot.openedAt >= HOME_DEPOT_WORKER_TAB_MAX_AGE_MS;
+      const url = tab.pendingUrl || tab.url;
+      const parsed = new URL(url || "");
+      if (parsed.hostname !== "www.homedepot.com" && !isSourceRefreshRunnerUrl(url) && !isProductCaptureRunnerUrl(url)) return false;
       const automated = parsed.searchParams.get("ea_auto_import") === "1"
         || parsed.searchParams.has("autozs_refresh_job")
         || parsed.searchParams.get("autozs_tracking_poll") === "1";
@@ -433,11 +439,12 @@ async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
   });
   await Promise.all(stale.map(async (tab) => {
     try {
-      const parsed = new URL(tab.url || "");
+      const parsed = new URL(tab.pendingUrl || tab.url || "");
       const refreshJobId = Number(parsed.searchParams.get("autozs_refresh_job") || 0);
       if (refreshJobId) {
         await localApiJson(`/source-refresh/jobs/${refreshJobId}/failed`, {
           method: "POST",
+          signal: AbortSignal.timeout(10000),
           body: JSON.stringify({
             message: "Source worker tab exceeded the 15-minute limit and was closed automatically.",
           }),
@@ -509,8 +516,10 @@ async function closeLegacyProductImportTabs() {
 }
 
 async function productCaptureRunnerTab() {
-  const tabs = await chrome.tabs.query({ url: ["https://www.homedepot.com/*", "https://www.amazon.com/*", "https://amazon.com/*"] });
-  return tabs.find((tab) => isProductCaptureRunnerUrl(tab.url)) || null;
+  const tabs = await chrome.tabs.query({});
+  const stored = await chrome.storage.session.get(SUPPLIER_RUNNER_SLOT_KEY);
+  return tabs.find(tab => isProductCaptureRunnerUrl(tab.pendingUrl || tab.url)
+    || isRememberedSupplierRunner(tab, stored?.[SUPPLIER_RUNNER_SLOT_KEY])) || null;
 }
 
 async function hasQueuedSourceRefreshJob() {
@@ -539,6 +548,7 @@ async function openNextProductCapture() {
   productCaptureDispatchBusy = true;
   try {
   if (!(await canRunAutozsSourceJobs())) return;
+  await cleanupStaleHomeDepotWorkerTabs();
   if (await productCaptureRunnerTab()) return;
   if (await hasRunningSourceRefreshJob()) return;
   // Stock and price verification protects live listings. Give queued refreshes
@@ -566,32 +576,70 @@ async function openNextProductCapture() {
   runnerUrl.searchParams.set("autozs_capture_product_id", String(item.product_id));
   runnerUrl.searchParams.set(AUTOZS_WORKER_OPENED_AT_PARAM, String(Date.now()));
   await chrome.storage.local.set({ [PRODUCT_CAPTURE_LAST_OPENED_KEY]: Date.now() });
-  await chrome.tabs.create({ url: runnerUrl.href, active: false });
+  await openManagedSupplierRunner(runnerUrl.href);
   } finally { productCaptureDispatchBusy = false; }
 }
 
 function isSourceRefreshRunnerUrl(url) {
   try {
     const parsed = new URL(url || "");
-    return ["www.homedepot.com", "www.amazon.com", "amazon.com"].includes(parsed.hostname) && parsed.searchParams.has("autozs_refresh_job");
+    return parsed.protocol === "https:" && ["www.homedepot.com", "www.amazon.com", "amazon.com"].includes(parsed.hostname) && /^\d+$/.test(parsed.searchParams.get("autozs_refresh_job") || "");
   } catch {
     return false;
   }
 }
 
 async function openSourceRefreshRunnerUrl(url) {
-  const stampedUrl = stampedHomeDepotWorkerUrl(url);
-  const tabs = await chrome.tabs.query({ url: ["https://www.homedepot.com/*", "https://www.amazon.com/*", "https://amazon.com/*"] });
-  const runnerTab = tabs.find((tab) => isSourceRefreshRunnerUrl(tab.url));
-  if (runnerTab?.id) {
-    await chrome.tabs.update(runnerTab.id, { url: stampedUrl, active: false });
-    return;
-  }
-  await chrome.tabs.create({ url: stampedUrl, active: false });
+  return openManagedSupplierRunner(stampedHomeDepotWorkerUrl(url));
+}
+
+// One shared supplier slot, including pending navigations. Personal tabs never
+// qualify for reuse or removal. A removal failure prevents another tab opening.
+async function openManagedSupplierRunner(url) {
+  if (supplierTabOpenBusy) return;
+  supplierTabOpenBusy = true;
+  try {
+    const tabs = await chrome.tabs.query({});
+    const stored = await chrome.storage.session.get(SUPPLIER_RUNNER_SLOT_KEY);
+    const slot = stored?.[SUPPLIER_RUNNER_SLOT_KEY];
+    const owned = tabs.filter(tab =>
+      isSourceRefreshRunnerUrl(tab.pendingUrl || tab.url) || isProductCaptureRunnerUrl(tab.pendingUrl || tab.url)
+      || isRememberedSupplierRunner(tab, slot));
+    for (const extra of owned.slice(1)) await chrome.tabs.remove(extra.id);
+    const tab = owned[0]?.id
+      ? await chrome.tabs.update(owned[0].id, {url, active: false})
+      : await chrome.tabs.create({url, active: false});
+    if (tab?.id) {
+      try {
+        await chrome.storage.session.set({[SUPPLIER_RUNNER_SLOT_KEY]: {tabId: tab.id, url, openedAt: Date.now()}});
+      } catch (error) {
+        await chrome.tabs.remove(tab.id);
+        throw error;
+      }
+    }
+    return tab;
+  } finally { supplierTabOpenBusy = false; }
+}
+
+// Remember ownership across redirects and service-worker restarts. Leaving the
+// supplier origin relinquishes ownership; never follow an ID onto another site.
+function isRememberedSupplierRunner(tab, slot) {
+  if (!slot || tab.id !== slot.tabId) return false;
+  try {
+    const current = new URL(tab.pendingUrl || tab.url);
+    const original = new URL(slot.url);
+    const normalize = host => host.replace(/^www\./, "");
+    return current.protocol === "https:" && normalize(current.hostname) === normalize(original.hostname)
+      && ["amazon.com", "homedepot.com"].includes(normalize(current.hostname));
+  } catch { return false; }
 }
 
 async function openNextSourceRefreshJob() {
+  if (productCaptureDispatchBusy) return;
+  productCaptureDispatchBusy = true;
+  try {
   if (!(await canRunAutozsSourceJobs())) return;
+  await cleanupStaleHomeDepotWorkerTabs();
   if (await productCaptureRunnerTab()) return;
   if (await hasRunningSourceRefreshJob()) return;
   const stored = await chrome.storage.local.get(SOURCE_REFRESH_LAST_OPENED_KEY);
@@ -606,6 +654,7 @@ async function openNextSourceRefreshJob() {
   }
   await chrome.storage.local.set({ [SOURCE_REFRESH_LAST_OPENED_KEY]: Date.now() });
   await openSourceRefreshRunnerUrl(job.runner_url);
+  } finally { productCaptureDispatchBusy = false; }
 }
 
 async function hasRunningListingJob() {

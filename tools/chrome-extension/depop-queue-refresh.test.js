@@ -27,7 +27,7 @@ assert.equal(dashboard.jobActivityWorkloadCounts([{kind:'Depop listing',group:'q
 
 const background=fs.readFileSync(`${__dirname}/background.js`,'utf8');
 const opened=[]; let tabs=[];
-const runner={ URL, chrome:{tabs:{query:async()=>tabs,create:async tab=>opened.push(tab),update:async(id,tab)=>opened.push({id,...tab})}},stampedHomeDepotWorkerUrl:url=>url };
+const runner={ URL, supplierTabOpenBusy:false, SUPPLIER_RUNNER_SLOT_KEY:"slot", isProductCaptureRunnerUrl:()=>false, chrome:{storage:{session:{get:async()=>({}),set:async()=>{}}},tabs:{query:async()=>tabs,create:async tab=>opened.push(tab),update:async(id,tab)=>opened.push({id,...tab})}},stampedHomeDepotWorkerUrl:url=>url };
 vm.createContext(runner);
 vm.runInContext(background.slice(background.indexOf('function isSourceRefreshRunnerUrl('),background.indexOf('async function openNextSourceRefreshJob(')),runner);
 assert.equal(runner.isSourceRefreshRunnerUrl('https://www.amazon.com/dp/A?autozs_refresh_job=2'),true);

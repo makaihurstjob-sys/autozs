@@ -332,7 +332,7 @@ async function runIncompleteCaptureGuardTest() {
   }
 }
 
-async function runSourceRefreshPacingTest() {
+async function runSourceRefreshPacingTest(amazonFailure = false) {
   const body = new FakeElement("body");
   const delays = [];
   const runtimeMessages = [];
@@ -374,7 +374,7 @@ async function runSourceRefreshPacingTest() {
       __ebayAutomationAutoImportStarted: false,
       addEventListener: () => {},
     },
-    location: { search: "?ea_auto_import=1&autozs_refresh_job=7&autozs_refresh_batch=batch-1", replace: () => {} },
+    location: { hostname: amazonFailure ? "www.amazon.com" : "www.homedepot.com", search: "?ea_auto_import=1&autozs_refresh_job=7&autozs_refresh_batch=batch-1", replace: () => {} },
     document: {
       body,
       hidden: false,
@@ -393,7 +393,7 @@ async function runSourceRefreshPacingTest() {
       detected_shipping: 0,
       image_urls: "https://images.thdstatic.com/productImages/refresh-front.jpg",
     }),
-    importCapturedProduct: async () => ({ sku: "REFRESH", images: [{ id: 1 }] }),
+    importCapturedProduct: async () => { if (amazonFailure) throw new Error("Timed out"); return { sku: "REFRESH", images: [{ id: 1 }] }; },
     downloadProductImages: async () => {
       imageDownloads += 1;
       return { downloaded: 1, attempted: 1 };
@@ -402,7 +402,7 @@ async function runSourceRefreshPacingTest() {
       nextClaims += 1;
       return null;
     },
-    failSourceRefreshJob: async () => ({}),
+    failSourceRefreshJob: async () => { if (amazonFailure) throw new Error("API unavailable"); return {}; },
   };
 
   vm.createContext(context);
@@ -410,6 +410,10 @@ async function runSourceRefreshPacingTest() {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
+  if (amazonFailure) {
+    if (!runtimeMessages.some(m => m.type === "autozs-close-source-refresh-tab")) throw new Error("Amazon error plus failed acknowledgement must still close");
+    return;
+  }
   if (imageDownloads !== 0) throw new Error(`Expected price refresh to skip image downloads, got ${imageDownloads}`);
   if (delays.includes(45 * 1000)) throw new Error(`Expected the page to leave pacing to the background worker, got ${JSON.stringify(delays)}`);
   if (!runtimeMessages.some((message) => message.type === "autozs-source-refresh-cooldown")) {
@@ -438,6 +442,7 @@ Promise.all([
   runDelayedCaptureTest(),
   runIncompleteCaptureGuardTest(),
   runSourceRefreshPacingTest(),
+  runSourceRefreshPacingTest(true),
 ])
   .then(() => console.log("purchase-panel placement, auto-import, and delayed capture tests ok"))
   .catch((error) => {

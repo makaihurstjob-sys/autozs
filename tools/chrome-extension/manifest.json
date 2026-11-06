@@ -32,6 +32,7 @@
     "http://127.0.0.1:8000/*",
     "http://localhost:8000/*",
     "https://www.amazon.com/*",
+        "https://amazon.com/*",
     "https://www.homedepot.com/*",
     "https://delivery-tracker.pr-sc-delivery-execution.gcp.homedepot.com/*",
     "https://www.lowes.com/*",
@@ -48,6 +49,7 @@
       ],
       "matches": [
         "https://www.amazon.com/*",
+        "https://amazon.com/*",
         "https://www.homedepot.com/*",
         "https://www.lowes.com/*",
         "https://www.ebay.com/*",
@@ -73,6 +75,9 @@
         "https://www.homedepot.com/p/*",
         "https://www.lowes.com/pd/*",
         "https://www.amazon.com/dp/*",
+        "https://amazon.com/dp/*",
+        "https://amazon.com/*/dp/*",
+        "https://amazon.com/gp/product/*",
         "https://www.amazon.com/*/dp/*",
         "https://www.amazon.com/gp/product/*"
       ],
