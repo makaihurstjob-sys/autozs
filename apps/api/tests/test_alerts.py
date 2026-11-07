@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta
+import json
+
+import pytest
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -40,6 +43,46 @@ def add_product(db, sku="SRC-ALERT", title="Alert Product"):
     db.commit()
     db.refresh(product)
     return product
+
+
+@pytest.mark.parametrize("terminal", ["completed", "cancelled"])
+def test_revision_batch_alert_clears_only_when_all_member_jobs_are_terminal(terminal):
+    from app.models.domain import EbayRevisionBatch, EbayRevisionJob
+    db = make_session()
+    product = add_product(db)
+    listing = EbayListing(product_id=product.id, listing_id="batch-test", price=30, quantity=1, status="live")
+    db.add(listing)
+    db.flush()
+    jobs = [EbayRevisionJob(product_id=product.id, ebay_listing_id=listing.id,
+        target_price=30, status=status) for status in (terminal, "paused")]
+    db.add_all(jobs)
+    db.flush()
+    batch = EbayRevisionBatch(account_key="test", status="needs_review", filename="old.csv",
+        job_ids_json=json.dumps([job.id for job in jobs]), csv_content="original evidence",
+        message="Original upload failed")
+    db.add(batch)
+    db.commit()
+    key = f"ebay-revision-batch:{batch.id}:needs_review"
+    alert = next(a for a in refresh_operational_alerts(db) if a.key == key)
+    jobs[1].status = terminal
+    db.commit()
+    refresh_operational_alerts(db)
+    assert alert.status == "resolved"
+    assert batch.status == "needs_review" and batch.message == "Original upload failed"
+    assert batch.csv_content == "original evidence"
+    assert listing.price == 30 and listing.quantity == 1
+
+
+@pytest.mark.parametrize("membership", ["[]", "null", "{}", "not-json", "[999999]", '["1"]', "[true]"])
+def test_uncertain_revision_batch_membership_keeps_alert(membership):
+    from app.models.domain import EbayRevisionBatch
+    db = make_session()
+    batch = EbayRevisionBatch(account_key="test", status="needs_review", filename="uncertain.csv",
+        job_ids_json=membership, csv_content="evidence")
+    db.add(batch)
+    db.commit()
+    assert any(a.key == f"ebay-revision-batch:{batch.id}:needs_review"
+        for a in refresh_operational_alerts(db))
 
 
 def test_failed_source_refresh_creates_dismissible_alert() -> None:

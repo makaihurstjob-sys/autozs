@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import json
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -339,6 +340,8 @@ def _ebay_revision_alert_specs(db: Session, now: datetime) -> list[dict[str, Any
             )
         )
     for batch in batches:
+        if _revision_batch_is_obsolete(db, batch):
+            continue
         specs.append(
             _spec(
                 key=f"ebay-revision-batch:{batch.id}:{batch.status}",
@@ -351,6 +354,22 @@ def _ebay_revision_alert_specs(db: Session, now: datetime) -> list[dict[str, Any
             )
         )
     return specs
+
+
+def _revision_batch_is_obsolete(db: Session, batch: EbayRevisionBatch) -> bool:
+    # Completed/withdrawn proposals no longer need an old upload envelope.
+    # Missing or malformed membership is uncertain and must remain visible.
+    try:
+        ids = json.loads(batch.job_ids_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(ids, list) or not ids or any(type(i) is not int or i <= 0 for i in ids):
+        return False
+    jobs = db.scalars(select(EbayRevisionJob).where(EbayRevisionJob.id.in_(ids))).all()
+    return len(jobs) == len(set(ids)) and all(
+        job.status in {EbayRevisionJobStatus.completed.value, EbayRevisionJobStatus.cancelled.value}
+        for job in jobs
+    )
 
 
 def _listing_job_alert_specs(db: Session, now: datetime) -> list[dict[str, Any]]:
