@@ -106,6 +106,64 @@ def test_automatic_restock_recheck_is_daily_deduplicated_and_preserves_blocks():
     assert db.query(SourceRefreshJob).count() == 2
 
 
+def test_hidden_price_does_not_starve_daily_restock_evidence():
+    db = make_session()
+    product = add_source_product(db)
+    product.status = "monitoring"
+    source = product.supplier_products[0]
+    source.in_stock = False
+    source.price_unavailable = True
+    source.last_price = None
+    source.stock_observed_at = datetime.utcnow() - timedelta(days=2)
+    listing = add_ebay_listing(db, product, status="ended")
+    listing.relist_blocked = True
+    listing.removal_reason = "zero_views_before_renewal"
+    db.commit()
+
+    _, _, jobs, _ = create_automatic_source_refresh_batch(db)
+    assert [job.product_id for job in jobs] == [product.id]
+    assert source.price_unavailable and source.last_price is None
+    assert not source.in_stock and listing.relist_blocked and listing.status == "ended"
+    assert create_automatic_source_refresh_batch(db)[2] == []
+
+    jobs[0].status = "completed"
+    jobs[0].completed_at = datetime.utcnow()
+    db.commit()
+    assert create_automatic_source_refresh_batch(db)[2] == []
+
+
+def test_hidden_price_live_source_still_skips_price_polling():
+    db = make_session()
+    product = add_source_product(db, updated_at=datetime.utcnow() - timedelta(days=2))
+    source = product.supplier_products[0]
+    source.price_unavailable = True
+    source.last_price = None
+    add_ebay_listing(db, product)
+    db.commit()
+    assert create_automatic_source_refresh_batch(db)[2] == []
+
+
+def test_hidden_price_restock_capture_requires_explicit_stock_to_clear_alert():
+    from app.services.alerts import refresh_operational_alerts
+    db = make_session()
+    product = add_source_product(db)
+    source = product.supplier_products[0]
+    source.in_stock = False
+    source.price_unavailable = True
+    source.last_price = None
+    db.commit()
+    alert = next(a for a in refresh_operational_alerts(db) if a.source == "supplier")
+    update_product_from_capture(db, product.id, title=product.title,
+        source_price_unavailable=True)
+    refresh_operational_alerts(db)
+    assert not source.in_stock and alert.status == "open"
+    update_product_from_capture(db, product.id, title=product.title,
+        source_price_unavailable=True, source_in_stock=True)
+    refresh_operational_alerts(db)
+    assert source.in_stock and source.stock_observed_at and alert.status == "resolved"
+    assert source.price_unavailable and source.last_price is None
+
+
 def test_restock_recheck_skips_paused_deleted_and_recent_stock_observations():
     db = make_session()
     for index, status in enumerate(("paused", "deleted", "monitoring")):

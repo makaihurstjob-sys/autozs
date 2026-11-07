@@ -173,10 +173,11 @@ def create_source_refresh_batch(
             attempted = (latest.completed_at or latest.updated_at) if latest else None
             if any(stamp and stamp > restock_cutoff for stamp in (observed, attempted)):
                 continue
-        if supplier.price_unavailable and not force:
+        if supplier.price_unavailable and not force and not restock_recheck:
             # Some Home Depot products intentionally hide their price until
             # they are placed in the cart. Automatic polling cannot reveal it,
-            # so leave these for an explicit manual cart-price check.
+            # so leave prices for an explicit cart-price check. A daily restock
+            # recheck still needs the page's independent availability evidence.
             continue
         if not supplier_supports(supplier.supplier, "automatic_price_refresh"):
             continue
