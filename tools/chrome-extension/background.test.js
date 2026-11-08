@@ -317,6 +317,7 @@ async function runNativePcInputTest() {
     throw new Error(`Expected report runner tab close, got tabs=${JSON.stringify(closedTabs)} response=${JSON.stringify(closeResponse)}`);
   }
 
+  tabQueryResults = [{ id: 12, url: "https://www.homedepot.com/p/Test/123?ea_auto_import=1&autozs_refresh_job=756" }];
   let sourceCloseResponse = null;
   const sourceCloseReturned = listener(
     { type: "autozs-close-source-refresh-tab", jobId: 756 },
@@ -326,6 +327,7 @@ async function runNativePcInputTest() {
     }
   );
   if (sourceCloseReturned !== true) throw new Error("Expected async source refresh close response marker.");
+  await new Promise(resolve => setImmediate(resolve));
   if (!closedTabs.includes(12) || !sourceCloseResponse?.ok) {
     throw new Error(`Expected completed source refresh runner tab close, got tabs=${JSON.stringify(closedTabs)} response=${JSON.stringify(sourceCloseResponse)}`);
   }
