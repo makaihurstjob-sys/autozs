@@ -66,5 +66,36 @@ vm.runInContext(source.slice(source.indexOf('function isProductCaptureRunnerUrl(
   await Promise.all([ctx.openNextProductCapture(),ctx.openNextSourceRefreshJob()]);
   assert.equal(claims,1,'capture and refresh alarms share the dispatch lock');
   assert.equal(tabs.length,2,'one worker tab plus personal tab');
+  for (const marker of ['autozs_capture_product_id=5&ea_auto_import=1', 'autozs_refresh_job=12']) {
+    tabs=[personal]; delete storage.slot;
+    await ctx.openManagedSupplierRunner('https://www.amazon.com/dp/TEST?'+marker);
+    const managed=tabs[1];
+    managed.url='https://www.amazon.com/dp/TEST';
+    assert.equal(await ctx.closeManagedSupplierRunner(managed),true,'completion releases redirected capture/refresh slot');
+    assert.deepEqual(tabs,[personal],'no leaked tab after completion');
+  }
+  tabs=[personal]; delete storage.slot;
+  assert.equal(await ctx.closeManagedSupplierRunner(personal),false,'personal Amazon page cannot close');
+  await ctx.openManagedSupplierRunner(url);
+  const navigated=tabs[1]; navigated.url='https://lucidtrading.com/dashboard/';
+  assert.equal(await ctx.closeManagedSupplierRunner(navigated),false,'late completion preserves owner navigation');
+  tabs=[personal]; delete storage.slot;
+  await ctx.openManagedSupplierRunner(url);
+  let ackStarted=false, releaseAck;
+  ctx.localApiJson=async()=>{ackStarted=true;await new Promise(resolve=>{releaseAck=resolve});};
+  const sweep=ctx.cleanupStaleHomeDepotWorkerTabs(Date.now()+900001);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ackStarted,true);
+  assert.deepEqual(tabs,[personal],'timeout closes before stalled API acknowledgement');
+  releaseAck(); await sweep;
+  const pauseSource=source.slice(source.indexOf('async function canRunAutozsSourceJobs('),source.indexOf('async function clearHomeDepotBatchState('));
+  vm.runInContext(pauseSource,ctx);
+  ctx.isWindowsPlatform=()=>true;
+  ctx.HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY='paused';
+  for(const mode of ['operations','capture']) {
+    ctx.readAutozsWorkerMode=async()=>mode;
+    storage.paused=true; assert.equal(await ctx.canRunAutozsSourceJobs(),false);
+    storage.paused=false; assert.equal(await ctx.canRunAutozsSourceJobs(),true);
+  }
   console.log('PASS supplier tab cap, reuse, concurrency, redirects, pending navigation, timeout/offline recovery, failure locks and personal tabs');
 })().catch(error=>{console.error(error);process.exitCode=1;});

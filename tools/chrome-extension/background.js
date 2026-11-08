@@ -295,8 +295,7 @@ chrome.tabs?.onUpdated?.addListener?.((tabId, changeInfo, tab) => {
 async function canRunAutozsSourceJobs() {
   if (!isWindowsPlatform()) return false;
   const mode = await readAutozsWorkerMode();
-  if (mode === "capture") return true;
-  if (mode !== "operations") return false;
+  if (!["capture", "operations"].includes(mode)) return false;
   const stored = await chrome.storage.local.get(HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY);
   return stored?.[HOME_DEPOT_SOURCE_WORKER_PAUSED_KEY] !== true;
 }
@@ -438,6 +437,8 @@ async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
     }
   });
   await Promise.all(stale.map(async (tab) => {
+    // Release the browser resource before any potentially stalled API request.
+    if (tab.id) await chrome.tabs.remove(tab.id);
     try {
       const parsed = new URL(tab.pendingUrl || tab.url || "");
       const refreshJobId = Number(parsed.searchParams.get("autozs_refresh_job") || 0);
@@ -451,7 +452,6 @@ async function cleanupStaleHomeDepotWorkerTabs(now = Date.now()) {
         });
       }
     } catch {}
-    if (tab.id) await chrome.tabs.remove(tab.id);
   }));
   return stale.length;
 }
@@ -632,6 +632,19 @@ function isRememberedSupplierRunner(tab, slot) {
     return current.protocol === "https:" && normalize(current.hostname) === normalize(original.hostname)
       && ["amazon.com", "homedepot.com"].includes(normalize(current.hostname));
   } catch { return false; }
+}
+
+// Check the current tab again: a late callback must never close an unrelated
+// page the owner navigated to after capture. Session ownership covers redirects.
+async function closeManagedSupplierRunner(senderTab) {
+  const tab = (await chrome.tabs.query({})).find(item => item.id === senderTab.id);
+  if (!tab) return false;
+  const stored = await chrome.storage.session.get(SUPPLIER_RUNNER_SLOT_KEY);
+  if (!isSourceRefreshRunnerUrl(tab.pendingUrl || tab.url)
+      && !isProductCaptureRunnerUrl(tab.pendingUrl || tab.url)
+      && !isRememberedSupplierRunner(tab, stored?.[SUPPLIER_RUNNER_SLOT_KEY])) return false;
+  await chrome.tabs.remove(tab.id);
+  return true;
 }
 
 async function openNextSourceRefreshJob() {
@@ -2420,23 +2433,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
-  if (
-    message?.type === "autozs-close-source-refresh-tab" &&
-    sender.tab?.id &&
-    isSourceRefreshRunnerUrl(sender.tab.url)
-  ) {
-    chrome.tabs.remove(sender.tab.id, () => sendResponse({ ok: true }));
-    return true;
-  }
-  if (
-    message?.type === "autozs-close-product-capture-tab" &&
-    sender.tab?.id &&
-    isAutomaticProductImportUrl(sender.tab.url)
-  ) {
-    chrome.tabs.remove(sender.tab.id, () => {
-      sendResponse({ ok: true });
-      setTimeout(() => openNextProductCapture().catch(() => {}), 1500);
-    });
+  if (["autozs-close-source-refresh-tab", "autozs-close-product-capture-tab"].includes(message?.type) && sender.tab?.id) {
+    closeManagedSupplierRunner(sender.tab)
+      .then(closed => {
+        sendResponse({ ok: closed });
+        if (closed && message.type === "autozs-close-product-capture-tab") {
+          setTimeout(() => openNextProductCapture().catch(() => {}), 1500);
+        }
+      })
+      .catch(error => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
   if (message?.type === "autozs-start-product-capture") {

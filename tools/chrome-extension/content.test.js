@@ -332,7 +332,7 @@ async function runIncompleteCaptureGuardTest() {
   }
 }
 
-async function runSourceRefreshPacingTest(amazonFailure = false) {
+async function runSourceRefreshPacingTest(amazonFailure = false, captureOnly = false, amazonSuccess = false) {
   const body = new FakeElement("body");
   const delays = [];
   const runtimeMessages = [];
@@ -374,7 +374,7 @@ async function runSourceRefreshPacingTest(amazonFailure = false) {
       __ebayAutomationAutoImportStarted: false,
       addEventListener: () => {},
     },
-    location: { hostname: amazonFailure ? "www.amazon.com" : "www.homedepot.com", search: "?ea_auto_import=1&autozs_refresh_job=7&autozs_refresh_batch=batch-1", replace: () => {} },
+    location: { hostname: (amazonFailure || amazonSuccess) ? "www.amazon.com" : "www.homedepot.com", search: "?ea_auto_import=1&autozs_refresh_job=7&autozs_refresh_batch=batch-1", replace: () => {} },
     document: {
       body,
       hidden: false,
@@ -385,7 +385,7 @@ async function runSourceRefreshPacingTest(amazonFailure = false) {
     },
     readAppTheme: async () => "light",
     checkLocalApi: async () => ({ status: "ok" }),
-    sourceRefreshContextFromLocation: () => ({ jobId: 7, batchKey: "batch-1" }),
+    sourceRefreshContextFromLocation: () => captureOnly ? null : ({ jobId: 7, batchKey: "batch-1" }),
     captureSourceProductFromPage: () => ({
       source_url: "https://www.homedepot.com/p/Test/123",
       title: "Refresh Product",
@@ -410,8 +410,8 @@ async function runSourceRefreshPacingTest(amazonFailure = false) {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
-  if (amazonFailure) {
-    if (!runtimeMessages.some(m => m.type === "autozs-close-source-refresh-tab")) throw new Error("Amazon error plus failed acknowledgement must still close");
+  if (amazonFailure || captureOnly) {
+    if (!runtimeMessages.some(m => m.type === (captureOnly ? "autozs-close-product-capture-tab" : "autozs-close-source-refresh-tab"))) throw new Error("Amazon error plus failed acknowledgement must still close");
     return;
   }
   if (imageDownloads !== 0) throw new Error(`Expected price refresh to skip image downloads, got ${imageDownloads}`);
@@ -443,6 +443,9 @@ Promise.all([
   runIncompleteCaptureGuardTest(),
   runSourceRefreshPacingTest(),
   runSourceRefreshPacingTest(true),
+  runSourceRefreshPacingTest(true, true),
+  runSourceRefreshPacingTest(false, false, true),
+  runSourceRefreshPacingTest(false, true, true),
 ])
   .then(() => console.log("purchase-panel placement, auto-import, and delayed capture tests ok"))
   .catch((error) => {
