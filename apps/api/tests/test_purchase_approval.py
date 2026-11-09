@@ -166,6 +166,10 @@ def test_approval_phone_notices_use_existing_subscriptions_and_dedupe(ready, mon
         row.shipping_cost, row.total = 2, 11
         db.commit()
         assert push.dispatch_purchase_approval_notifications(db)["sent"] == 1
+        row.order.account_id = "sandbox"
+        row.shipping_cost, row.total = 3, 12
+        db.commit()
+        assert push.dispatch_purchase_approval_notifications(db)["sent"] == 0
         assert delivered[0]["url"] == "/?view=orders"
         assert "Nothing is bought without your approval" in delivered[0]["body"]
         assert not any(key in json.dumps(delivered) for key in ("recipient_name", "address_line1", "card_number"))

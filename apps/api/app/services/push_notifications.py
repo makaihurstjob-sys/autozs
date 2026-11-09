@@ -456,7 +456,8 @@ def dispatch_purchase_approval_notifications(db: Session, limit: int = 100) -> d
     rows = db.scalars(select(SupplierOrder).where(SupplierOrder.status.in_(["draft", "needs_review"]))
                       .order_by(SupplierOrder.updated_at.desc()).limit(limit)).all()
     for row in rows:
-        if row.external_order_id or row.placed_at or not row.order or row.order.status in {"cancelled", "refunded", "shipped", "delivered"}:
+        if (row.external_order_id or row.placed_at or not row.order or row.order.account_id == "sandbox"
+                or row.order.status in {"cancelled", "refunded", "shipped", "delivered"}):
             continue
         try:
             fingerprint = review(row)["fingerprint"]
