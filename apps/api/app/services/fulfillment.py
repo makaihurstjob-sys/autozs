@@ -237,7 +237,7 @@ def prepare_supplier_order(
     )
     if order is None:
         raise LookupError("Order not found.")
-    if order.status in {"cancelled", "shipped", "delivered"} and not order.supplier_orders:
+    if order.status in {"cancelled", "refunded", "shipped", "delivered"} and not order.supplier_orders:
         raise ValueError("Cannot prepare a cancelled or fulfilled order.")
     purchased = next((row for row in order.supplier_orders if _purchase_recorded(row)), None)
     if purchased is not None:
@@ -330,7 +330,9 @@ def prepare_supplier_order(
     return _load_supplier_order(db, supplier_order.id)
 
 
-def approve_supplier_order(db: Session, supplier_order_id: int, *, owner_click: bool = False) -> SupplierOrder:
+def approve_supplier_order(db: Session, supplier_order_id: int, *, owner_click: bool = False, fingerprint: str | None = None) -> SupplierOrder:
+    from app.services.purchase_budget import _lock
+    _lock(db)
     supplier_order = _load_supplier_order(db, supplier_order_id)
     if supplier_order is None:
         raise LookupError("Supplier order not found.")
@@ -338,7 +340,7 @@ def approve_supplier_order(db: Session, supplier_order_id: int, *, owner_click: 
     require_unreserved(db, supplier_order.order_id)
     if _purchase_recorded(supplier_order):
         raise ValueError("This supplier order already has a recorded purchase and cannot be queued again.")
-    if supplier_order.order is not None and supplier_order.order.status in {"cancelled", "shipped", "delivered"}:
+    if supplier_order.order is not None and supplier_order.order.status in {"cancelled", "refunded", "shipped", "delivered"}:
         raise ValueError("The eBay order is cancelled or already shipped; reconcile fulfillment before purchasing.")
     if supplier_order.status == "cancelled":
         raise ValueError("Cancelled supplier orders cannot be approved for purchase.")
@@ -350,9 +352,13 @@ def approve_supplier_order(db: Session, supplier_order_id: int, *, owner_click: 
         supplier_order.failure_reason = "Missing: " + ", ".join(missing)
         db.commit()
         raise ValueError(supplier_order.failure_reason)
+    approval = None
+    if owner_click and fingerprint is not None:
+        from app.services.purchase_approval import record_approval
+        approval = record_approval(db, supplier_order, fingerprint)
     supplier_order.status = SupplierOrderStatus.queued.value
     supplier_order.approved_total = round(float(supplier_order.total or 0), 2)
-    supplier_order.approved_at = datetime.utcnow()
+    supplier_order.approved_at = datetime.fromisoformat(approval["approved_at"]) if approval else datetime.utcnow()
     supplier_order.checkout_token = ""
     supplier_order.failure_reason = None
     key = f"owner_place_order:{supplier_order.id}"
@@ -367,6 +373,8 @@ def approve_supplier_order(db: Session, supplier_order_id: int, *, owner_click: 
 
 
 def require_owner_place_order(db: Session, row: SupplierOrder) -> None:
+    from app.services.purchase_approval import require_approval
+    require_approval(db, row)
     permission = db.scalar(select(AppSetting.value).where(
         AppSetting.key == f"owner_place_order:{row.id}"))
     if not row.approved_at or permission != row.approved_at.isoformat():
@@ -384,6 +392,8 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
     ).all()
     for supplier_order in stale:
         _finish_purchase_attempt(db, supplier_order, "uncertain")
+        from app.services.purchase_approval import audit
+        audit(db, supplier_order.id, "outcome", status="uncertain")
         supplier_order.status = SupplierOrderStatus.needs_review.value
         supplier_order.failure_reason = "Browser checkout lease expired; verify supplier purchase history before retrying."
         supplier_order.lease_expires_at = None
@@ -407,7 +417,7 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
     if supplier_order is None:
         db.commit()
         return None
-    if _purchase_recorded(supplier_order) or (supplier_order.order is not None and supplier_order.order.status in {"cancelled", "shipped", "delivered"}):
+    if _purchase_recorded(supplier_order) or (supplier_order.order is not None and supplier_order.order.status in {"cancelled", "refunded", "shipped", "delivered"}):
         supplier_order.status = SupplierOrderStatus.needs_review.value
         supplier_order.failure_reason = "Checkout held: purchase or shipment already recorded; reconcile before retrying."
         supplier_order.checkout_token = ""
@@ -420,9 +430,11 @@ def claim_next_supplier_order(db: Session) -> SupplierOrder | None:
         require_unreserved(db, supplier_order.order_id)
         try:
             require_owner_place_order(db, supplier_order)
-        except ValueError:
+        except ValueError as exc:
             supplier_order.status = SupplierOrderStatus.draft.value
-            supplier_order.failure_reason = "Use Place Order to authorize this purchase."
+            supplier_order.failure_reason = str(exc)
+            from app.services.purchase_approval import audit
+            audit(db, supplier_order.id, "held", status="new_approval_required")
             db.commit()
             return None
         require_fresh(db, supplier_order)
@@ -450,6 +462,8 @@ def update_supplier_order(
     supplier_order: SupplierOrder,
     values: dict[str, Any],
 ) -> SupplierOrder:
+    from app.services.purchase_budget import _lock
+    _lock(db)
     requested_status = values.get("status")
     if _purchase_recorded(supplier_order) and requested_status is not None:
         progression = {"placed": 1, "shipped": 2, "delivered": 3, "cancelled": 4}
@@ -508,6 +522,9 @@ def update_supplier_order(
         _apply_supplier_order_status(db, supplier_order, status)
     elif supplier_order.status in {SupplierOrderStatus.draft.value, SupplierOrderStatus.needs_review.value}:
         _refresh_supplier_order_readiness(db, supplier_order)
+    if requested_status is not None:
+        from app.services.purchase_approval import audit
+        audit(db, supplier_order.id, "outcome", status=supplier_order.status)
     db.commit()
     return _load_supplier_order(db, supplier_order.id)
 

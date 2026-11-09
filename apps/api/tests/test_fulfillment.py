@@ -30,6 +30,7 @@ def _place_order(client, supplier_order_id: int):
     return client.post(
         f"/supplier-orders/{supplier_order_id}/place-order",
         headers={"Origin": "http://127.0.0.1:3000", "X-AutoZS-Owner-Action": "place-order"},
+        json={"fingerprint": client.get(f"/supplier-orders/{supplier_order_id}/approval-review").json().get("fingerprint", "0" * 64)},
     )
 
 
@@ -168,13 +169,12 @@ def test_gift_card_supplier_order_flow_debits_card_once(client) -> None:
     assert prepared["gift_card_amount"] == 20.0
     assert prepared["card_amount"] == 0.0
 
-    approved = _place_order(client, prepared["id"]).json()
+    # Saved Privacy automation cannot switch to a gift card. Existing manual
+    # purchase reconciliation/ledger behavior remains independently supported.
+    assert _place_order(client, prepared["id"]).status_code == 422
+    approved = client.post(f"/supplier-orders/{prepared['id']}/approve").json()
     assert approved["status"] == "queued"
-
-    assert verify_queued(client).status_code == 200
-    claimed = client.post("/supplier-orders/next").json()
-    assert claimed["id"] == prepared["id"]
-    assert claimed["status"] == "placing"
+    assert client.post("/supplier-orders/next").json() is None
 
     placed = client.patch(
         f"/supplier-orders/{prepared['id']}",
@@ -219,97 +219,23 @@ def test_gift_card_supplier_order_flow_debits_card_once(client) -> None:
     assert pending.json()["tracking_number"] == "1Z999AA10123456784"
 
 
-def test_checkout_credential_is_brokered_only_for_the_active_claim(client, monkeypatch) -> None:
-    stored: dict[str, tuple[str, str]] = {}
-    monkeypatch.setattr(
-        "app.api.routes.store_generic_credential",
-        lambda target, username, secret: stored.__setitem__(target, (username, secret)),
-    )
-    monkeypatch.setattr("app.api.routes.read_generic_credential", lambda target: stored[target])
-    card = client.post(
-        "/gift-cards",
-        json={
-            "supplier": "home_depot",
-            "label": "Secure checkout card",
-            "face_value": 25.0,
-            "acquisition_cost": 25.0,
-        },
-    ).json()
-    secured = client.post(
-        f"/gift-cards/{card['id']}/credential",
-        json={"card_number": "6035320000001234", "pin": "9876"},
-    )
-    assert secured.status_code == 200
-    assert secured.json()["last_four"] == "1234"
-
-    prepared = _prepare_order(client, gift_card_id=card["id"]).json()
-    approved = _place_order(client, prepared["id"]).json()
-    assert approved["approved_total"] == 20.0
-    assert verify_queued(client).status_code == 200
-    claimed = client.post("/supplier-orders/next").json()
-    assert claimed["checkout_token"]
-
-    rejected = client.post(
-        f"/supplier-orders/{prepared['id']}/checkout-credential",
-        headers={"X-AutoZS-Checkout-Token": "wrong-token"},
-    )
-    assert rejected.status_code == 403
-    credential = client.post(
-        f"/supplier-orders/{prepared['id']}/checkout-credential",
-        headers={"X-AutoZS-Checkout-Token": claimed["checkout_token"]},
-    )
-    assert credential.status_code == 200
-    assert credential.headers["cache-control"] == "no-store"
-    assert credential.json()["card_number"].endswith("1234")
-    assert credential.json()["pin"] == "9876"
-
-
-def test_home_depot_payment_card_is_secured_and_brokered_only_to_claim(client, monkeypatch) -> None:
-    stored = {}
-    monkeypatch.setattr(
-        "app.api.routes.store_supplier_payment_credential",
-        lambda supplier, **payload: stored.update({"supplier": supplier, **payload}) or payload["card_number"][-4:],
-    )
-    monkeypatch.setattr(
-        "app.api.routes.read_supplier_payment_credential",
-        lambda supplier: {
-            "card_number": stored["card_number"],
-            "expiration_month": stored["expiration_month"],
-            "expiration_year": stored["expiration_year"],
-            "security_code": stored["security_code"],
-            "cardholder_name": stored["cardholder_name"],
-            "billing_postal_code": stored["billing_postal_code"],
-        },
-    )
-    secured = client.post(
-        "/supplier-payment-credentials/home_depot",
-        json={
-            "card_number": "4111111111111111",
-            "expiration_month": 8,
-            "expiration_year": 2031,
-            "security_code": "123",
-            "cardholder_name": "Test Seller",
-            "billing_postal_code": "80226",
-        },
-    )
-    assert secured.status_code == 200
-    assert secured.json() == {"supplier": "home_depot", "stored": True, "last_four": "1111"}
-
+def test_checkout_never_retrieves_payment_credentials(client, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Payment details must never be read")
+    monkeypatch.setattr("app.api.routes.read_supplier_payment_credential", forbidden)
+    monkeypatch.setattr("app.api.routes.read_generic_credential", forbidden)
     prepared = _prepare_order(client).json()
-    _place_order(client, prepared["id"])
+    assert _place_order(client, prepared["id"]).status_code == 200
     assert verify_queued(client).status_code == 200
     claimed = client.post("/supplier-orders/next").json()
-    credential = client.post(
-        f"/supplier-orders/{prepared['id']}/checkout-credential",
-        headers={"X-AutoZS-Checkout-Token": claimed["checkout_token"]},
-    )
-    assert credential.status_code == 200
-    body = credential.json()
-    assert body["card_number"].endswith("1111")
-    assert body["security_code"] == "123"
-    assert body["cardholder_name"] == "Test Seller"
-    assert body["billing_postal_code"] == "80226"
-    assert credential.headers["cache-control"] == "no-store"
+    rejected = client.post(f"/supplier-orders/{prepared['id']}/checkout-credential",
+        headers={"X-AutoZS-Checkout-Token": "wrong-token"})
+    assert rejected.status_code == 403
+    credential = client.post(f"/supplier-orders/{prepared['id']}/checkout-credential",
+        headers={"X-AutoZS-Checkout-Token": claimed["checkout_token"]})
+    assert credential.status_code == 409
+    assert "Saved Privacy" in credential.json()["detail"]
+
 
 import pytest
 

@@ -2074,6 +2074,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
+  if ((message?.type === "autozs-supplier-native-fill"
+      && ["card_number", "expiration", "expiration_month", "expiration_year", "security_code", "billing_postal", "cardholder"].includes(message.field))
+      || (message?.type === "autozs-supplier-native-click" && ["add_new_card", "use_new_card"].includes(message.action))) {
+    sendResponse({ ok: false, error: "Saved Privacy payment only; payment entry or changes are disabled." });
+    return false;
+  }
   if (
     message?.type === "autozs-supplier-native-fill" &&
     sender.tab?.id &&
@@ -2383,13 +2389,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
-  if (message?.type === "autozs-supplier-begin-submission" && sender.tab?.id
+  if (["autozs-supplier-begin-submission", "autozs-supplier-changed-quote"].includes(message?.type) && sender.tab?.id
       && isSupplierOrderRunnerUrl(sender.tab.url, Number(message.supplierOrderId))) {
     (async () => {
       const id = Number(message.supplierOrderId);
       const token = await readSupplierCheckoutToken(id);
       if (!token) throw new Error("Checkout lease expired.");
-      const response = await fetch(`${LOCAL_CHECKOUT_API}/supplier-orders/${id}/begin-submission`, {
+      const endpoint = message.type === "autozs-supplier-changed-quote" ? "changed-checkout-quote" : "begin-submission";
+      const response = await fetch(`${LOCAL_CHECKOUT_API}/supplier-orders/${id}/${endpoint}`, {
         method: "POST", cache: "no-store",
         headers: { "Content-Type": "application/json", "X-AutoZS-Checkout-Token": token },
         body: JSON.stringify({ ...message.quote, source_url: sender.tab.url }),
@@ -2410,28 +2417,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })().catch(error => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
   }
-  if (
-    message?.type === "autozs-supplier-checkout-credential" &&
-    sender.tab?.id &&
-    isSupplierOrderRunnerUrl(sender.tab.url, Number(message.supplierOrderId))
-  ) {
-    (async () => {
-      const supplierOrderId = Number(message.supplierOrderId);
-      const token = await readSupplierCheckoutToken(supplierOrderId);
-      if (!token) throw new Error("The local supplier checkout lease expired.");
-      await verifyLiveEbaySupplierOrder(await localApiJson(`/supplier-orders/${supplierOrderId}/ebay-verification-context`));
-      const response = await fetch(`${LOCAL_CHECKOUT_API}/supplier-orders/${supplierOrderId}/checkout-credential`, {
-        method: "POST",
-        cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          "X-AutoZS-Checkout-Token": token,
-        },
-      });
-      if (!response.ok) throw new Error(`Local checkout credential broker returned ${response.status}.`);
-      sendResponse({ ok: true, credential: await response.json() });
-    })().catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
-    return true;
+  if (message?.type === "autozs-supplier-checkout-credential") {
+    sendResponse({ ok: false, error: "Saved Privacy payment only; credential retrieval is disabled." });
+    return false;
   }
   if (["autozs-close-source-refresh-tab", "autozs-close-product-capture-tab"].includes(message?.type) && sender.tab?.id) {
     closeManagedSupplierRunner(sender.tab)

@@ -3679,8 +3679,29 @@ def prepare_order_for_supplier(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+from app.services.purchase_approval import ApprovalRequest, review as purchase_review, history as purchase_history
+
+
+@router.get("/supplier-orders/{supplier_order_id}/approval-history")
+def supplier_purchase_history(supplier_order_id: int, db: Session = Depends(get_db)):
+    if db.get(SupplierOrder, supplier_order_id) is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    return purchase_history(db, supplier_order_id)
+
+
+@router.get("/supplier-orders/{supplier_order_id}/approval-review")
+def review_supplier_purchase(supplier_order_id: int, db: Session = Depends(get_db)):
+    row = db.get(SupplierOrder, supplier_order_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Supplier order not found")
+    try:
+        return {**purchase_review(row), "history": purchase_history(db, row.id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/supplier-orders/{supplier_order_id}/place-order", response_model=SupplierOrderRead)
-def place_order_for_supplier(supplier_order_id: int, request: Request,
+def place_order_for_supplier(supplier_order_id: int, payload: ApprovalRequest, request: Request,
                              db: Session = Depends(get_db)) -> SupplierOrder:
     _require_local_checkout_request(request)
     # Reject remote sites even though the general API permits broad CORS.
@@ -3698,7 +3719,7 @@ def place_order_for_supplier(supplier_order_id: int, request: Request,
     if row.status != "draft":
         raise HTTPException(status_code=409, detail="Only a reviewed draft can be placed; refresh the order")
     try:
-        return approve_supplier_order(db, supplier_order_id, owner_click=True)
+        return approve_supplier_order(db, supplier_order_id, owner_click=True, fingerprint=payload.fingerprint)
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -3725,6 +3746,18 @@ def begin_supplier_submission(supplier_order_id: int, payload: FinalCheckout,
     try:
         return authorize_submission(db, supplier_order_id,
                                     request.headers.get("X-AutoZS-Checkout-Token", ""), payload)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/supplier-orders/{supplier_order_id}/changed-checkout-quote")
+def supplier_changed_quote(supplier_order_id: int, payload: FinalCheckout, request: Request,
+                           db: Session = Depends(get_db)):
+    _require_local_checkout_request(request)
+    from app.services.purchase_submission import stage_changed_quote
+    try:
+        return stage_changed_quote(db, supplier_order_id, request.headers.get("X-AutoZS-Checkout-Token", ""), payload)
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -3762,33 +3795,7 @@ def read_supplier_checkout_credential(
         ebay_verification.require_fresh(db, supplier_order)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    card = db.get(GiftCard, supplier_order.gift_card_id) if supplier_order.gift_card_id else None
-    response.headers["Cache-Control"] = "no-store"
-    if card is not None:
-        if card.status != "active" or not card.secret_ref:
-            raise HTTPException(status_code=422, detail="An active secured gift card is required.")
-        if float(card.current_balance or 0) + 0.001 < float(supplier_order.approved_total or 0):
-            raise HTTPException(status_code=422, detail="Gift-card balance is below the approved supplier-order total.")
-        try:
-            card_number, pin = read_generic_credential(card.secret_ref)
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return SupplierCheckoutCredentialRead(
-            supplier_order_id=supplier_order.id,
-            card_number=card_number,
-            pin=pin,
-            approved_total=float(supplier_order.approved_total or 0),
-            current_balance=float(card.current_balance or 0),
-        )
-    try:
-        payment = read_supplier_payment_credential(supplier_order.supplier)
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=422, detail="A secured Home Depot payment card is required.") from exc
-    return SupplierCheckoutCredentialRead(
-        supplier_order_id=supplier_order.id,
-        approved_total=float(supplier_order.approved_total or 0),
-        **payment,
-    )
+    raise HTTPException(status_code=409, detail="Saved Privacy payment only; credential retrieval is disabled for supplier checkout.")
 
 
 @router.patch("/supplier-orders/{supplier_order_id}", response_model=SupplierOrderRead)

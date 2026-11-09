@@ -206,6 +206,18 @@ async function runNativePcInputTest() {
   };
   vm.createContext(context);
   vm.runInContext(source, context);
+  for (const message of [
+    {type:"autozs-supplier-checkout-credential",supplierOrderId:14},
+    {type:"autozs-supplier-native-fill",supplierOrderId:14,field:"card_number",value:"synthetic"},
+    {type:"autozs-supplier-native-click",supplierOrderId:14,action:"add_new_card"},
+  ]) {
+    const beforeRequests = fetched.length, beforeCommands = commands.length;
+    let denied;
+    const asynchronous = listener(message, {tab:{id:77,url:"https://www.homedepot.com/checkout?autozs_supplier_order=14&autozs_checkout_canary=1"}}, result => {denied=result;});
+    if (asynchronous !== false || denied?.ok !== false || !/Saved Privacy/.test(denied?.error || "")) throw new Error("Saved-card-only path must reject legacy payment entry synchronously");
+    if (fetched.length !== beforeRequests || commands.length !== beforeCommands) throw new Error("Denied payment entry must not fetch credentials or touch the browser");
+  }
+
   if (!listener) throw new Error("Expected background message listener to be registered.");
   const cleanup = await context.clearHomeDepotBatchState();
   if (cleanup.cleared !== 0 || removedCookies.length !== 0 || !cleanup.sessionPreserved) {

@@ -198,20 +198,11 @@ if (!source.includes('const attempts = markedPoll ? 20 : 1')) {
 if (!source.includes('history.replaceState(history.state, "", guardedUrl.href)')) {
   throw new Error("Expected secure checkout navigation to retain its session-bound guarded order identity.");
 }
-if (!source.includes('autozsNativeCheckoutClick(supplierOrderId, "use_new_card")') || !source.includes('includes(`****${lastFour}`)')) {
-  throw new Error("Expected secured card entry to apply and verify the approved card before owner review.");
+if (source.includes('await autozsCheckoutCredential(') || source.includes('await autozsNativeCheckoutFill(supplierOrderId, "card_number"')) {
+  throw new Error("Saved Privacy checkout must not retrieve or enter payment details.");
 }
 if (!source.includes('autozsNativeCheckoutClick(supplierOrderId, "delivery_continue")')) {
-  throw new Error("Expected delivery to use its exact Continue control instead of the stale address Continue.");
-}
-if (!source.includes("selected saved card does not match the approved checkout card")) {
-  throw new Error("Expected a selected saved card to be verified against the approved checkout credential.");
-}
-if (!source.includes('autozsNativeCheckoutClick(supplierOrderId, "add_new_card")')) {
-  throw new Error("Expected a mismatched saved card to open the approved new-card form without touching Place Order.");
-}
-if (!source.includes('iframe#iframe-credit-card-payment-field')) {
-  throw new Error("Expected Home Depot's outer secured-card frame to signal that nested Fiserv fields are ready.");
+  throw new Error("Delivery must use its exact Continue control.");
 }
 if (!source.includes('autozsNativeCheckoutClick(supplierOrderId, "edit_address")')) {
   throw new Error("Expected a matching saved delivery address to be reopened for exact field verification.");
@@ -295,7 +286,18 @@ function autozsMakeCheckoutDocument({ buttons, bodyText }) {
       overlayHost = el;
       return el;
     },
-    querySelectorAll: (sel) => (sel === 'button' ? buttons : []),
+    querySelector: () => null,
+    querySelectorAll: (sel) => {
+      if (sel === 'button') return buttons;
+      if (sel.startsWith('[data-payment-provider=')) return [{}];
+      if (sel.startsWith('[data-testid="checkout-item"]')) return [{ querySelectorAll: child => {
+        if (child === 'a[href*="/p/"]') return [{ href: 'https://www.homedepot.com/p/Test/123456' }];
+        if (child === '[data-testid="item-quantity"]') return [{ textContent: '1' }];
+        if (child === '[data-testid="item-unit-price"]') return [{ textContent: '$19.97' }];
+        return [];
+      } }];
+      return [];
+    },
   };
 }
 
@@ -307,6 +309,7 @@ function autozsMakeSessionStorage() {
   };
 }
 
+const AUTOZS_TEST_PLAN = { item_subtotal:19.97, shipping_cost:0, sales_tax:1.60, total:21.57, items: [{source_url: 'https://www.homedepot.com/p/Test/123456', quantity: 1, unit_price: 19.97}] };
 const AUTOZS_SAFE_TOTALS_TEXT = 'Subtotal $19.97 Shipping $0.00 Estimated Tax $1.60 Order Total $21.57';
 
 require('node:test')('auto-submit clicks Place order exactly once after backend authorization matches the live totals', async () => {
@@ -318,7 +321,7 @@ require('node:test')('auto-submit clicks Place order exactly once after backend 
     assert.equal(message.type, 'autozs-supplier-begin-submission');
     cb({ ok: true, result: { authorized: true, supplier_order_id: 42, reservation_id: 7, total_cents: 2157 } });
   } } };
-  await context.autozsSubmitHomeDepotOnce(42);
+  await context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN);
   assert.equal(button.clicks, 1);
   assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), 'submitting');
 });
@@ -330,7 +333,7 @@ require('node:test')('auto-submit refuses a second attempt once the one-shot mar
   context.sessionStorage = autozsMakeSessionStorage();
   context.sessionStorage.setItem('autozs-final-submit:42', 'requested');
   context.chrome = { runtime: { sendMessage: () => { throw new Error('must not contact backend after a prior attempt'); } } };
-  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /already attempted/);
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /already attempted/);
   assert.equal(button.clicks, 0);
 });
 
@@ -339,7 +342,7 @@ require('node:test')('auto-submit requires exactly one enabled Place order butto
   context.document = autozsMakeCheckoutDocument({ buttons: [], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
   context.sessionStorage = autozsMakeSessionStorage();
   context.chrome = { runtime: { sendMessage: () => { throw new Error('must not contact backend without a unique button'); } } };
-  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /unique enabled Place order button/);
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /unique enabled Place order button/);
   assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), null);
 });
 
@@ -349,7 +352,7 @@ require('node:test')('auto-submit does not click when the backend refuses author
   context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
   context.sessionStorage = autozsMakeSessionStorage();
   context.chrome = { runtime: { sendMessage: (message, cb) => cb({ ok: false, error: 'Daily budget exhausted.' }) } };
-  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /Daily budget exhausted/);
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /Daily budget exhausted/);
   assert.equal(button.clicks, 0);
 });
 
@@ -363,7 +366,7 @@ require('node:test')('auto-submit aborts if the page total changes after authori
     doc.body.innerText = 'Subtotal $19.97 Shipping $0.00 Estimated Tax $1.60 Order Total $25.00';
     cb({ ok: true, result: { authorized: true, supplier_order_id: 42, reservation_id: 7, total_cents: 2157 } });
   } } };
-  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /Checkout changed or submission permission was invalid/);
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /Checkout changed or submission permission was invalid/);
   assert.equal(button.clicks, 0);
 });
 
@@ -373,6 +376,81 @@ require('node:test')('auto-submit aborts if the authorization answers a differen
   context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
   context.sessionStorage = autozsMakeSessionStorage();
   context.chrome = { runtime: { sendMessage: (message, cb) => cb({ ok: true, result: { authorized: true, supplier_order_id: 99, reservation_id: 7, total_cents: 2157 } }) } };
-  await assert.rejects(context.autozsSubmitHomeDepotOnce(42), /Checkout changed or submission permission was invalid/);
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /Checkout changed or submission permission was invalid/);
   assert.equal(button.clicks, 0);
+});
+
+require('node:test')('dry run stops before final permission, marker and purchase click', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  let requests = 0;
+  context.chrome = { runtime: { sendMessage: () => { requests += 1; throw new Error('dry run must never request permission'); } } };
+  const result = await context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN, { dryRun: true });
+  assert.equal(result.stopped_before_purchase, true);
+  assert.equal(result.authorized, false);
+  assert.equal(button.clicks, 0);
+  assert.equal(requests, 0);
+  assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), null);
+});
+
+require('node:test')('missing saved Privacy selection and checkout challenges stop before permission', async () => {
+  const assert = require('node:assert/strict');
+  for (const challenge of [false, true]) {
+    const button = autozsMakeButton();
+    const doc = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+    const original = doc.querySelectorAll;
+    doc.querySelectorAll = selector => selector.startsWith('[data-payment-provider=') ? [] : original(selector);
+    doc.querySelector = () => challenge ? {} : null;
+    context.document = doc;
+    context.sessionStorage = autozsMakeSessionStorage();
+    context.chrome = { runtime: { sendMessage: () => { throw new Error('must not request final permission'); } } };
+    await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /Makai:/);
+    assert.equal(button.clicks, 0);
+    assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), null);
+  }
+});
+
+require('node:test')('equal-price item substitution is rejected at final checkout', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { sendMessage: () => { throw new Error('must not request final permission'); } } };
+  const other = { items: [{source_url:'https://www.homedepot.com/p/Other/654321', quantity:1, unit_price:19.97}] };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, other), /item, quantity or unit price/);
+  assert.equal(button.clicks, 0);
+});
+
+require('node:test')('a lost final gate response leaves a durable local no-retry marker', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT });
+  context.sessionStorage = autozsMakeSessionStorage();
+  context.chrome = { runtime: { lastError: {message:'Fixture transport failed'}, sendMessage: (_message, cb) => cb() } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /Fixture transport/);
+  assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), 'requested');
+  context.chrome = { runtime: { sendMessage: () => { throw new Error('must not retry'); } } };
+  await assert.rejects(context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN), /already attempted/);
+  assert.equal(button.clicks, 0);
+});
+
+require('node:test')('changed totals request a fresh approval rather than final permission or a click', async () => {
+  const assert = require('node:assert/strict');
+  const button = autozsMakeButton();
+  context.document = autozsMakeCheckoutDocument({ buttons: [button], bodyText: AUTOZS_SAFE_TOTALS_TEXT.replace('Order Total $21.57', 'Order Total $22.57').replace('Tax $1.60', 'Tax $2.60') });
+  context.sessionStorage = autozsMakeSessionStorage();
+  const requests = [];
+  context.chrome = { runtime: { sendMessage: (message, callback) => {
+    requests.push(message);
+    assert.equal(message.type, 'autozs-supplier-changed-quote');
+    callback({ok:true,result:{authorized:false,new_approval_required:true,supplier_order_id:42}});
+  } } };
+  const result = await context.autozsSubmitHomeDepotOnce(42, AUTOZS_TEST_PLAN);
+  assert.equal(result.new_approval_required, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].quote.total, 22.57);
+  assert.equal(button.clicks, 0);
+  assert.equal(context.sessionStorage.getItem('autozs-final-submit:42'), null);
 });

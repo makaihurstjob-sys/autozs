@@ -375,24 +375,6 @@ function autozsCheckoutTotalsAreSafe(totals, expectedSubtotal, approvedTotal) {
     && Math.round(totals.total * 100) <= Math.round(Number(approvedTotal || 0) * 100);
 }
 
-async function autozsCheckoutCredential(supplierOrderId) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(
-      { type: "autozs-supplier-checkout-credential", supplierOrderId: Number(supplierOrderId) },
-      (response) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else if (!response?.ok) reject(new Error(response?.error || "Checkout credential was unavailable."));
-        else resolve(response.credential);
-      }
-    );
-  });
-}
-
-function autozsFindButton(pattern) {
-  return [...document.querySelectorAll("button")].find((button) =>
-    !button.disabled && pattern.test(String(button.innerText || button.textContent || "").trim())
-  );
-}
 
 async function autozsNativeCheckoutClick(supplierOrderId, action) {
   return new Promise((resolve, reject) => {
@@ -735,8 +717,9 @@ async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
       'input[name*="cardNumber" i]',
       'input[id*="cardNumber" i]',
     ]);
-    const checkoutBody = String(document.body?.innerText || "");
-    paymentReady = Boolean(newCardField) || /Payment Method[\s\S]{0,500}\*{4}\s*\d{4}/i.test(checkoutBody);
+    paymentReady = Boolean(newCardField) || Boolean(document.querySelector(
+      '[data-testid="payment-method-summary"], [data-testid="selected-payment-method"], [data-payment-provider]'
+    ));
     if (paymentReady) break;
     const deliveryContinue = [...document.querySelectorAll('button[name="DeliveryOptionsContinueButton"],button[data-automation-id="DeliveryOptionsContinueButton"]')]
       .find((button) => button.offsetParent !== null) || null;
@@ -761,71 +744,9 @@ async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
     throw new Error("Home Depot kept the address stage open after Continue; payment was not accessed.");
   }
 
-  autozsCheckoutProgress(91, "Address and delivery verified. Filling the secured payment card…");
-  const credential = await autozsCheckoutCredential(supplierOrderId);
-  let cardNumberField = autozsCheckoutField(['input[autocomplete="cc-number"]', 'input[name*="cardNumber" i]', 'input[id*="cardNumber" i]']);
-  const lastFour = String(credential.card_number || "").replace(/\D/g, "").slice(-4);
-  if (!cardNumberField && (!lastFour || !String(document.body?.innerText || "").includes(`****${lastFour}`))) {
-    await autozsNativeCheckoutClick(supplierOrderId, "add_new_card");
-    let secureCardFramesReady = false;
-    for (let attempt = 0; attempt < 20 && !cardNumberField && !secureCardFramesReady; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      cardNumberField = autozsCheckoutField(['input[autocomplete="cc-number"]', 'input[name*="cardNumber" i]', 'input[id*="cardNumber" i]']);
-      secureCardFramesReady = Boolean(document.querySelector('iframe#iframe-credit-card-payment-field,iframe[title="card_sdk"]'));
-    }
-    if (!cardNumberField && !secureCardFramesReady) throw new Error("Home Depot did not open its approved-card entry form.");
-  }
-  const secureCardFramesReady = Boolean(document.querySelector('iframe#iframe-credit-card-payment-field,iframe[title="card_sdk"]'));
-  if (cardNumberField || secureCardFramesReady) {
-    await autozsNativeCheckoutFill(supplierOrderId, "card_number", credential.card_number);
-    if (secureCardFramesReady) {
-      const billingPostal = String(credential.billing_postal_code || "").replace(/\D/g, "").slice(0, 5);
-      const checkoutDigits = String(document.body?.innerText || "").replace(/\D/g, "");
-      if (!billingPostal || !checkoutDigits.includes(billingPostal)) {
-        throw new Error("Home Depot's displayed billing address does not match the approved card postal code.");
-      }
-      await autozsNativeCheckoutFill(supplierOrderId, "expiration", `${String(credential.expiration_month).padStart(2, "0")}/${String(credential.expiration_year).slice(-2)}`);
-      await autozsNativeCheckoutFill(supplierOrderId, "security_code", credential.security_code);
-      // The secure card-number frame can remount while expiration/CVV initialize.
-      // Recommit it after those fields settle before checking the submit control.
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      await autozsNativeCheckoutFill(supplierOrderId, "card_number", credential.card_number);
-      let cardFormReady = false;
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        const useCard = document.querySelector('button[data-testid="use-this-card-button"]');
-        if (useCard && !useCard.disabled && useCard.offsetParent !== null) {
-          cardFormReady = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      if (!cardFormReady) throw new Error("Home Depot has not accepted all secure card fields; its Add New Card button remains disabled.");
-      await autozsNativeCheckoutClick(supplierOrderId, "use_new_card");
-      for (let attempt = 0; attempt < 20 && !String(document.body?.innerText || "").includes(`****${lastFour}`); attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      if (!lastFour || !String(document.body?.innerText || "").includes(`****${lastFour}`)) {
-        throw new Error("Home Depot did not select the approved checkout card after secured entry.");
-      }
-    } else {
-      await autozsNativeCheckoutFill(supplierOrderId, "cardholder", credential.cardholder_name);
-      await autozsNativeCheckoutFill(supplierOrderId, "expiration_month", String(credential.expiration_month).padStart(2, "0"));
-      await autozsNativeCheckoutFill(supplierOrderId, "expiration_year", String(credential.expiration_year));
-      await autozsNativeCheckoutFill(supplierOrderId, "security_code", credential.security_code);
-      await autozsNativeCheckoutFill(supplierOrderId, "billing_postal", credential.billing_postal_code);
-    }
-  } else {
-    if (!lastFour || !String(document.body?.innerText || "").includes(`****${lastFour}`)) {
-      throw new Error("Home Depot's selected saved card does not match the approved checkout card.");
-    }
-  }
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  autozsCheckoutProgress(91, "Verifying the saved Privacy payment option...");
+  autozsRequireSavedPrivacy();
 
-  const totals = autozsCheckoutTotals(document.body?.innerText || "");
-  const expectedSubtotal = autozsExpectedSupplierSubtotal(supplierOrder);
-  if (!autozsCheckoutTotalsAreSafe(totals, expectedSubtotal, credential.approved_total)) {
-    throw new Error(`Home Depot's final total could not be verified within the approved $${Number(credential.approved_total).toFixed(2)} ceiling.`);
-  }
   await new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: "autozs-supplier-ebay-recheck", supplierOrderId: Number(supplierOrderId) }, response => {
       if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
@@ -833,10 +754,50 @@ async function autozsRunCheckoutReview(supplierOrderId, supplierOrder) {
       else resolve();
     });
   });
-  await autozsSubmitHomeDepotOnce(supplierOrderId);
+  await autozsSubmitHomeDepotOnce(supplierOrderId, supplierOrder);
 }
 
-async function autozsSubmitHomeDepotOnce(supplierOrderId) {
+function autozsCheckoutChallenge() {
+  return Boolean(document.querySelector('input[type="password"], input[autocomplete="one-time-code"], input[name*="otp" i], input[name*="verificationCode" i], input[autocomplete="cc-number"], input[autocomplete="cc-csc"], iframe#iframe-credit-card-payment-field, iframe[title="card_sdk"]'));
+}
+
+function autozsRequireSavedPrivacy() {
+  if (autozsCheckoutChallenge()) {
+    throw new Error("Makai: Home Depot needs sign-in, a code or a new payment method. Complete it in this checkout tab; then review and approve again.");
+  }
+  // Provider label/state only. Never inspect a card number, suffix, expiry or CVV.
+  const selected = document.querySelectorAll('[data-payment-provider="privacy"][aria-selected="true"], [data-testid="selected-payment-method"][aria-label="Privacy"]');
+  if (selected.length !== 1) {
+    throw new Error("Makai: the saved Privacy payment option could not be verified. Check the saved payment selection in Home Depot checkout, then review and approve again.");
+  }
+}
+
+function autozsReadCheckoutItems() {
+  const rows = [...document.querySelectorAll('[data-testid="checkout-item"], [data-testid="order-summary-item"]')];
+  return rows.map(row => {
+    const urls = [...new Set([...row.querySelectorAll('a[href*="/p/"]')].map(link => {
+      const url = new URL(link.href); url.search = ""; url.hash = ""; return url.href;
+    }))];
+    const quantities = row.querySelectorAll('[data-testid="item-quantity"]');
+    const prices = row.querySelectorAll('[data-testid="item-unit-price"]');
+    const quantityText = quantities.length === 1 ? quantities[0].textContent.trim() : "";
+    return { source_url: urls.length === 1 ? urls[0] : "",
+      quantity: /^\d+$/.test(quantityText) ? Number(quantityText) : null,
+      unit_price: prices.length === 1 ? autozsCheckoutMoney(prices[0].textContent) : null };
+  });
+}
+
+function autozsRequireCheckoutItems(supplierOrder, { allowPriceChange = false } = {}) {
+  const observed = autozsReadCheckoutItems();
+  if (!autozsCartItemsMatch(supplierOrder?.items, observed)
+      || observed.some((item, index) => !Number.isFinite(item.unit_price) || item.unit_price <= 0
+        || (!allowPriceChange && Math.round(item.unit_price * 100) !== Math.round(supplierOrder.items[index].unit_price * 100)))) {
+    throw new Error("Checkout item, quantity or unit price is unverified or changed; review and approve again.");
+  }
+  return observed;
+}
+
+async function autozsSubmitHomeDepotOnce(supplierOrderId, supplierOrder, { dryRun = false } = {}) {
   const marker = `autozs-final-submit:${supplierOrderId}`;
   if (sessionStorage.getItem(marker)) throw new Error("Submission already attempted; reconcile before retrying.");
   const findButton = () => {
@@ -848,9 +809,30 @@ async function autozsSubmitHomeDepotOnce(supplierOrderId) {
     return buttons[0];
   };
   findButton();
+  autozsRequireSavedPrivacy();
+  const items = autozsRequireCheckoutItems(supplierOrder, { allowPriceChange: true });
   const totals = autozsCheckoutTotals(document.body?.innerText || "");
   const quote = { item_subtotal: totals.subtotal, shipping: totals.shipping, tax: totals.tax,
-    total: totals.total, observed_at: new Date().toISOString() };
+    total: totals.total, observed_at: new Date().toISOString(), items, saved_payment: "privacy" };
+  if (dryRun) {
+    // Structurally before messaging the final gate or setting a submission marker.
+    return { dry_run: true, authorized: false, stopped_before_purchase: true, quote };
+  }
+  const exact = items.every((item, index) => Math.round(item.unit_price * 100) === Math.round(supplierOrder.items[index].unit_price * 100))
+    && [[totals.subtotal, supplierOrder.item_subtotal], [totals.shipping, supplierOrder.shipping_cost],
+        [totals.tax, supplierOrder.sales_tax], [totals.total, supplierOrder.total]].every(([actual, approved]) =>
+          Number.isFinite(actual) && Number.isFinite(approved) && Math.round(actual * 100) === Math.round(approved * 100));
+  if (!exact) {
+    await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "autozs-supplier-changed-quote", supplierOrderId: Number(supplierOrderId), quote }, response => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else if (!response?.ok || !response.result?.new_approval_required || response.result.supplier_order_id !== Number(supplierOrderId) || response.result.authorized !== false) reject(new Error(response?.error || "Changed checkout quote was not accepted."));
+        else resolve();
+      });
+    });
+    autozsCheckoutProgress(100, "Checkout price changed. Review the updated plan in AUTOZS Orders and approve again.", "error");
+    return { authorized: false, new_approval_required: true };
+  }
   // Persist before requesting one-shot permission. A lost response never retries.
   sessionStorage.setItem(marker, "requested");
   const result = await new Promise((resolve, reject) => {
@@ -868,6 +850,9 @@ async function autozsSubmitHomeDepotOnce(supplierOrderId) {
         Number.isFinite(current[key]) && current[key] === totals[key])) {
     throw new Error("Checkout changed or submission permission was invalid; reconcile the budget hold.");
   }
+  autozsRequireSavedPrivacy();
+  const finalItems = autozsRequireCheckoutItems(supplierOrder);
+  if (JSON.stringify(finalItems) !== JSON.stringify(items)) throw new Error("Checkout items changed after authorization; reconcile before retrying.");
   const button = findButton();
   sessionStorage.setItem(marker, "submitting");
   button.click();
@@ -913,7 +898,7 @@ async function autozsStartSupplierCheckout() {
       autozsCheckoutProgress(100, reason, "error");
       return;
     }
-    if (autozsHomeDepotCheckoutSignIn(location.pathname)) {
+    if (autozsHomeDepotCheckoutSignIn(location.pathname) || autozsCheckoutChallenge()) {
       throw new Error("Home Depot requires the seller email or sign-in before checkout. Complete that step in this tab, then resume the existing cart.");
     }
     if (/^\/p\//i.test(location.pathname)) {

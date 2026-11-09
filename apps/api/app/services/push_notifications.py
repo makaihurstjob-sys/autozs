@@ -443,24 +443,63 @@ def dispatch_order_sale_notifications(db: Session, limit: int = 100) -> dict[str
     return _result(attempted=attempted, sent=sent, failed=failed, message=f"Sent {sent} sale notification(s).")
 
 
+def dispatch_purchase_approval_notifications(db: Session, limit: int = 100) -> dict[str, Any]:
+    """Use existing configured phones only; never enable or create a subscription."""
+    from app.models.domain import SupplierOrder
+    from app.services.purchase_approval import review
+    config = get_push_config()
+    if not config["enabled"]:
+        return _result(message="Existing phone notifications are not configured.")
+    subscriptions = [s for s in _enabled_subscriptions(db) if s.vapid_public_key == config.get("public_key")
+                     and read_push_preferences(s).get("order_sold", True)]
+    attempted = sent = failed = 0
+    rows = db.scalars(select(SupplierOrder).where(SupplierOrder.status.in_(["draft", "needs_review"]))
+                      .order_by(SupplierOrder.updated_at.desc()).limit(limit)).all()
+    for row in rows:
+        if row.external_order_id or row.placed_at or not row.order or row.order.status in {"cancelled", "refunded", "shipped", "delivered"}:
+            continue
+        try:
+            fingerprint = review(row)["fingerprint"]
+        except ValueError:
+            continue
+        for subscription in subscriptions:
+            event_key = f"subscription:{subscription.id}:purchase-approval:{row.id}:{fingerprint}:{row.status}"
+            if _has_receipt(db, event_key):
+                continue
+            attempted += 1
+            payload = {"title": "AUTOZS supplier purchase needs review" if row.status == "needs_review" else "AUTOZS purchase approval ready",
+                "body": "Open AUTOZS Orders on your PC to review this exact purchase. Nothing is bought without your approval.",
+                "tag": f"autozs-purchase-approval-{row.id}", "url": "/?view=orders"}
+            if _send_one(db, subscription, payload):
+                _record_receipt(db, subscription, event_key, "purchase-approval", "supplier-order", row.id, row.status)
+                sent += 1
+            else:
+                failed += 1
+    db.commit()
+    return _result(attempted=attempted, sent=sent, failed=failed)
+
+
 def dispatch_push_cycle(db: Session) -> dict[str, Any]:
     alert_result = dispatch_alert_notifications(db)
     job_result = dispatch_job_transition_notifications(db)
     order_result = dispatch_order_sale_notifications(db)
     weekly_result = dispatch_weekly_summaries(db)
+    purchase_result = dispatch_purchase_approval_notifications(db)
     return _result(
         attempted=(
             int(alert_result["attempted"])
             + int(job_result["attempted"])
             + int(order_result["attempted"])
             + int(weekly_result["attempted"])
+            + int(purchase_result["attempted"])
         ),
-        sent=int(alert_result["sent"]) + int(job_result["sent"]) + int(order_result["sent"]) + int(weekly_result["sent"]),
+        sent=int(purchase_result["sent"]) + int(alert_result["sent"]) + int(job_result["sent"]) + int(order_result["sent"]) + int(weekly_result["sent"]),
         failed=(
             int(alert_result["failed"])
             + int(job_result["failed"])
             + int(order_result["failed"])
             + int(weekly_result["failed"])
+            + int(purchase_result["failed"])
         ),
         notified_alerts=int(alert_result["notified_alerts"]),
         message="Push cycle complete.",

@@ -11,6 +11,7 @@ from app.models.domain import (AppSetting, Order, OrderItem, SupplierOrder, Supp
                                EbayCheckoutVerification, PurchaseReservation)
 from app.services.purchase_submission import FinalCheckout, authorize_submission
 from app.services.fulfillment import update_supplier_order
+from app.services.purchase_approval import review, record_approval
 
 
 @pytest.fixture
@@ -27,14 +28,19 @@ def ready(engine):
         row = db.get(SupplierOrder, 1)
         row.status = "placing"
         row.checkout_token = "test-token"
-        row.approved_total = 10
+        row.approved_total = row.total = 10
+        row.item_subtotal = 8
+        row.shipping_cost = row.sales_tax = 1
         row.approved_at = now - timedelta(minutes=1)
         row.lease_expires_at = now + timedelta(minutes=5)
         db.add(OrderItem(order_id=1, title="Test", quantity=1, sale_price=12))
-        db.add(SupplierOrderItem(supplier_order_id=1, title="Test", quantity=1, unit_price=8))
+        db.add(SupplierOrderItem(supplier_order_id=1, title="Test", quantity=1, unit_price=8, source_url="https://www.homedepot.com/p/Test/123456"))
+        db.flush()
+        approval = record_approval(db, row, review(row)["fingerprint"])
+        row.approved_at = datetime.fromisoformat(approval["approved_at"])
         db.add(EbayCheckoutVerification(supplier_order_id=1, ebay_order_id="test-1",
             account_key="test-seller", source_url="https://www.ebay.com/mesh/ord/details?orderid=test-1",
-            observed_at=now, verified_at=now, status="eligible", evidence="Paid; awaiting shipment"))
+            observed_at=now, verified_at=datetime.utcnow(), status="eligible", evidence="Paid; awaiting shipment"))
         for key, value in {"purchase_automation_enabled": "true",
             "owner_place_order:1": row.approved_at.isoformat(),
             "profit_reconciliation:1": json.dumps({"status": "verified"}),
@@ -45,7 +51,8 @@ def ready(engine):
 
 def quote(**changes):
     values = dict(item_subtotal="8", shipping="1", tax="1", total="10",
-                  source_url="https://www.homedepot.com/checkout", observed_at=datetime.now(timezone.utc))
+                  source_url="https://www.homedepot.com/checkout", observed_at=datetime.now(timezone.utc),
+                  items=[dict(source_url="https://www.homedepot.com/p/Test/123456", quantity=1, unit_price=8)], saved_payment="privacy")
     values.update(changes)
     return FinalCheckout(**values)
 
@@ -127,7 +134,7 @@ def test_permission_from_previous_approval_cannot_submit(ready):
     with Session(ready) as db:
         db.get(SupplierOrder, 1).approved_at += timedelta(seconds=1)
         db.commit()
-        with pytest.raises(ValueError, match="Use Place Order"):
+        with pytest.raises(ValueError, match="version"):
             authorize_submission(db, 1, "test-token", quote())
 
 
@@ -139,11 +146,11 @@ def test_place_order_click_records_permission_and_legacy_approval_does_not(ready
         row.status = "draft"
         db.commit()
         row = approve_supplier_order(db, 1)
-        with pytest.raises(ValueError, match="Use Place Order"):
+        with pytest.raises(ValueError, match="version|Use Place Order"):
             require_owner_place_order(db, row)
         row.status = "draft"
         db.commit()
-        row = approve_supplier_order(db, 1, owner_click=True)
+        row = approve_supplier_order(db, 1, owner_click=True, fingerprint=review(row)["fingerprint"])
         require_owner_place_order(db, row)
         assert row.status == "queued"
 
