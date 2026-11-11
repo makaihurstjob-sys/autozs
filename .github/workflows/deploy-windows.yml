@@ -2,7 +2,7 @@ name: Deploy Windows AutoZS
 
 on:
   push:
-    branches: [main]
+    branches: [fixes/dispatch264-purchase-approval-20261109]
   workflow_dispatch:
 
 concurrency:
@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Pull main safely
+      - name: Pull tested AUTOZS release safely
         id: update
         shell: powershell
         run: |
@@ -33,8 +33,8 @@ jobs:
           }
 
           $before = git rev-parse HEAD
-          git fetch origin main
-          git merge --ff-only origin/main
+          git fetch origin fixes/dispatch264-purchase-approval-20261109
+          git merge --ff-only origin/fixes/dispatch264-purchase-approval-20261109
           $after = git rev-parse HEAD
           $extensionChanged = [bool](git diff --name-only $before $after -- tools/chrome-extension)
 
